@@ -6,7 +6,9 @@
 # watchdog notifies nobody and survives the next one); stop it with TaskStop by its task id.
 # One final line:
 #   <short sha> <subject>                                   exit 0  (a new commit: one status line)
-#   STALL <n> min: <name>                                    exit 1  (no commit, tree unchanged)
+#   STALL <n> min: <name>[ · test slot held by <holder>]    exit 1  (no commit, tree unchanged; the
+#                                                                     holder is the note a run wrote
+#                                                                     into the held $WESIDE_TESTS_LOCK)
 #   gone: <name> (<worktree> is no git worktree)             exit 2  (removed or never existed)
 #   alive: <name> · no commit in <n> min, tree changing      exit 3  (lifetime cap; re-arm)
 #   exited: <name>[ · <cause> · resume: <command>]          exit 4  (a process worker's session
@@ -16,7 +18,8 @@
 #                                                                     names it and the resume command
 #                                                                     from `we-worker status`)
 # Env: WATCH_WORKER_INTERVAL (s, default 60), WATCH_WORKER_STALL (s, default 1500),
-# WATCH_WORKER_MAX (s, default 1500: stays under a background command's 30-min default).
+# WATCH_WORKER_MAX (s, default 1500: stays under a background command's 30-min default),
+# WESIDE_TESTS_LOCK (the host's test slot, default /tmp/weside-tests.lock).
 set -uo pipefail
 
 WT=${1:?usage: watch-worker.sh <worktree> <name>}
@@ -44,6 +47,20 @@ cause() {  # " · <auth|usage-limit> · resume: <command>" from `we-worker statu
   [ -n "$mark" ] && printf ' · %s%s' "$mark" "${resume:+ · resume: $resume}"
   return 0
 }
+slot() {  # " · test slot held by <note>" while another process holds the test slot's flock
+  python3 - "${WESIDE_TESTS_LOCK:-/tmp/weside-tests.lock}" 2>/dev/null <<'PY' || true
+import fcntl, os, sys
+try:
+    fd = os.open(sys.argv[1], os.O_RDONLY)
+except OSError:
+    sys.exit(0)
+try:
+    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+except BlockingIOError:
+    note = os.pread(fd, 400, 0).decode(errors="replace").strip().splitlines()
+    print(f" · test slot held by {note[0] if note else 'unknown'}", end="")
+PY
+}
 head_of() { git -C "$WT" rev-parse HEAD 2>/dev/null; }
 tree_of() {  # status plus the tracked diff: an edit to an already-modified file counts too
   { git -C "$WT" status --porcelain && git -C "$WT" diff HEAD; } 2>/dev/null | cksum
@@ -59,7 +76,7 @@ while :; do
   if [ "$H" != "$H0" ]; then git -C "$WT" log --oneline -1; exit 0; fi
   if exited; then echo "exited: $NAME$(cause)"; exit 4; fi
   if [ "$S" != "$S0" ]; then S0=$S; T=$NOW; fi
-  if [ $((NOW - T)) -ge "$STALL" ]; then echo "STALL $(((NOW - T) / 60)) min: $NAME"; exit 1; fi
+  if [ $((NOW - T)) -ge "$STALL" ]; then echo "STALL $(((NOW - T) / 60)) min: $NAME$(slot)"; exit 1; fi
   if [ $((NOW - BORN)) -ge "$MAX" ]; then
     echo "alive: $NAME · no commit in $(((NOW - BORN) / 60)) min, tree changing"; exit 3
   fi

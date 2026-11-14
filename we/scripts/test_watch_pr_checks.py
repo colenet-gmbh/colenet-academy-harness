@@ -474,6 +474,23 @@ def test_until_merged_stops_on_green_that_will_not_merge(tmp_path, patch, note):
     assert (code, out) == (0, [f"final {SHA}: green · {note}"])
 
 
+def test_human_merge_waits_past_auto_merge_off_and_blocked_until_merged(tmp_path, monkeypatch):
+    """A one-way PR is never armed: --until-merged ended on `auto-merge off` in seconds."""
+    monkeypatch.setenv("WATCH_BLOCKED_GRACE", "0")
+    unarmed = {**_green(), "mergeStateStatus": "BLOCKED"}
+    merged = {**unarmed, "state": "MERGED"}
+    code, out = run(tmp_path, [unarmed] * 5 + [merged], "--human-merge")
+    assert (code, out) == (7, [f"final {SHA}: merged"])
+
+
+def test_human_merge_still_stops_on_a_conflict(tmp_path):
+    code, out = run(tmp_path, [{**_green(), "mergeStateStatus": "DIRTY"}], "--human-merge")
+    assert (code, out) == (
+        0,
+        [f"final {SHA}: green · merge: DIRTY/UNKNOWN — conflicts with the base: merge it"],
+    )
+
+
 def test_lifetime_cap_ends_the_watch(tmp_path):
     armed = {**_green(), "autoMergeRequest": {"enabledAt": "x"}, "mergeStateStatus": "BLOCKED"}
     code, out = run(tmp_path, [armed], "--until-merged", env_extra={"WATCH_MAX_LIFETIME": "1"})

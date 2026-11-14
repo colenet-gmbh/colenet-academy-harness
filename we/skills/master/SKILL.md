@@ -198,7 +198,7 @@ Then one `we:dev-medium` finisher in `<int>` runs the finish sequence.
    `/we:pr` step 4. The `receipt …` line comes only from that script (`/we:pr` step 3). Link the PR to the ticket and move
    no status: In Review is "PR merged and linked" (L0 §Lifecycle) and `/we:merged` sets it.
 4. Run `${CLAUDE_PLUGIN_ROOT}/scripts/watch-pr-checks.sh <PR> --sha <pushed sha>` as a background command,
-   with `--until-merged` once auto-merge is armed, and next to it one
+   with `--until-merged` once auto-merge is armed (`--human-merge` on a one-way PR, never armed), and next to it one
    `${CLAUDE_PLUGIN_ROOT}/scripts/watch-pr-conflicts.sh <PR>…` over the run's open PRs. The headers list
    the exit codes. One checks watcher per PR: a worker running `/we:ci-review` on it watches until green
    (L0 §Sessions), then you arm it `--until-merged`. Meanwhile refine or prepare the next story.
