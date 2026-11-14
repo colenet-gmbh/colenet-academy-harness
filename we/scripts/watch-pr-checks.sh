@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Watch one PR's checks on its head and stay quiet otherwise.
 #
-# Usage: watch-pr-checks.sh <PR> [--fail-fast] [--sha <expected>] [--until-merged]
+# Usage: watch-pr-checks.sh <PR> [--fail-fast] [--sha <expected>] [--until-merged | --human-merge]
 #                           [--max-hours <h>] [-R <owner/repo>]
 #   --sha <expected>  judge nothing until the PR's head is <expected> (after a push:
 #                     `--sha "$(git rev-parse HEAD)"`; GitHub reports the old head for seconds).
@@ -10,6 +10,9 @@
 #                     green but not merging (conflict, behind, auto-merge off). A failed check that is
 #                     no review does not end it while the PR can still merge (armed, mergeStateStatus
 #                     CLEAN, UNSTABLE or HAS_HOOKS: GitHub merges past a red non-required check).
+#   --human-merge     for a PR only a human merges (one-way, never armed): --until-merged that
+#                     waits past `auto-merge off` and BLOCKED (the approve) until MERGED or CLOSED;
+#                     only a conflict or a stale base (DIRTY, BEHIND) still ends it with exit 0.
 #   --max-hours <h>   lifetime cap, default 6.
 # Prints a failed or cancelled check once, when it concludes, and one final line:
 #   final <sha>: green · merge: <state>                     exit 0
@@ -70,17 +73,19 @@
 # (extended regex, case-insensitive, of the check names that count as a review, default `review`).
 set -uo pipefail
 
-USAGE="usage: watch-pr-checks.sh <PR> [--fail-fast] [--sha <expected>] [--until-merged] [--max-hours <h>] [-R <owner/repo>]"
+USAGE="usage: watch-pr-checks.sh <PR> [--fail-fast] [--sha <expected>] [--until-merged | --human-merge] [--max-hours <h>] [-R <owner/repo>]"
 PR=""
 FAIL_FAST=""
 EXPECT=""
 UNTIL_MERGED=""
+HUMAN_MERGE=""
 MAX_HOURS=6
 REPO=${WATCH_REPO:-}
 while [ $# -gt 0 ]; do
   case "$1" in
     --fail-fast) FAIL_FAST=1 ;;
     --until-merged) UNTIL_MERGED=1 ;;
+    --human-merge) UNTIL_MERGED=1; HUMAN_MERGE=1 ;;
     --sha) EXPECT=${2:?$USAGE}; shift ;;
     --max-hours) MAX_HOURS=${2:?$USAGE}; shift ;;
     -R|--repo) REPO=${2:?$USAGE}; shift ;;
@@ -187,12 +192,17 @@ merge_note() {
   elif [ "$mss" = BEHIND ]; then
     note="$note — behind the base: merge it"
   fi
-  [ -n "$UNTIL_MERGED" ] && [ "$(field 4)" = off ] && note="$note · auto-merge off"
+  [ -n "$UNTIL_MERGED" ] && [ -z "$HUMAN_MERGE" ] && [ "$(field 4)" = off ] && note="$note · auto-merge off"
   echo "$note"
 }
 merge_stuck() {  # green, but GitHub will not merge it by itself
   # BLOCKED while green and armed is normal for seconds before the merge; only after BLOCKED_GRACE
-  # of a stable green does it mean a review or rule waits.
+  # of a stable green does it mean a review or rule waits. A human merge waits on the human:
+  # only a conflict or a stale base needs the session.
+  if [ -n "$HUMAN_MERGE" ]; then
+    [ "$(field 1)" = DIRTY ] || [ "$(field 1)" = BEHIND ]
+    return
+  fi
   [ "$(field 4)" = off ] || [ "$(field 1)" = DIRTY ] || [ "$(field 1)" = BEHIND ] \
     || { [ "$(field 1)" = BLOCKED ] && [ $(($(date +%s) - STABLE_SINCE)) -ge "$BLOCKED_GRACE" ]; }
 }

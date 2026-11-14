@@ -14,6 +14,10 @@ There is no user to ask. What the brief, the ticket, the decision records and th
 You write the plan file, for `receipt` ACs the repo's staging-check file next to it (step 3), and the token
 line in the plan (step 5), nothing else: no commit, no push, no ticket write. Shell reads (`rg`, the code graph,
 `git log`) are fine. Your final message is the report the dispatcher reads (step 6).
+**A brief that makes the plan a PR chunk** (it names the commit or plan-PR command) overrides the no-commit
+line: you commit and open the PR by that command, and the chunk ends at its merge (L0 § Workers): you watch it
+until green, answer its review and Ready-panel rounds on the same branch, then report. Without such a line the
+report ends you.
 
 ## Rules
 

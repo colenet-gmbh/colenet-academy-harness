@@ -222,7 +222,7 @@ class TestRunDone:
             "to": "done",
             "via": "receipt",
             "rc": TAG,
-            "ticket": "carried",
+            "ticket": "pending",
         }
         ops = carry_of(out)
         assert [(o["op"], o["key"]) for o in ops] == [

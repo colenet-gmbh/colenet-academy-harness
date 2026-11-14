@@ -39,6 +39,10 @@ export type AnswerLine = {
   session: string | null
   via?: string
   quote?: string
+  // The question the line answers, verbatim (`board.py answer` writes them; a pane line takes them
+  // from the board item at delivery): a bare "Q7: Accept" was read the wrong way round.
+  ask?: string
+  recommendation?: string
 }
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
@@ -68,6 +72,8 @@ export const answerLines = (text: string): AnswerLine[] => {
       session: str(a.session) ?? null,
       ...(str(a.via) ? { via: str(a.via) } : {}),
       ...(str(a.quote) ? { quote: str(a.quote) } : {}),
+      ...(str(a.ask) ? { ask: str(a.ask) } : {}),
+      ...(str(a.recommendation) ? { recommendation: str(a.recommendation) } : {}),
     })
   }
   return out
@@ -179,7 +185,13 @@ export const rowOf = (d: Delivery, ts: string, delivered: boolean, reason?: stri
 
 type Prompts = Partial<Record<BoardPromptKind, string>> | undefined
 
-const quoteOf = (line: AnswerLine) => (line.quote ? `\nThe owner's words: "${line.quote}"` : '')
+// The question and its recommendation, quoted, so the answer reads without the board.
+const REC = { accept: 'The recommendation accepted', deny: 'The recommendation denied' } as Record<string, string>
+const questionOf = (line: AnswerLine) =>
+  `${line.ask ? `\nThe question: "${line.ask}"` : ''}${
+    line.recommendation ? `\n${REC[line.answer] ?? 'The recommendation'}: "${line.recommendation}"` : ''
+  }`
+const quoteOf = (line: AnswerLine) => `${questionOf(line)}${line.quote ? `\nThe owner's words: "${line.quote}"` : ''}`
 
 // Where the answer was written: the session that wrote the line (a chat answer says so), the ticket a
 // reply was read from (`board.py signals`, `via: ticket`), else the pane.

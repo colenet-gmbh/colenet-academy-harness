@@ -133,9 +133,10 @@ escalation the decision story between two owners (docs/board.md § Escalations):
          `bundle` (a `--touches` record only once advised). `count` prints the records per role
          pair in this ISO week and warns past two. With `board.ticketing: jira`, `open` and
          `settle` print a `carry:` `comment` op on the story's ticket as the last line.
-select   moves a story to Selected when its `ENTRY_RULES["selected"]` hold, in order: the Ready
-         gate (`ready_gate.story_failures`), the plan on `risk.rules_from` (main), the plan-only
-         tier (`plan_tier.py`) and a green `ready-<KEY>` lens verdict (`lens_verdict.check`); in a
+select   moves a story to Selected when its `ENTRY_RULES["selected"]` hold, in order: the plan
+         on `risk.rules_from` (main, after one fetch), the Ready gate (`ready_gate.story_failures`)
+         and the plan-only tier (`plan_tier.py`) on that blob, and a green `ready-<KEY>` lens
+         verdict (`lens_verdict.check`) bound to that blob, never to the checkout's plan; in a
          crew with `humans` the caller holds `roles.product` first. The first failing group
          refuses with `board.py select <KEY>: refused (<group>)` and its lines; no rule asks a
          human. A passing select comments `selected by <role>@<human>, plan <blob>, panel <id>`
@@ -169,7 +170,9 @@ move     moves a story to another state when that state's entry rule holds (docs
          after a `selected` row (from `in_review`/`in_test` with --reopen: a revert or a failed
          test), `in_review` with every --pr merged and linked (`gh pr view`),
          `in_test` after `in_review`, `done` after an `in_review` or `in_test` row with --comment-file holding a `Not proven:` line (or, in
-         process from accept.py, a green verdict entry re-checked here: `move_done`); a `done`
+         process from accept.py, a green verdict entry re-checked here: `move_done`), or from
+         any state but done with --already-fixed <owner>/<repo>#<n> (a merged PR fixed it
+         before it was built; row `via: already-fixed`, `pr`); a `done`
          move carries the transition and then the acceptance comment, and every
          `acceptance.done_sample`-th `via: receipt` row adds a `sample` news item. A
          refusal prints `board.py move <KEY> <state>: refused: <reason>` per failure.
@@ -450,9 +453,27 @@ class StateDir:
         )
 
     def append_answer(self, qid, kind, session, via=None, quote=None, ts=None):
+        """One answer line; it quotes the question's `ask` and `recommendation` from the open item,
+        so the line reads without the board."""
         stamp = ts or _now().isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        item = next(
+            (
+                q
+                for q in self.board().get("owner_queue") or []
+                if isinstance(q, dict) and q.get("id") == qid
+            ),
+            {},
+        )
         return _answer_writer()(
-            str(self.answers_path), qid, kind, stamp, session, via=via, quote=quote
+            str(self.answers_path),
+            qid,
+            kind,
+            stamp,
+            session,
+            via=via,
+            quote=quote,
+            ask=item.get("ask") or None,
+            recommendation=item.get("recommendation") or None,
         )
 
     def questions(self):
@@ -2100,11 +2121,13 @@ def _print_carry(ops):
     prints nothing (ticket_adapter.py)."""
     if ops:
         print("carry: " + json.dumps([op.as_json() for op in ops], ensure_ascii=False))
-        # "ticket": "carried" in the row reads like done; it means the session still carries
-        # (a ticket stayed In Review while the board said Done)
+        # the row says `ticket: pending`: a board Done over a ticket still In Review went
+        # unnoticed while it said `carried`
         print(
-            f"board.py: the ticket is not changed yet: run each of the {len(ops)} `carry:` ops "
-            "with your ticketing tool, then read the ticket back",
+            f"board.py: the ticket is not changed yet (row `ticket: pending`): run each of the "
+            f"{len(ops)} `carry:` ops with your ticketing tool, then read the ticket back and "
+            "compare its status. No ticketing tool answers (its MCP server disconnected): tell "
+            "your starter which keys stay unmoved; never report the move as done",
             file=sys.stderr,
         )
 
@@ -2543,9 +2566,22 @@ def _rel(root, plan):
 
 
 def rule_gate(m):
-    """The Ready gate's story checks on the checkout's plan."""
+    """The Ready gate's story checks on the plan blob `plan on main` found, never on the
+    checkout (a stale or missing worktree plan is not what Selected starts from)."""
+    blob = m.selected.get("plan")
     try:
-        failures, warnings = ready_gate.story_failures(m.plan)
+        if blob:
+            done = subprocess.run(
+                ["git", "-C", str(m.root), "cat-file", "blob", blob],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if done.returncode != 0:
+                return [f"plan blob {blob[:12]}: unreadable ({done.stderr.strip() or 'git'})"]
+            failures, warnings = ready_gate.story_failures(m.plan, done.stdout)
+        else:
+            failures, warnings = ready_gate.story_failures(m.plan)
     except OSError as exc:
         return [f"{m.plan}: unreadable ({type(exc).__name__})"]
     m.warnings += warnings
@@ -2647,11 +2683,13 @@ def rule_tier(m):
 
 
 def rule_lenses(m):
-    """The `ready-<KEY>` lens verdict, green and bound to the current plan blob; the warnings a
+    """The `ready-<KEY>` lens verdict, green and bound to the plan blob on main; the warnings a
     green panel carries (`ready_panel.warning_ok_after_rounds`) go into the row as `carried`, a
     derived round (a verdict file of 8.10.0 or older) as `round` with its origin."""
     try:
-        green, lines, carried = lens_verdict.check_panel(m.root, f"ready-{m.key}")
+        blob = m.selected.get("plan")
+        binding = {"plan_blob": blob} if blob else None
+        green, lines, carried = lens_verdict.check_panel(m.root, f"ready-{m.key}", binding)
     except (lens_verdict.UnusableError, OSError) as exc:
         return [f"lens verdict unreadable: {exc}"]
     if not green:
@@ -2840,11 +2878,17 @@ DONE_VIA_ACCEPT = (
 
 def rule_in_review(m):
     """Done comes from in_review, or from in_test; with an owner of in_test (several humans) only
-    from in_test."""
+    from in_test. `--already-fixed` (a story another merged PR already fixed) comes from any
+    state but done."""
     was = m.source or "none"
+    if getattr(m.args, "already_fixed", None):
+        return [f"{m.key} is done already"] if was == "done" else []
     tested = crew_mod.several_humans(m.crew) and crew_mod.state_owners(m.crew, "in_test")
     if was not in ("in_review", "in_test"):
-        return [f"last move is {was}, not {'in_test' if tested else 'in_review'}"]
+        line = f"last move is {was}, not {'in_test' if tested else 'in_review'}"
+        if was != "done":
+            line += "; a story another merged PR already fixed: --already-fixed <owner>/<repo>#<n>"
+        return [line]
     if tested and was != "in_test":
         return [f"{m.key} is in_review: Done comes from in_test (owned by {', '.join(tested)})"]
     return []
@@ -2887,8 +2931,9 @@ def rule_done_evidence(m):
     """Exactly one source of evidence: a verdict entry (in-process from accept.py) or a comment
     file (the CLI) holding a `Not proven:` line."""
     entry, path = m.args.verdict_entry, m.args.comment_file
-    if entry is None and not path:
-        return [DONE_VIA_ACCEPT]
+    fixed = (getattr(m.args, "already_fixed", None) or "").strip()
+    if fixed or (entry is None and not path):
+        return _already_fixed(m, fixed, path) if fixed else [DONE_VIA_ACCEPT]
     if entry is not None:
         failures = verdict_failures(entry, m.key)
         if failures:
@@ -2904,6 +2949,28 @@ def rule_done_evidence(m):
         return [f"--comment-file {path} has no line `Not proven: <what>`"]
     m.extra["via"] = "comment"
     m.comment = text.strip()
+    return []
+
+
+def _already_fixed(m, ref, path):
+    """`--already-fixed REF`: the merged PR that fixed the story before it was built; the comment
+    names it, a `--comment-file` beside it adds its text."""
+    if not (_PR_URL.match(ref) or _PR_QUALIFIED.match(ref)):
+        return [f"--already-fixed {ref} is no URL or <owner>/<repo>#<n>"]
+    pr, failure = _view_pr(ref, Path.cwd())
+    if failure:
+        return [failure]
+    if pr.get("state") != "MERGED":
+        return [f"--already-fixed {ref} is not merged"]
+    url = pr.get("url") or ref
+    lines = [f"Already fixed on the default branch by {url} ({pr.get('title') or '-'})."]
+    if path:
+        try:
+            lines.append(Path(path).read_text(encoding="utf-8").strip())
+        except OSError as exc:
+            return [f"--comment-file {path}: {exc.strerror}"]
+    m.extra.update(via="already-fixed", pr=[url])
+    m.comment = "\n\n".join(lines)
     return []
 
 
@@ -2947,8 +3014,8 @@ ENTRY_RULES = {
     "selected": [
         ("role", rule_selector),
         ("owner", rule_owner),
-        ("ready gate", rule_gate),
         ("plan on main", rule_plan_on_main),
+        ("ready gate", rule_gate),
         ("tier", rule_tier),
         ("lenses", rule_lenses),
     ],
@@ -3108,7 +3175,14 @@ def cmd_move(state, args, crew, now):
         if source is CARRY:
             return _carry_reads("move", [], [args.key])
         row, ops, sample = move_done(
-            state, args.key, crew, now, adapter, comment_file=args.comment_file, source=source
+            state,
+            args.key,
+            crew,
+            now,
+            adapter,
+            comment_file=args.comment_file,
+            source=source,
+            already_fixed=args.already_fixed,
         )
         print(json.dumps(row, ensure_ascii=False))
         if sample:
@@ -3163,19 +3237,24 @@ def move_done(
     run_url=None,
     comment_file=None,
     source=None,
+    already_fixed=None,
 ):
     """The `done` move: its entry rules, then the row, the adapter (transition, then comment) and
     the sample. Returns (row, ops, sample line or None); a refusal raises `BoardError` with one
     `board.py move <KEY> done: refused: <reason>` line per failure and writes nothing. `entry`
     (a verdict entry) comes only from accept.py, after its provenance check; the CLI passes
-    `comment_file`. `source` is the state the story leaves (`_source_state`), default the key's
-    last local row."""
+    `comment_file` or `already_fixed` (a merged PR that fixed the story before it was built).
+    `source` is the state the story leaves (`_source_state`), default the key's last local row."""
     head = f"board.py move {key} done"
     failures = _key_failure(crew, key, "move")
     if failures:
         raise BoardError("\n".join(failures))
     args = argparse.Namespace(
-        verdict_entry=entry, comment_file=comment_file, rc=rc, run_url=run_url
+        verdict_entry=entry,
+        comment_file=comment_file,
+        rc=rc,
+        run_url=run_url,
+        already_fixed=already_fixed,
     )
     m = Move(state, key, "done", None, None, crew, args)
     m.comment = None
@@ -3202,6 +3281,7 @@ def move_done(
         "to": "done",
         "via": m.extra["via"],
         **({"rc": m.extra["rc"]} if m.extra.get("rc") else {}),
+        **({"pr": m.extra["pr"]} if m.extra.get("pr") else {}),
         "ts": _iso(now),
         "by": _caller(),
         "ticket": adapter.name,
@@ -3390,6 +3470,12 @@ def _add_move_verbs(verbs):
         dest="comment_file",
         metavar="FILE",
         help="done: an acceptance comment holding a `Not proven:` line",
+    )
+    mv.add_argument(
+        "--already-fixed",
+        dest="already_fixed",
+        metavar="REF",
+        help="done from any state: the merged PR (<owner>/<repo>#<n> or URL) that fixed it already",
     )
     mv.add_argument("--input", metavar="FILE", help="several humans: the ticket read carried")
     mv.set_defaults(run=cmd_move)

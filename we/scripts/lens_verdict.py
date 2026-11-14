@@ -888,10 +888,13 @@ def _carry_after(root: Path) -> int | None:
     return rounds if isinstance(rounds, int) and not isinstance(rounds, bool) else None
 
 
-def check_panel(root: Path, vid: str) -> tuple[bool, list[str], list[dict[str, Any]]]:
+def check_panel(
+    root: Path, vid: str, binding: dict[str, str] | None = None
+) -> tuple[bool, list[str], list[dict[str, Any]]]:
     """``check`` plus the warnings a green Ready panel carries (``lens``, ``claim``, ``where``);
-    the list is empty whenever the panel is red."""
-    green, lines, carried, _from = _check(root, vid)
+    the list is empty whenever the panel is red. ``binding`` replaces today's binding read from
+    the checkout (``board.py select`` passes the plan blob on main)."""
+    green, lines, carried, _from = _check(root, vid, binding=binding)
     return green, lines, carried
 
 
@@ -906,7 +909,11 @@ def check_t2(
 
 
 def _check(
-    root: Path, vid: str, git: risk_runner.Git | None = None, timeout: float | None = None
+    root: Path,
+    vid: str,
+    git: risk_runner.Git | None = None,
+    timeout: float | None = None,
+    binding: dict[str, str] | None = None,
 ) -> tuple[bool, list[str], list[dict[str, Any]], str | None]:
     kind, subject = parse_id(vid)
     try:
@@ -919,7 +926,7 @@ def _check(
     if origin is not None:
         lines.append(f"panel {vid}: round {round_} ({origin})")
     try:
-        now = current_binding(root, kind, subject, doc.get("plan"))
+        now = binding or current_binding(root, kind, subject, doc.get("plan"))
     except RefusedError as exc:
         now, green = None, False
         lines.append(str(exc))

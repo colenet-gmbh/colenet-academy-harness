@@ -17,7 +17,7 @@ import sys
 ANSWERS = ("accept", "deny", "discuss", "info", "update", "withdraw", "read")
 
 
-def append(path, qid, answer, ts, session, via=None, quote=None):
+def append(path, qid, answer, ts, session, via=None, quote=None, ask=None, recommendation=None):
     if answer not in ANSWERS:
         raise ValueError(f"answer must be one of {', '.join(ANSWERS)}")
     record = {"id": qid, "answer": answer, "ts": ts, "session": session or None}
@@ -25,6 +25,10 @@ def append(path, qid, answer, ts, session, via=None, quote=None):
         record["via"] = via
     if quote:
         record["quote"] = quote
+    if ask:
+        record["ask"] = ask
+    if recommendation:
+        record["recommendation"] = recommendation
     line = json.dumps(record, ensure_ascii=False) + "\n"
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)

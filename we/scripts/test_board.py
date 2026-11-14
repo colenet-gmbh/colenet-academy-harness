@@ -19,7 +19,7 @@ import board_freeze  # noqa: E402
 BOARD = {
     "updated_by": "coord",
     "owner_queue": [
-        {"id": "Q1", "session": "asker", "ask": "Ship it?"},
+        {"id": "Q1", "session": "asker", "ask": "Ship it?", "recommendation": "Ship on Monday"},
         {"id": "Q2", "session": "asker"},
     ],
     "news": [{"id": "N1", "title": "Prod is on 2.4"}],
@@ -68,6 +68,13 @@ class TestAnswer:
         }
         assert line["ts"].endswith("Z") and len(line["ts"]) == len("2026-11-03T16:00:00.000Z")
         assert json.loads(capsys.readouterr().out) == line
+
+    def test_the_line_quotes_the_question_and_its_recommendation(self, state_dir):
+        assert run(state_dir, "answer", "Q1", "accept", "--session", "c", "--via", "chat") == 0
+        assert run(state_dir, "answer", "N1", "info", "--session", "c", "--via", "chat") == 0
+        q1, n1 = lines(state_dir)
+        assert (q1["ask"], q1["recommendation"]) == ("Ship it?", "Ship on Monday")
+        assert "ask" not in n1 and "recommendation" not in n1
 
     def test_a_news_id_is_known_too(self, state_dir):
         assert run(state_dir, "answer", "N1", "info", "--session", "coord", "--via", "chat") == 0
@@ -1892,6 +1899,13 @@ def moving(crewed, monkeypatch):
     return crewed
 
 
+def land(root):
+    """Commit the checkout and point origin/main at it: select reads the plan blob on main."""
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "--allow-empty", "-m", "plan")
+    git(root, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+
 def green_lenses(state_dir, key=KEY):
     root = state_dir / "work"
     vid = f"ready-{key}"
@@ -1936,6 +1950,7 @@ class TestSelect:
     def test_a_plan_failing_the_gate_is_refused_with_its_lines(self, moving, capsys):
         plan = moving / "work" / "docs" / "plans" / f"{KEY}-story.md"
         plan.write_text(plan.read_text().replace("**Then** it writes", "it writes"))
+        land(moving / "work")
         before = (moving / "board.json").read_bytes()
         adapter = fake()
         assert act(moving, "select", KEY, adapter=adapter) == 1
@@ -1997,8 +2012,8 @@ class TestSelect:
         assert [g for g, _ in board.ENTRY_RULES["selected"]] == [
             "role",
             "owner",
-            "ready gate",
             "plan on main",
+            "ready gate",
             "tier",
             "lenses",
         ]
@@ -2019,6 +2034,7 @@ class TestSelectLenses:
         if verdict == "stale":
             plan = root / "docs" / "plans" / f"{KEY}-story.md"
             plan.write_text(plan.read_text() + "\n<!-- edited -->\n")
+            land(root)
         before = (moving / "board.json").read_bytes()
         adapter = fake()
         assert act(moving, "select", KEY, adapter=adapter) == 1
@@ -2032,6 +2048,7 @@ class TestSelectLenses:
     def test_a_failing_gate_never_reads_the_verdict(self, moving, monkeypatch, capsys):
         plan = moving / "work" / "docs" / "plans" / f"{KEY}-story.md"
         plan.write_text(plan.read_text().replace("**Then** it writes", "it writes"))
+        land(moving / "work")
         read = []
         monkeypatch.setattr(
             lens_verdict, "check_panel", lambda *a: read.append(a) or (True, [], [])
@@ -2039,6 +2056,20 @@ class TestSelectLenses:
         assert act(moving, "select", KEY, adapter=fake()) == 1
         assert read == []
         assert "refused (ready gate)" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("checkout", ["stale", "missing"])
+    def test_select_reads_the_plan_on_main_not_the_checkout(self, moving, capsys, checkout):
+        """A checkout behind main (an old plan, or none yet) selects what main carries."""
+        root = moving / "work"
+        vid = green_lenses(moving)
+        plan = root / "docs" / "plans" / f"{KEY}-story.md"
+        if checkout == "stale":
+            plan.write_text(plan.read_text().replace("**Then** it writes", "it writes"))
+        else:
+            plan.unlink()
+        assert act(moving, "select", KEY, adapter=fake()) == 0, capsys.readouterr().err
+        assert transitions(moving)[-1]["to"] == "selected"
+        assert vid == f"ready-{KEY}"
 
     @pytest.mark.parametrize("rounds", [None, 2])
     def test_select_carries_the_warnings_of_round_n_into_the_row(self, moving, capsys, rounds):
@@ -2052,6 +2083,7 @@ class TestSelectLenses:
         plan = root / "docs" / "plans" / f"{KEY}-story.md"
         lens_verdict.plan(root, "ready", KEY)
         plan.write_text(plan.read_text() + "\n<!-- round 2 -->\n")
+        land(root)
         panel = lens_verdict.plan(root, "ready", KEY)
         warning = {"severity": "WARNING", "claim": "name the error", "where": "plan:AC3"}
         warning["question"] = "q"
@@ -2083,6 +2115,7 @@ class TestSelectLenses:
         for version in (1, 2):
             if version == 2:
                 plan.write_text(plan.read_text() + "\n<!-- round 2 -->\n")
+                land(root)
             panel = lens_verdict.plan(root, "ready", KEY)
             warning = {"severity": "WARNING", "claim": "name the error", "where": "plan:AC3"}
             warning["question"] = "q"
@@ -2226,6 +2259,51 @@ def pr(**changes):
     return {"pr": {**MERGED, **changes}}
 
 
+class TestMoveDoneAlreadyFixed:
+    def test_a_story_fixed_by_another_merged_pr_moves_to_done_from_backlog(self, moving, capsys):
+        with_row(moving, KEY, "backlog")
+        gh_answers(moving, {"9 -R acme/app": pr(title="fix: other story", headRefName="fix/x")})
+        adapter = fake()
+        argv = ["move", KEY, "done", "--already-fixed", "acme/app#9"]
+        assert act(moving, *argv, adapter=adapter) == 0, capsys.readouterr().err
+        row = transitions(moving)[-1]
+        assert (row["from"], row["to"], row["via"]) == ("backlog", "done", "already-fixed")
+        assert row["pr"] == [MERGED["url"]]
+        assert adapter.calls[0] == ("move", KEY, "Done")
+        op, _key, text = adapter.calls[1]
+        assert op == "comment" and text.startswith(
+            f"Already fixed on the default branch by {MERGED['url']}"
+        )
+
+    @pytest.mark.parametrize(
+        "last, ref, answer, message",
+        [
+            (
+                "backlog",
+                "acme/app#9",
+                pr(state="OPEN"),
+                "--already-fixed acme/app#9 is not merged",
+            ),
+            ("backlog", "9", None, "--already-fixed 9 is no URL or <owner>/<repo>#<n>"),
+            ("done", "acme/app#9", pr(), f"{KEY} is done already"),
+        ],
+    )
+    def test_refusals(self, moving, capsys, last, ref, answer, message):
+        with_row(moving, KEY, last)
+        if answer:
+            gh_answers(moving, {"9 -R acme/app": answer})
+        before = transitions(moving)
+        assert act(moving, "move", KEY, "done", "--already-fixed", ref, adapter=fake()) == 1
+        err = capsys.readouterr().err
+        assert err.strip() == f"board.py move {KEY} done: refused: {message}"
+        assert transitions(moving) == before
+
+    def test_the_backlog_refusal_names_the_flag(self, moving, capsys):
+        with_row(moving, KEY, "backlog")
+        assert act(moving, "move", KEY, "done", "--comment-file", "x", adapter=fake()) == 1
+        assert "--already-fixed <owner>/<repo>#<n>" in capsys.readouterr().err
+
+
 class TestMoveInReview:
     @pytest.mark.parametrize(
         "answer, message",
@@ -2302,7 +2380,7 @@ class TestJiraTransport:
         assert carried[0] == {"op": "transition", "key": KEY, "status": "Selected for Development"}
         assert carried[1]["op"] == "comment" and carried[1]["text"].startswith("selected by ")
         assert len(carried) == 2
-        assert transitions(moving)[-1]["ticket"] == "carried"
+        assert transitions(moving)[-1]["ticket"] == "pending"
 
     def test_a_refused_move_carries_nothing(self, moving, capsys):
         with_jira(moving)
@@ -2583,14 +2661,18 @@ class TestMoveDone:
             == 0
         )
         out, err = capsys.readouterr()
-        assert "the ticket is not changed yet: run each of the 2 `carry:` ops" in err
+        assert (
+            "the ticket is not changed yet (row `ticket: pending`): run each of the 2 `carry:` ops"
+            in err
+        )
+        assert "never report the move as done" in err
         row = transitions(crewed)[-1]
         assert {k: row[k] for k in ("key", "from", "to", "via", "ticket")} == {
             "key": DONE_KEY,
             "from": "in_review",
             "to": "done",
             "via": "comment",
-            "ticket": "carried",
+            "ticket": "pending",
         }
         assert carry_of(out) == [
             {"op": "transition", "key": DONE_KEY, "status": "Done"},
@@ -2612,7 +2694,7 @@ class TestMoveDone:
             crewed, ticket_adapter.SessionTransport(), verdict_entry()
         )
         assert list(row) == ["key", "from", "to", "via", "rc", "ts", "by", "ticket"]
-        assert (row["via"], row["rc"], row["ticket"]) == ("receipt", "v1.4.0-rc.2", "carried")
+        assert (row["via"], row["rc"], row["ticket"]) == ("receipt", "v1.4.0-rc.2", "pending")
         assert transitions(crewed)[-1] == row and sample is None
         assert [op.op for op in ops] == ["transition", "comment"]
         assert ops[1].value.splitlines() == [

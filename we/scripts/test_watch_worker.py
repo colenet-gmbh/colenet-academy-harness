@@ -1,5 +1,6 @@
 """watch-worker.sh against a real git worktree, with second-scale timings."""
 
+import fcntl
 import json
 import os
 import subprocess
@@ -33,9 +34,10 @@ def _repo(tmp_path):
     return wt
 
 
-def _run(wt, interval="0.2", stall="60", max_s="60", during=None):
+def _run(wt, interval="0.2", stall="60", max_s="60", during=None, lock=None):
     env = {
         **os.environ,
+        "WESIDE_TESTS_LOCK": str(lock or wt.parent / "no-slot.lock"),
         "WATCH_WORKER_INTERVAL": interval,
         "WATCH_WORKER_STALL": stall,
         "WATCH_WORKER_MAX": max_s,
@@ -77,6 +79,25 @@ def test_a_commit_ends_the_watch_with_its_line(tmp_path):
 def test_an_unchanged_tree_is_a_stall(tmp_path):
     code, out = _run(_repo(tmp_path), stall="1")
     assert (code, out) == (1, ["STALL 0 min: dev-X"])
+
+
+def test_a_stall_names_the_holder_of_the_test_slot(tmp_path):
+    """A worker waiting on the host's test slot looked stalled; its holder was traced by hand."""
+    lock = tmp_path / "slot.lock"
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.write(fd, b"pytest core (pid 4242, since 10:00:00)\n")
+        code, out = _run(_repo(tmp_path), stall="1", lock=lock)
+    finally:
+        os.close(fd)
+    assert (code, out) == (
+        1,
+        ["STALL 0 min: dev-X · test slot held by pytest core (pid 4242, since 10:00:00)"],
+    )
+    # released: the note stays in the file, the line names no holder
+    (tmp_path / "b").mkdir()
+    assert _run(_repo(tmp_path / "b"), stall="1", lock=lock) == (1, ["STALL 0 min: dev-X"])
 
 
 def test_a_changing_tree_without_commit_hits_the_lifetime_cap(tmp_path):
