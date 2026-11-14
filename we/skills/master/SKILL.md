@@ -126,9 +126,9 @@ Selected; move its ticket per `ticketing.md`, which names the mover for every st
 ## Build
 
 **The step closest to users goes first.** Before a slot goes to a new story, check every epic of your
-chain that is merged but not live: a buildable entry condition of its next production step (a config
-PR, a test fix, a script) gets the first worker; one that lacks only a go gets its question today, with
-the evidence ready. A new epic's refine and build take only the slots left. Every status report opens
+chain that is merged but not live: its next production step's entry conditions (yours to build, role
+card master § You do) get the first workers, a missing go its question today, with the evidence ready.
+A new epic's refine and build take only the slots left. Every status report opens
 with one line: what of the chain serves users in production today, and the next step that changes that.
 
 **Fill the slots:** each time a PR merges or a worker ends, list every story whose dependency is now met (the
