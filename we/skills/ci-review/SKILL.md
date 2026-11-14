@@ -188,8 +188,10 @@ When you cannot keep that watch, push at once; a cancelled run costs less than a
 - **A repeat** is the same finding text on the same `file:line` after a fix aimed at it. It means the fix
   does not land where the reviewer looks: stop and report it. A new finding caused by your fix is a new row.
 - **A chain**: a second round that brings new findings at the same spot means the contract is
-  wrong. Stop before the third round: the master asks the HOW owner for a coarser cut (the verb,
-  the signature, a parser instead of a regex) or a round limit, and the report says so.
+  wrong; the same holds for a lens panel red twice at one receipt and an AC deferred twice. Stop
+  before the third round: the next move changes the contract or the unit (the verb, the signature,
+  the AC's oracle, a parser instead of a regex), never one more patch at that spot; the master asks
+  the HOW owner for that cut or a round limit, and the report says so.
 
 Terminal states. Report exactly one:
 

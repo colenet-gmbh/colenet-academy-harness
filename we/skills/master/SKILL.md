@@ -86,6 +86,14 @@ push; a worker that no longer answers gets a checkpoint (**Checkpoint** in `refe
 decision. A story with no answer yet is parked in the repo's backlog status. A Selected plan needs
 no confirm: the invocation is the go.
 
+- **The goal is a production state.** Read the epic's success criterion as what serves users, with a
+  date. Once a day without a new production state since your last report, one line to the coordinator
+  names the one blocking item, before the human asks.
+- **Ask for a go early:** as soon as its evidence can be ready by the time it is answered, naming the
+  conditions still open in the question; never only after all of them are met.
+- **A decision that flips an earlier one** (an answer, a class, a cut): `rg` its subject over the plan
+  and its sibling plans and fix every hit in one commit before the next review round.
+
 ## Refine lane
 
 A refiner is a `we:dev-high` worker `<KEY>-refiner` that you start in a detached worktree of its own
@@ -105,15 +113,23 @@ Read, search and write only with the Read, Grep, Glob, Edit and Write tools unde
 ```
 
 On return, run the DoR scan on the plan in the returned worktree, then one `we:explore-medium`
-checks every code claim in the plan (file:line, "only caller", "no reader", each named lever)
-against the code; a wrong claim goes back to the refiner. Pass → set `status: approved` in the plan's
+checks every code claim in the plan (file:line, "only caller", "no reader", each named lever) and
+in its staging-check file (each request, field name and CLI flag a receipt uses) against the code;
+a wrong claim goes back to the refiner. Pass → set `status: approved` in the plan's
 frontmatter, then commit it per `${CLAUDE_PLUGIN_ROOT}/references/plan-commit.md` (plan and staging-check
 file copied out of the refiner's worktree, step 3, and committed together, step 4; never the shared main
 checkout). Fail → re-dispatch once naming the missing item, then one question line to the epic owner. Then remove the
-refiner's worktree (step 6). On the default branch (its docs PR merged) and green under the Ready gate the story is
+refiner's worktree (step 6). Run the Ready panel (`/we:lens ready <KEY>`) once the docs PR's review is clean,
+or right before the build: every review edit to the plan is a new blob and makes a green panel stale. On the default branch (its docs PR merged) and green under the Ready gate the story is
 Selected; move its ticket per `ticketing.md`, which names the mover for every state.
 
 ## Build
+
+**The step closest to users goes first.** Before a slot goes to a new story, check every epic of your
+chain that is merged but not live: a buildable entry condition of its next production step (a config
+PR, a test fix, a script) gets the first worker; one that lacks only a go gets its question today, with
+the evidence ready. A new epic's refine and build take only the slots left. Every status report opens
+with one line: what of the chain serves users in production today, and the next step that changes that.
 
 **Fill the slots:** each time a PR merges or a worker ends, list every story whose dependency is now met (the
 merged artifact its plan names, not the whole story) and every story without a plan, and dispatch until the worker

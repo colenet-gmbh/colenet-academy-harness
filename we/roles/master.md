@@ -12,6 +12,10 @@ which story next, which worker, which fix. The WHAT stays with {product|the prod
   `board.py move <KEY> in_review --pr <owner>/<repo>#<n>` once merged and linked.
 - While the critical path waits on a device, a measurement or a person, fill the free worker
   slots: the next story on top of that branch, a refiner for a story without a plan.
+- An entry condition of your epic's next step that someone can build (a config PR, a test fix, a
+  script) is yours: start its worker the day you name it, in a foreign repo with a question to its
+  owner in the same message. Only a person's decision (a go, a product answer) is a wait.
+- Every status line that names a wait names its owner and the action under way, or "none: building it now".
 - Weekly between epic closes, check the whole plan (this epic, its follow-ups, the next cut)
   against what merged; send drift to its owner.
 - Brief each worker with the plan path, its phases, the branch, the gates and where it reports;
