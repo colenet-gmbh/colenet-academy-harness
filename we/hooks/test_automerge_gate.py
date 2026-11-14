@@ -1560,30 +1560,65 @@ def test_a_plan_pr_with_its_own_receipt_passes(receipts: dict, monkeypatch, name
 
 @pytest.mark.parametrize(
     "other",
-    [
-        f"{RECEIPTS}/PROJ-6.yaml",
-        f"{RECEIPTS}/PROJ-55.yaml",
-        f"{RECEIPTS}/PROJ-5",
-        f"{RECEIPTS}/sub/PROJ-5.yaml",
-        "tests/test_thing.py",
-    ],
+    ["tests/test_thing.py", "app.py", "tests/staging_receipts_old/PROJ-5.yaml", "docsx/a.md"],
 )
-def test_a_plan_pr_with_another_receipt_or_a_test_is_refused(
-    receipts: dict, monkeypatch, other: str
-) -> None:
-    """Red arm: only this story's own receipt rides with the plan; another story's receipt or
-    any other test file makes it a build PR."""
+def test_a_plan_pr_with_a_test_or_code_is_refused(receipts: dict, monkeypatch, other: str) -> None:
+    """Red arm: a file outside `docs/` and the receipt directory makes it a build PR."""
     head = _commit(receipts["repo"], {PLAN: "# plan\n", other: "a: 1\n"}, "plan and more")
     red = refuse(receipts["repo"], ARM, FakeGh([run()], head=head, names=STORY), monkeypatch)
     assert red is not None and "plan first" in red
 
 
-def test_without_a_receipt_dir_the_receipt_makes_a_build_pr(story: dict, monkeypatch) -> None:
-    """Red arm: no `oracles.receipt_dir` on main, no exemption."""
+@pytest.mark.parametrize(
+    "other", [f"{RECEIPTS}/PROJ-6.yaml", f"{RECEIPTS}/PROJ-5", f"{RECEIPTS}/sub/PROJ-5.yaml"]
+)
+def test_a_plan_pr_with_any_receipt_passes(receipts: dict, monkeypatch, other: str) -> None:
+    """Q654: a diff of only `docs/` and the receipt directory builds nothing, whose receipt it is
+    does not matter."""
+    head = _commit(receipts["repo"], {PLAN: "# plan\n", other: "a: 1\n"}, "plan and receipt")
+    fake = FakeGh([run()], head=head, names=STORY)
+    assert refuse(receipts["repo"], ARM, fake, monkeypatch) is None
+
+
+def test_without_a_receipt_dir_the_default_receipt_dir_rides_with_the_plan(
+    story: dict, monkeypatch
+) -> None:
+    """Red arm (core #6596, Q654): the crew names no `oracles.receipt_dir`; the plan PR with its
+    receipt under `tests/staging_receipts/` was refused as a build PR."""
     _git(story["repo"], "reset", "-q", "--hard", story["main"])
     head = _commit(story["repo"], {PLAN: "# plan\n", f"{RECEIPTS}/PROJ-5.yaml": "a: 1\n"}, "plan")
-    red = refuse(story["repo"], ARM, FakeGh([run()], head=head, names=STORY), monkeypatch)
+    assert refuse(story["repo"], ARM, FakeGh([run()], head=head, names=STORY), monkeypatch) is None
+
+
+def test_a_plan_batch_with_several_receipts_passes(story: dict, monkeypatch) -> None:
+    """Red arm (core #6589, Q654): one plan PR carries the plans and receipts of several stories
+    and the epic plan; it builds nothing."""
+    _git(story["repo"], "reset", "-q", "--hard", story["main"])
+    files = {
+        PLAN: "# plan\n",
+        "docs/plans/PROJ-6-story.md": "# plan\n",
+        "docs/plans/thing-epic.md": "# epic\n",
+        f"{RECEIPTS}/PROJ-5.yaml": "a: 1\n",
+        f"{RECEIPTS}/PROJ-6.yaml": "a: 1\n",
+    }
+    head = _commit(story["repo"], files, "plan batch")
+    names = ("docs/thing-2026-11-14", "docs(PROJ-5): plan-s1")
+    assert refuse(story["repo"], ARM, FakeGh([run()], head=head, names=names), monkeypatch) is None
+
+
+def test_a_crew_receipt_dir_replaces_the_default(receipts: dict, monkeypatch) -> None:
+    """Red arm: a crew naming its own receipt directory exempts that one, not the default."""
+    crew = {**CREW, "oracles": {"receipt_dir": "checks/receipts"}}
+    main = _commit(receipts["repo"], {".weside/crew.json": json.dumps(crew)}, "other dir")
+    _publish_main(receipts["repo"], main)
+    head = _commit(receipts["repo"], {PLAN: "# plan\n", f"{RECEIPTS}/PROJ-5.yaml": "a\n"}, "p")
+    red = refuse(receipts["repo"], ARM, FakeGh([run()], head=head, names=STORY), monkeypatch)
     assert red is not None and "plan first" in red
+    _git(receipts["repo"], "reset", "-q", "--hard", main)
+    head = _commit(receipts["repo"], {PLAN: "# plan\n", "checks/receipts/PROJ-5.yaml": "a\n"}, "p")
+    assert (
+        refuse(receipts["repo"], ARM, FakeGh([run()], head=head, names=STORY), monkeypatch) is None
+    )
 
 
 def _plan_on_main(story: dict) -> str:

@@ -52,12 +52,12 @@ Refusals, in this order (the first one wins):
      and `lens_verdict.carry` carries it: the delta since touches no file the class hit.
   5. Plan first, for every story key the PR's head branch and title name (the crew's
      `naming.key` on `origin/main`, else the default) whose plan `docs/plans/<KEY>-story.md` is
-     on the head or on `origin/main`, and the PR changes a file outside `docs/` other than the
-     story's own receipt (`<oracles.receipt_dir>/<KEY>.<ext>` on `origin/main`): the plan must be
+     on the head or on `origin/main`, and the PR changes a file outside `docs/` and the receipt
+     directory (`oracles.receipt_dir` on `origin/main`, default `tests/staging_receipts`): the plan must be
      on `origin/main`, and the story's last row in the board's transitions log
      (`<board stem>-transitions.jsonl` beside `board_freeze.watched_board_files`) must not be
      `on_hold` or `backlog`. A story the log does not know passes; a PR without a key or a plan
-     file, and the plan PR itself (only `docs/` and its own receipt), are untouched. Only where the class was
+     file, and the plan PR itself (only `docs/` and receipts), are untouched. Only where the class was
      computed (a repo with rules); a one-way PR, refused by 3, names this refusal too, so the
      human who merges it by hand sees it.
   6. An arm before the Codex review on the PR's head has a verdict (`review.codex_check` in
@@ -758,7 +758,7 @@ def _last_move(root: str, key: str) -> str | None:
 def _plan_refusal(root: str, cls: ClassResult) -> str | None:
     """Plan first: a PR of a story with a plan file merges once that plan is on `origin/main`
     and the story's last board move is Selected or later. A PR with no story key, a story with
-    no plan file, and a PR that changes nothing outside `docs/` but the story's own receipt
+    no plan file, and a PR that changes nothing outside `docs/` and the receipt directory
     (`_plan_pr_file`: the plan PR itself) pass."""
     if not cls.head or not cls.base or cls.number is None:
         return None
@@ -769,26 +769,25 @@ def _plan_refusal(root: str, cls: ClassResult) -> str | None:
     return None
 
 
-def _receipt_dir(root: str) -> str | None:
-    """`oracles.receipt_dir` from the crew on `origin/main`, normalised; None without one."""
+# The receipt directory when the crew names no `oracles.receipt_dir` (Q654).
+DEFAULT_RECEIPT_DIR = "tests/staging_receipts"
+
+
+def _receipt_dir(root: str) -> str:
+    """`oracles.receipt_dir` from the crew on `origin/main`, normalised; `DEFAULT_RECEIPT_DIR`
+    without one."""
     oracles = _crew_on_main(root).get("oracles")
     rdir = oracles.get("receipt_dir") if isinstance(oracles, dict) else None
-    if not isinstance(rdir, str):
-        return None
+    if not isinstance(rdir, str) or not rdir.strip():
+        return DEFAULT_RECEIPT_DIR
     rdir = posixpath.normpath(rdir.strip())
-    return None if rdir in (".", "/") or rdir.startswith("..") else rdir
+    return DEFAULT_RECEIPT_DIR if rdir in (".", "/") or rdir.startswith("..") else rdir
 
 
-def _plan_pr_file(path: str, key: str, rdir: str | None) -> bool:
-    """A file a plan PR may carry: anything under `docs/`, or the story's own receipt
-    `<receipt_dir>/<KEY>.<ext>` (the refiner writes it with the plan; the format is the repo's).
-    Any other file, another story's receipt among them, makes it a build PR."""
-    if path.startswith("docs/"):
-        return True
-    if rdir is None or posixpath.dirname(path) != rdir:
-        return False
-    stem, ext = posixpath.splitext(posixpath.basename(path))
-    return stem == key and bool(ext)
+def _plan_pr_file(path: str, rdir: str) -> bool:
+    """A file a plan PR may carry: anything under `docs/` or under the receipt directory, any
+    story's receipt (a plan batch carries several; Q654). Any other file makes it a build PR."""
+    return path.startswith(("docs/", rdir.rstrip("/") + "/"))
 
 
 def _story_refusal(root: str, cls: ClassResult, key: str) -> str | None:
@@ -800,7 +799,7 @@ def _story_refusal(root: str, cls: ClassResult, key: str) -> str | None:
     changed = _git(root, "diff", "--name-only", "--no-renames", f"{cls.base}...{cls.head}")
     files = [f for f in (changed or "").splitlines() if f.strip()]
     rdir = _receipt_dir(root)
-    if changed is not None and all(_plan_pr_file(f, key, rdir) for f in files):
+    if changed is not None and all(_plan_pr_file(f, rdir) for f in files):
         return None
     if not on_main:
         return (
