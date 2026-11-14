@@ -827,6 +827,16 @@ class TestInboxReplyWithdraw:
         outcomes = [(q["id"], q["outcome"]) for q in jsonl(crewed / "board-questions.jsonl")]
         assert (first, "superseded") in outcomes and (second, "withdrawn") in outcomes
 
+    def test_the_same_question_to_another_human_is_no_duplicate(self, crewed, monkeypatch):
+        """Claude Review on #229: one key, one cause, two different humans asked."""
+        with_humans(crewed)
+        answer_with(crewed, CLEAR)
+        as_(monkeypatch, "alice", "Otto")
+        adapter = ticket_adapter.FakeAdapter()
+        assert act(crewed, *ask_argv(), "--to", "bob", adapter=adapter) == 0
+        assert act(crewed, *ask_argv(), adapter=adapter) == 0
+        assert act(crewed, *ask_argv(), adapter=adapter) == 1
+
     def test_a_refused_supersede_names_who_gave_way_to_the_question(
         self, crewed, monkeypatch, capsys
     ):

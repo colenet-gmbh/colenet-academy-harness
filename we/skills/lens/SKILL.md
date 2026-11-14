@@ -47,8 +47,8 @@ LV write <id> <lens> < "$S/lens-<id>-<lens>.txt"
 ```
 
 - Exit 0 prints `lens <lens>: green|red`; the write that completes the panel prints the `check` lines after it (§ 5).
-- `no parseable answer`: spawn that agent once more with the same entry; a second miss leaves the lens
-  missing (red). Say so.
+- `no parseable answer`: spawn that agent once more with the same entry; a second miss:
+  `LV write <id> <lens> --failed "no parseable answer"` (red). Say so.
 - `key '<k>' refused` or another refusal of the answer's shape: spawn that agent once more with the entry
   plus the refusal line; a second refusal: `LV write <id> <lens> --failed "<the refusal line>"`.
 - On T2, run the red arms (§ 4) before this step.

@@ -50,7 +50,8 @@ Usage:
                                                    account's 5h window (`cswap status --json`) is
                                                    above workers.max_active_5h_percent (80), both
                                                    from .weside/config.json, both values named;
-                                                   an unreadable value skips its check (stderr);
+                                                   an unreadable value skips its check (stderr;
+                                                   silent without cswap on PATH);
                                                    2: a limit that is no number
   worker_launch.py settings --repo <dir> --key <K> --out <file> [--session-start <command>]
                                                    writes the worker's `--settings` file: the
@@ -288,7 +289,8 @@ def capacity(repo: Path, prefix: str) -> None:
     """Refuse a new worker (`LaunchError`, exit 3) while the busy sessions on this machine
     (`claude agents --json`, `status` busy) reach `workers.max_busy_sessions` or the active
     account's 5h window is above `workers.max_active_5h_percent`; the refusal names both measured
-    values. A value that cannot be read skips its check with one stderr warning."""
+    values. A value that cannot be read skips its check with one stderr warning; without `cswap` on
+    PATH (it is optional) the 5h check is skipped silently."""
     limits = cap_limits(repo)
     max_busy, max_pct = limits["max_busy_sessions"], limits["max_active_5h_percent"]
     try:
@@ -299,8 +301,8 @@ def capacity(repo: Path, prefix: str) -> None:
             f"{prefix}: warning: busy sessions unreadable ({exc}); that check is skipped",
             file=sys.stderr,
         )
-    pct = five_hour_percent()
-    if pct is None:
+    pct = five_hour_percent() if shutil.which("cswap") else None
+    if pct is None and shutil.which("cswap"):
         print(
             f"{prefix}: warning: the active account's 5h window is unreadable"
             " (cswap status --json failed); that check is skipped",

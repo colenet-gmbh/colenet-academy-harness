@@ -751,3 +751,13 @@ def test_capacity_skips_the_window_check_without_cswap_and_says_so(cap, monkeypa
 def test_capacity_refuses_a_limit_that_is_no_number(cap):
     out = cap(1, 1.0, {"max_busy_sessions": "ten"})
     assert out.returncode == 2 and "workers.max_busy_sessions: needs a number" in out.stderr
+
+
+def test_capacity_without_cswap_on_path_skips_the_window_check_silently(
+    monkeypatch, tmp_path, capsys
+):
+    """Claude Review on #229: cswap is optional; its absence is no warning on every start."""
+    monkeypatch.setattr(wl.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(wl, "sessions", list)
+    wl.capacity(tmp_path, "we-worker")
+    assert capsys.readouterr().err == ""

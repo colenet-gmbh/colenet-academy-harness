@@ -78,7 +78,7 @@ ask      posts a question for the owner after a cold reader (`cold_reader.py`) u
          A merge-go appends the PR's required checks (`gh pr checks --required`) to the ask as
          one line and keeps it as `checks`: the count per green, red, cancelled, pending,
          skipped and the names of every one not green.
-         An open question on the same key with the same cause (and the same PR) refuses the ask
+         An open question on the same key with the same cause, PR and `--to` refuses the ask
          before the reader, naming its id (a `duplicate` line in board-questions.jsonl); one with
          another cause draws a warning. `--replace <QID>` takes that question off the queue (a
          `replaced` line in board-questions.jsonl) and posts this one.
@@ -1326,14 +1326,15 @@ def _take_off(board, qid, key=None):
 
 def _same_key(state, fields, replacing):
     """The open questions on the question's key (not the one `--replace` names): one with the
-    same cause (and, for a merge-go, the same PR) is a duplicate and refuses the ask with one
+    same cause, PR and `--to` human is a duplicate and refuses the ask with one
     `duplicate` line in board-questions.jsonl; another cause draws one stderr warning each."""
     key, cause = fields["key"], fields["cause"]
     for q in state.board().get("owner_queue") or []:
         if not isinstance(q, dict) or q.get("key") != key or q.get("id") == replacing:
             continue
         qid, text = q.get("id"), str(q.get("ask") or "")[:80]
-        if q.get("cause") == cause and q.get("pr_url") == fields.get("pr_url"):
+        same = ("cause", "pr_url", "to")
+        if all(q.get(f) == fields.get(f) for f in same):
             state.append_question({**fields, "outcome": "duplicate", "of": qid})
             raise BoardError(
                 f"board.py ask: refused: {qid} on {key} (cause {cause}) is still open ({text!r}); "
