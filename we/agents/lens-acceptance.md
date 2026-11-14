@@ -33,6 +33,10 @@ repo script, test or tool (it may write, rename or migrate), never check out or 
 
 - `severity`: BLOCKING (must not ship), WARNING (a defect that should not ship), NOTE (worth reading,
   never blocks). No finding: `{"findings": []}`.
+- On Ready, a receipt or walk that cannot run today because the build brings what it needs (a seed
+  slot, a staging state, data created lazily) is a NOTE for the build worker, who arms the receipt; it
+  is red only when the AC has no oracle or the receipt does not observe the AC.
+  Good: `NOTE: AC5 receipt needs the seed user the build adds`. Bad: `BLOCKING: AC5 receipt fails on staging today`.
 - Every finding names the question line it answers. On T2, every BLOCKING or WARNING carries
   `red_arm.command`: one test or gate command that fails on `head` because of the defect, in the form
   `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lens_verdict.py" arm "<command>"` accepts (exit 0; it owns the

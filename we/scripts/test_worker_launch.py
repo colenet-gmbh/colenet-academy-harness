@@ -612,6 +612,23 @@ class TestCheckBrief:
         assert line["missing"] == ["Grenzen und wann stoppen / Limits and when to stop"]
         assert line["ts"].endswith("Z")
 
+    def test_check_names_a_living_worker_of_the_same_key_as_the_sendmessage_target(self, env):
+        """Red arm: five workers on one ticket, three of them follow-ups the refiner could have
+        taken by SendMessage."""
+        rows = json.loads(env["state"].read_text())
+        rows += [
+            {"name": "KEY-1-refiner", "status": "idle", "pid": os.getpid(), "sessionId": "a"},
+            {"name": "KEY-1-gone", "status": "idle", "pid": 999999999, "sessionId": "b"},
+            {"name": "KEY-12-other", "status": "idle", "pid": os.getpid(), "sessionId": "c"},
+        ]
+        env["state"].write_text(json.dumps(rows))
+        out = _run("check", "--name", "KEY-1-planfix", "--no-brief", "--prefix", "we-worker")
+        assert out.returncode == 0 and out.stdout.strip() == "KEY-1"
+        assert out.stderr.splitlines() == [
+            "we-worker: hint: KEY-1-refiner (idle) works on KEY-1 and lives: a follow-up goes to"
+            " it by SendMessage, not to a new worker KEY-1-planfix"
+        ]
+
     def test_an_enforced_check_refuses(self, monkeypatch):
         monkeypatch.setattr(wl, "BRIEF_ENFORCED", True)
         with pytest.raises(wl.LaunchError, match="the brief lacks") as exc:
@@ -665,3 +682,72 @@ class TestSettings:
         assert "Bash(*gh secret *)" in doc["permissions"]["deny"]
         assert doc["env"] == {"WE_ROLE": "worker", "WE_STORY_KEY": "KEY-1"}
         assert doc["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "timer arm x"
+
+
+# The concurrency cap: busy sessions and the active account's 5h window.
+
+CSWAP = r"""#!/usr/bin/env python3
+import os, sys
+if os.environ.get("STUB_CSWAP_FAILS"): sys.exit(1)
+print(os.environ["STUB_CSWAP_JSON"])
+"""
+
+
+@pytest.fixture
+def cap(env, monkeypatch, tmp_path):
+    """`env` with `count` busy sessions, a stub `cswap` at `pct` and a config block."""
+    stub = tmp_path / "bin" / "cswap"
+    stub.write_text(CSWAP)
+    stub.chmod(0o755)
+
+    def setup(busy, pct, workers=None):
+        rows = [{"name": f"S{i}", "status": "busy", "pid": 1} for i in range(busy)]
+        rows.append({"name": "idle", "status": "idle", "pid": 1})
+        env["state"].write_text(json.dumps(rows))
+        usage = {"active": {"usage": {"fiveHour": {"pct": pct}}}}
+        monkeypatch.setenv("STUB_CSWAP_JSON", json.dumps(usage))
+        (env["wt"] / ".weside").mkdir(exist_ok=True)
+        cfg = {} if workers is None else {"workers": workers}
+        (env["wt"] / ".weside" / "config.json").write_text(json.dumps(cfg))
+        return _run("capacity", "--repo", str(env["wt"]), "--prefix", "we-worker")
+
+    return setup
+
+
+def test_capacity_refuses_above_either_limit_and_names_both_values(cap):
+    """Red arm: 14 usage-limit stops in 11 sessions within 13 minutes."""
+    out = cap(10, 50.0)
+    assert out.returncode == 3
+    assert out.stderr.strip() == (
+        "we-worker: refused, no worker started: 10 sessions busy (limit 10,"
+        " workers.max_busy_sessions), active account 5h at 50 % (limit 80 %,"
+        " workers.max_active_5h_percent); try again later"
+    )
+    out = cap(2, 81.0)
+    assert out.returncode == 3 and "active account 5h at 81 % (limit 80 %" in out.stderr
+
+
+def test_capacity_below_the_limits_starts(cap):
+    out = cap(9, 80.0)
+    assert out.returncode == 0 and out.stderr == ""
+
+
+def test_capacity_reads_the_limits_from_the_project_config(cap):
+    assert cap(3, 10.0, {"max_busy_sessions": 3}).returncode == 3
+    assert cap(3, 10.0, {"max_busy_sessions": 4, "max_active_5h_percent": 5}).returncode == 3
+    assert cap(3, 10.0, {"max_busy_sessions": 4, "max_active_5h_percent": 50}).returncode == 0
+
+
+def test_capacity_skips_the_window_check_without_cswap_and_says_so(cap, monkeypatch):
+    monkeypatch.setenv("STUB_CSWAP_FAILS", "1")
+    out = cap(1, 99.0)
+    assert out.returncode == 0
+    assert out.stderr.strip() == (
+        "we-worker: warning: the active account's 5h window is unreadable (cswap status --json"
+        " failed); that check is skipped"
+    )
+
+
+def test_capacity_refuses_a_limit_that_is_no_number(cap):
+    out = cap(1, 1.0, {"max_busy_sessions": "ten"})
+    assert out.returncode == 2 and "workers.max_busy_sessions: needs a number" in out.stderr

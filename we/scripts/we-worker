@@ -464,6 +464,9 @@ if [[ $resuming -eq 1 ]]; then
 else
   key=$(printf '%s' "$brief" | python3 "$wl" check --name "$name" --brief-file - --prefix we-worker) || exit 2
 fi
+# The concurrency cap: busy sessions and the active account's 5h window (.weside/config.json
+# `workers`); a refusal names both values and exits 3, nothing starts.
+python3 "$wl" capacity --repo "$PWD" --prefix we-worker || exit $?
 cargs=()
 while [[ $# -gt 0 ]]; do
   case $1 in

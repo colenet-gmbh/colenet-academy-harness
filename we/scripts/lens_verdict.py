@@ -11,12 +11,16 @@ Usage:
                                                  a ``depends_on`` key has no story plan on
                                                  origin/main (the lenses would only say so); a
                                                  key with a repo prefix (``repo/KEY``) lives in
-                                                 another repo: one warning, no refusal
+                                                 another repo: one warning, no refusal; refused
+                                                 too on the same plan blob while the panel has
+                                                 some but not every lens (no restart mid-round)
   lens_verdict.py plan t2 PR                     start a T2 panel on the PR's head (``gh``)
   lens_verdict.py arm [COMMAND]                  exit 0 when COMMAND (else stdin) is a red arm in
                                                  test form (the skill may run it), else 1 with why
   lens_verdict.py write ID LENS < ANSWER         record the lens agent's answer (its last JSON
-                                                 object); exit 1 naming what is refused
+                                                 object); exit 1 naming what is refused; the
+                                                 write that completes the panel prints ``check``
+                                                 after its line (the exit stays 0)
   lens_verdict.py write ID LENS --failed REASON  record the lens red without findings
   lens_verdict.py check ID                       one line per lens and the panel; exit 0 only green
   lens_verdict.py post t2-prN                    post the panel comment on the PR's head (PASS or
@@ -525,10 +529,11 @@ def plan(root: Path, kind: str, subject: str, plan_arg: str | None = None) -> di
     except crew_mod.CrewError as exc:
         raise UnusableError(f"crew: {exc}") from exc
     bound = current_binding(root, kind, subject, rel)
+    path = verdict_dir(root) / f"{vid}.json"
     if kind == "ready":
+        _no_restart_mid_round(path, vid, bound)
         _ready_gate_first(root, subject, rel, bound["plan_blob"])
         _depends_on_main(root, subject, rel, bound["plan_blob"])
-    path = verdict_dir(root) / f"{vid}.json"
     doc: dict[str, Any] = {
         "version": VERSION,
         "kind": kind,
@@ -563,6 +568,25 @@ def plan(root: Path, kind: str, subject: str, plan_arg: str | None = None) -> di
             entry["head"] = bound["head"]
         entries.append(entry)
     return {"id": vid, "kind": kind, "bound_to": bound, "entries": entries}
+
+
+def _no_restart_mid_round(path: Path, vid: str, bound: dict[str, str]) -> None:
+    """A Ready panel on the same plan blob with some but not every lens written is mid-round: a
+    restart would drop those verdicts and run the lenses again on the same plan. RefusedError
+    names the missing lenses."""
+    try:
+        old = read_file(path)
+    except (RefusedError, UnusableError):
+        return
+    missing = [lens for lens in old["expected"] if lens not in old["verdicts"]]
+    if old["bound_to"] != bound or not old["verdicts"] or not missing:
+        return
+    round_, _origin = panel_round(path.parent, old)
+    raise RefusedError(
+        f"panel {vid}: round {round_} on this plan blob is open (missing: {', '.join(missing)}),"
+        " no restart: dispatch the missing lenses, record a lens that died with"
+        f" `lens_verdict.py write {vid} <lens> --failed <why>`, or edit the plan for a new round"
+    )
 
 
 def _ready_gate_first(root: Path, subject: str, rel: str | None, blob: str) -> None:
@@ -1199,6 +1223,9 @@ def _main(argv: list[str], stdin: Any) -> int:
         answer = None if failed is not None else stdin.read()
         result = write(root, args[0], args[1], answer=answer, failed=failed)
         print(f"lens {args[1]}: {result['verdict']}" + (" (sample)" if result["sample"] else ""))
+        doc = read_file(verdict_dir(root) / f"{args[0]}.json")
+        if all(lens in doc["verdicts"] for lens in doc["expected"]):
+            print("\n".join(check(root, args[0])[1]))
         return 0
     if verb in ("check", "post") and len(args) == 1:
         green, lines = (check if verb == "check" else post)(root, args[0])

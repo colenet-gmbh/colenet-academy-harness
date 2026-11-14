@@ -99,6 +99,11 @@ when its text starts with the name). The grammar, the refusal template and `work
 are owned by `scripts/worker_launch.py` (its docstring). A `--resume` start checks the name only.
 Every start and every denial of the worker rights brake is one line in `<state dir>/brakes.jsonl`
 (`worker_rights.brake_log`): the count of false alarms and of passing briefs.
+`check` names a living session of the same key on stderr: a follow-up goes to it by `SendMessage`.
+After the check `we-worker` refuses a start (exit 3, nothing starts) while the busy sessions reach
+`workers.max_busy_sessions` or the active account's 5h window is above
+`workers.max_active_5h_percent` (`.weside/config.json`, asked by `/we:setup`; `worker_launch.py
+capacity` owns the rule); there is no override flag.
 
 ### Worker rights
 

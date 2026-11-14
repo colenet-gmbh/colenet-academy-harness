@@ -75,8 +75,13 @@ ask      posts a question for the owner after a cold reader (`cold_reader.py`) u
          Accept as Taken when the task carries a recommendation). `--source <command or link>` stamps where the ask's fact comes from (the
          pane shows it). `--owner <member>` or `--component <name>` (the member whose `components`
          hold it) stamps `owner`: the deliverer carries the answer to that member's session too.
-         An open question on the same key draws a warning naming its id; `--replace <QID>` takes
-         that question off the queue (a `replaced` line in board-questions.jsonl) and posts this one.
+         A merge-go appends the PR's required checks (`gh pr checks --required`) to the ask as
+         one line and keeps it as `checks`: the count per green, red, cancelled, pending,
+         skipped and the names of every one not green.
+         An open question on the same key with the same cause (and the same PR) refuses the ask
+         before the reader, naming its id (a `duplicate` line in board-questions.jsonl); one with
+         another cause draws a warning. `--replace <QID>` takes that question off the queue (a
+         `replaced` line in board-questions.jsonl) and posts this one.
          `--to <human>` (a crew with `humans`, another human than this session's) asks a human on
          another machine on the ticket `--key`: the item keeps `to`, `to_name` and `label` (the
          pane shows it waiting on that human, with Withdraw only), and the carry
@@ -1319,16 +1324,70 @@ def _take_off(board, qid, key=None):
     return [qid]
 
 
-def _warn_same_key(state, key, replacing):
-    """One stderr warning per open question on `key` (not the one `--replace` names)."""
+def _same_key(state, fields, replacing):
+    """The open questions on the question's key (not the one `--replace` names): one with the
+    same cause (and, for a merge-go, the same PR) is a duplicate and refuses the ask with one
+    `duplicate` line in board-questions.jsonl; another cause draws one stderr warning each."""
+    key, cause = fields["key"], fields["cause"]
     for q in state.board().get("owner_queue") or []:
-        if isinstance(q, dict) and q.get("key") == key and q.get("id") != replacing:
-            print(
-                f"board.py ask: warning: {q.get('id')} on {key} is still open "
-                f"({str(q.get('ask') or '')[:80]!r}); this posts a second question — "
-                f"`--replace {q.get('id')}` replaces it",
-                file=sys.stderr,
+        if not isinstance(q, dict) or q.get("key") != key or q.get("id") == replacing:
+            continue
+        qid, text = q.get("id"), str(q.get("ask") or "")[:80]
+        if q.get("cause") == cause and q.get("pr_url") == fields.get("pr_url"):
+            state.append_question({**fields, "outcome": "duplicate", "of": qid})
+            raise BoardError(
+                f"board.py ask: refused: {qid} on {key} (cause {cause}) is still open ({text!r}); "
+                f"wait for its answer, or ask anew with `--replace {qid}`"
             )
+        print(
+            f"board.py ask: warning: {qid} on {key} is still open ({text!r}); this posts a "
+            f"second question — `--replace {qid}` replaces it",
+            file=sys.stderr,
+        )
+
+
+CHECK_BUCKETS = (
+    ("pass", "green"),
+    ("fail", "red"),
+    ("cancel", "cancelled"),
+    ("pending", "pending"),
+    ("skipping", "skipped"),
+)
+
+
+def _required_checks(pr_url):
+    """One line with the state of the PR's required checks (`gh pr checks --required`): the
+    count per bucket, the names of every one not green or skipped. gh exits non-zero on a red
+    or pending check, so its JSON is read whatever the exit; a failure says why."""
+    argv = ["gh", "pr", "checks", *_gh_argv(pr_url), "--required", "--json", "name,bucket"]
+    try:
+        done = subprocess.run(
+            argv, capture_output=True, text=True, timeout=GH_TIMEOUT, check=False
+        )
+    except FileNotFoundError:
+        return "required checks: unknown (gh not found)"
+    except subprocess.TimeoutExpired:
+        return f"required checks: unknown (gh ran past {GH_TIMEOUT} s)"
+    try:
+        checks = json.loads(done.stdout)
+    except ValueError:
+        checks = None
+    if not isinstance(checks, list):
+        if "no required checks" in done.stderr:
+            return "required checks: none reported by gh"
+        why = (done.stderr.strip().splitlines() or [f"exit {done.returncode}"])[-1]
+        return f"required checks: unknown ({why})"
+    if not checks:
+        return "required checks: none reported by gh"
+    parts = []
+    for bucket, word in CHECK_BUCKETS:
+        names = [
+            str(c.get("name")) for c in checks if isinstance(c, dict) and c.get("bucket") == bucket
+        ]
+        if names:
+            shown = "" if bucket in ("pass", "skipping") else f" ({', '.join(names)})"
+            parts.append(f"{len(names)} {word}{shown}")
+    return "required checks: " + ", ".join(parts)
 
 
 def _key_owner(crew, owner, component):
@@ -1492,6 +1551,10 @@ def cmd_ask(state, args, crew, now):
     if args.one_way and args.one_way.strip():
         fields["one_way"] = args.one_way.strip()
     fields.update(_ask_extras(args, crew))
+    _same_key(state, {"ts": _iso(now), **fields}, args.replace)
+    if fields["cause"] == "merge-go":
+        fields["checks"] = _required_checks(pr_url)
+        fields["ask"] = f"{fields['ask']}\n{fields['checks']}"
     base = {"ts": _iso(now), **fields}
     labels = crew.get("labels") or {}
     question = {
@@ -1541,7 +1604,6 @@ def cmd_ask(state, args, crew, now):
         )
         raise BoardError(f"board.py ask: {text}")
 
-    _warn_same_key(state, fields["key"], args.replace)
     replaced = []
 
     def posted(board):

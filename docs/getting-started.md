@@ -13,8 +13,8 @@ Requirements: Claude Code (2.1.302 or later for the `/flow` pane), Git, Python 3
 
 Run `/we:setup` in the repo. It detects the stack from marker files (`pyproject.toml`,
 `package.json`, `Cargo.toml`, `go.mod`) and the ticketing tool (Jira through an MCP server, GitHub
-Issues through `gh`, or none), then asks up to five skippable questions: goals, test discipline,
-verification, review gates, council. The answers go to `.weside/config.json`. A re-run shows the
+Issues through `gh`, or none), then asks up to six skippable questions: goals, test discipline,
+verification, review gates, worker cap, council. The answers go to `.weside/config.json`. A re-run shows the
 current value and asks before replacing it. When a crew works in the repo, setup also writes
 `.weside/crew.json` (who is Product Owner, coordinator, HR, Tester, who owns which component) and a
 stub role skill per member without one ([workflow.md](workflow.md#crew)). It asks once whether

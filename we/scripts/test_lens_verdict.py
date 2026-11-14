@@ -769,6 +769,42 @@ def test_from_round_n_a_warning_only_panel_is_green_with_its_warnings_carried(re
     )
 
 
+def test_the_write_that_completes_the_panel_prints_the_check(repo):
+    """Red arm: 13 rounds without a BLOCKING; the master only ran `write`, which showed the raw
+    red, and never saw the panel green with its warnings carried from round 3."""
+    set_rounds(repo, 2)
+    vid = f"ready-{KEY}"
+    run("plan", "ready", KEY)
+    new_plan_version(repo)
+    run("plan", "ready", KEY)
+    code, out, _ = run("write", vid, "product", stdin=answer(blocking(severity="WARNING")))
+    assert (code, out) == (0, "lens product: red\n")  # the panel is still open: no check yet
+    run("write", vid, "architecture", stdin=GREEN)
+    code, out, _ = run("write", vid, "acceptance", stdin=GREEN)
+    assert code == 0
+    assert out.splitlines()[0] == "lens acceptance: green"
+    assert "lens product: green (warnings carried: WARNING a.py:1)" in out
+    assert out.splitlines()[-1] == f"panel {vid}: green (warnings carried)"
+
+
+def test_plan_ready_refuses_a_restart_while_the_panel_on_the_same_blob_is_open(repo):
+    """Red arm: a restart mid-round dropped the verdicts already written and ran the lenses
+    again on the same plan."""
+    vid = f"ready-{KEY}"
+    run("plan", "ready", KEY)
+    run("write", vid, "product", stdin=GREEN)
+    code, out, err = run("plan", "ready", KEY)
+    assert (code, out) == (1, "")
+    assert (
+        f"panel {vid}: round 1 on this plan blob is open (missing: architecture, acceptance)"
+        in err
+    )
+    assert "lens_verdict.py write" in err
+    assert "product" in json.loads(verdict_file(repo, vid).read_text())["verdicts"]
+    new_plan_version(repo)  # a new plan version starts the next round as ever
+    assert run("plan", "ready", KEY)[0] == 0
+
+
 def test_before_round_n_a_warning_only_panel_stays_red(repo):
     set_rounds(repo, 2)
     vid = panel_in_round(repo, 1, "WARNING")
@@ -864,7 +900,9 @@ def test_derived_round_counts_two_logged_runs_on_two_blobs(repo):
 
 def test_derived_round_counts_two_runs_on_one_blob_once(repo):
     """Red arm: a restart on the same plan blob is no round."""
-    legacy_run(repo, "product")
+    vid = legacy_run(repo, "product")
+    for lens in ("architecture", "acceptance"):  # a restart needs the panel complete
+        assert run("write", vid, lens, "--failed", "the agent stopped")[0] == 0
     vid = legacy_run(repo, "architecture")
     assert lv.round_of(repo, vid) == (1, None)
 

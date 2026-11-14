@@ -1,7 +1,7 @@
 ---
 name: setup
 description: >
-  Project setup: detects stack, ticketing and tools, asks up to five skippable questions,
+  Project setup: detects stack, ticketing and tools, asks up to six skippable questions,
   writes .weside/config.json, optionally rosters and crew. Triggers: "/we:setup", "configure
   project", "initialize repo", "first time".
 ---
@@ -48,6 +48,10 @@ never commit yourself.
    says how the change was observed, or `not-observed — <reason>`. On `yes`, offer to scaffold
    `.weside/verify.md` from what step 1 found: the repo's CLI, its dev bring-up command, whether a
    browser driver exists.
+6. **Worker cap**: how many sessions may work at once on this machine, and above which share of the
+   active account's 5h window no new worker starts? Defaults `10` and `80` (skip keeps them). Process
+   workers share one login, so too many at once hit the usage limit together; `we-worker` refuses a
+   start over either (`${CLAUDE_PLUGIN_ROOT}/scripts/worker_launch.py` `capacity`).
 
 Review gates are detected, not asked: a Claude or Codex review workflow in `.github/workflows/`, a
 CodeRabbit or Greptile app. The ids go to `review.available`; `/we:ci-review` collects threads from
@@ -73,6 +77,7 @@ Written always, also when step 4 is declined. Only keys a verb reads:
                     "pre_merge_receipt": "<command with {KEY}: prints report:/skip:/not-run:, exit 0 green, 1 red>" },
   "review": { "available": ["claude"] },
   "agents": { "visible_teammates": false, "worker_launch": "subagent" },
+  "workers": { "max_busy_sessions": 10, "max_active_5h_percent": 80 },
   "acceptance": { "receipts_workflow": "<workflow path whose RC run uploads accept.json, or null>",
                   "rc_tag_glob": "<RC tag glob, e.g. v*-rc.*>" }
 }
@@ -92,7 +97,7 @@ crew; `"subagent"` (shown above) is its default. A repo with a crew gets one in 
 `launch.worker` instead, written in step 4a (L0 §Sessions: build only in workers).
 
 A re-run re-detects `tools` and overwrites only that block. Print what was configured in a short
-block (stack, ticketing, goals, test discipline, verification, review gates, missing tools).
+block (stack, ticketing, goals, test discipline, verification, review gates, worker cap, missing tools).
 
 ## 4. Council (optional, ask once)
 
