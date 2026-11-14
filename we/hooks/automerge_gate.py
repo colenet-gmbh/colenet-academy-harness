@@ -49,7 +49,9 @@ Refusals, in this order (the first one wins):
      among them only those whose `@ <sha>` is a prefix of the PR's current head; the last of those
      decides (`PASS` lets it go, any other `Overall:` word refuses). None on the head refuses, and
      so does a comment read that fails, unless the last card comment is a PASS on an older head
-     and `lens_verdict.carry` carries it: the delta since touches no file the class hit.
+     and `lens_verdict.carry` carries it: the delta since touches no file the class hit. The
+     refusal prints the three lines exactly and says the card worker's starter posts its verdict
+     file; a `gh pr comment` chained before the merge is named (post, then arm separately).
   5. Plan first, for every story key the PR's head branch and title name (the crew's
      `naming.key` on `origin/main`, else the default) whose plan `docs/plans/<KEY>-story.md` is
      on the head or on `origin/main`, and the PR changes a file outside `docs/` and the receipt
@@ -892,8 +894,11 @@ def _card_refusal(root: str, cls: ClassResult, cwd: str | None) -> str | None:
     how = (
         f'Start a card worker: `we-worker <KEY>-card --bg "<brief>"`, its Goal heading '
         f'"{_security_skill(root)} security card review of PR #{cls.number} on {head[:10]}" '
-        f"(four headings, worker-dispatch.md § Name and brief); its comment carries `{CARD_MARKER}`, "
-        f"`@ {head[:10]}` and `Overall: PASS` (worker-dispatch.md § Card worker)."
+        "(four headings, worker-dispatch.md § Name and brief). It writes its verdict to a file; "
+        f"you, its starter, post that file unchanged with `gh pr comment {cls.number} --body-file "
+        "<file>` (worker-dispatch.md § Card worker), then arm in a command of its own. Only this "
+        f"form counts, its first three lines exactly:\n{CARD_MARKER}\n"
+        f"## Security card review — #{cls.number} @ `{head[:10]}`\n**Overall: PASS**"
     )
     if bodies is None:
         return f"{start}: the PR comments could not be read, which counts as no verdict. {how}"
@@ -911,6 +916,11 @@ def _card_refusal(root: str, cls: ClassResult, cwd: str | None) -> str | None:
         why = f"the card verdict on this head is {verdict}"
     elif last_head is not None:
         why = f"the last card verdict is on the older head {last_head}"
+    elif any(CARD_MARKER in b for b in bodies):
+        why = (
+            f"a comment carries `{CARD_MARKER}` but no `## Security card review — #<N> @ "
+            "`<sha>`` heading the hook reads"
+        )
     else:
         why = "no card verdict is on the PR"
     return f"{start}: {why}. {how}"
@@ -1067,6 +1077,8 @@ def _refusal(payload: dict) -> str | None:
         if reason is not None:
             if _edits_body_before(argv, call.at):
                 reason += " " + BODY_CHAIN_NOTE
+            if _comments_before(argv, call.at):
+                reason += " " + COMMENT_CHAIN_NOTE
             return reason
     return None
 
@@ -1075,6 +1087,26 @@ BODY_CHAIN_NOTE = (
     "This command also edits the PR body before the merge, but the hook judged the body as it is "
     "now (it runs before the command): change the body in a command of its own, then arm."
 )
+
+
+COMMENT_CHAIN_NOTE = (
+    "This command also posts a PR comment before the merge (a card verdict?), but the hook read "
+    "the comments as they are now (it runs before the command): post the comment in a command of "
+    "its own, then arm in a second one."
+)
+
+
+def _comments_before(argv: list[str], stop: int) -> bool:
+    """Whether a `gh pr comment` runs before `argv[stop]`."""
+    for i in range(min(stop, len(argv))):
+        found = _gh_at(argv, i)
+        if (
+            found is not None
+            and found[1] < stop
+            and argv[found[1] : found[1] + 2] == ["pr", "comment"]
+        ):
+            return True
+    return False
 
 
 def _edits_body_before(argv: list[str], stop: int) -> bool:

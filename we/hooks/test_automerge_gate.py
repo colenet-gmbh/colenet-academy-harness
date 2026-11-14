@@ -1279,6 +1279,32 @@ def test_a_comment_without_the_marker_is_no_card_verdict(green: dict, monkeypatc
     assert "no card verdict is on the PR" in refuse(green["repo"], ARM, fake, monkeypatch)
 
 
+def test_a_card_whose_heading_the_hook_cannot_read_is_named_with_the_exact_form(
+    green: dict, monkeypatch
+) -> None:
+    """#6403/#6407: PASS in bold, no `## Security card review` heading; three post rounds."""
+    monkeypatch.setenv("FAKE_CLASS", _hit("brake-review"))
+    head = green["head"][:10]
+    bold = "<!-- security-card-review -->\n**Security card review #7 @ " + head + "** PASS\n"
+    fake = FakeGh([run()], head=green["head"], cards=[bold])
+    red = refuse(green["repo"], ARM, fake, monkeypatch)
+    assert red is not None and "but no `## Security card review" in red
+    form = f"<!-- security-card-review -->\n## Security card review — #7 @ `{head}`\n**Overall: PASS**"
+    assert form in red
+    assert "gh pr comment 7 --body-file <file>" in red and "you, its starter" in red
+
+
+def test_a_card_post_chained_before_the_arm_is_named_in_the_refusal(
+    green: dict, monkeypatch
+) -> None:
+    monkeypatch.setenv("FAKE_CLASS", _hit("trust-loosening"))
+    chained = "gh pr comment 7 --body-file /tmp/card.md && " + ARM
+    red = refuse(green["repo"], chained, FakeGh([run()], head=green["head"]), monkeypatch)
+    assert red is not None and "post the comment in a command of its own" in red
+    plain = refuse(green["repo"], ARM, FakeGh([run()], head=green["head"]), monkeypatch)
+    assert plain is not None and "post the comment in a command" not in plain
+
+
 def test_an_unreadable_comment_list_refuses(green: dict, monkeypatch) -> None:
     monkeypatch.setenv("FAKE_CLASS", _hit("trust-loosening"))
 
