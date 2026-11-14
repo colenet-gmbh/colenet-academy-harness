@@ -815,7 +815,8 @@ class TestInboxReplyWithdraw:
         as_(monkeypatch, "alice", "Otto")
         adapter = ticket_adapter.FakeAdapter()
         assert act(crewed, *ask_argv(), "--to", "bob", adapter=adapter) == 0
-        assert act(crewed, *ask_argv(), "--to", "bob", adapter=adapter) == 0
+        later = ask_argv(**{"--cause": "plan"})  # the same cause would be a refused duplicate
+        assert act(crewed, *later, "--to", "bob", adapter=adapter) == 0
         first, second = [q["id"] for q in board_of(crewed)["owner_queue"]][-2:]
         adapter = ticket_adapter.FakeAdapter()
         assert act(crewed, "supersede", first, "--by", second, adapter=adapter) == 0
@@ -825,6 +826,16 @@ class TestInboxReplyWithdraw:
         assert first not in [q["id"] for q in board_of(crewed)["owner_queue"]]
         outcomes = [(q["id"], q["outcome"]) for q in jsonl(crewed / "board-questions.jsonl")]
         assert (first, "superseded") in outcomes and (second, "withdrawn") in outcomes
+
+    def test_the_same_question_to_another_human_is_no_duplicate(self, crewed, monkeypatch):
+        """Claude Review on #229: one key, one cause, two different humans asked."""
+        with_humans(crewed)
+        answer_with(crewed, CLEAR)
+        as_(monkeypatch, "alice", "Otto")
+        adapter = ticket_adapter.FakeAdapter()
+        assert act(crewed, *ask_argv(), "--to", "bob", adapter=adapter) == 0
+        assert act(crewed, *ask_argv(), adapter=adapter) == 0
+        assert act(crewed, *ask_argv(), adapter=adapter) == 1
 
     def test_a_refused_supersede_names_who_gave_way_to_the_question(
         self, crewed, monkeypatch, capsys
@@ -837,7 +848,7 @@ class TestInboxReplyWithdraw:
         assert act(crewed, *ask_argv()) == 0
         first = board_of(crewed)["owner_queue"][-1]["id"]
         two_sessions(crewed, monkeypatch, "lead-13")
-        assert act(crewed, *ask_argv(**{"--session": "lead-13"})) == 0
+        assert act(crewed, *ask_argv(**{"--session": "lead-13", "--cause": "plan"})) == 0
         mine = board_of(crewed)["owner_queue"][-1]["id"]
         assert act(crewed, "withdraw", mine, "--for", first) == 0
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sid-12")

@@ -55,9 +55,18 @@ if sys.argv[1:2] == ["list-windows"]:
 """
 
 
+CSWAP_STUB = r"""#!/usr/bin/env python3
+import json, os
+pct = float(os.environ.get("STUB_CSWAP_PCT", "10"))
+print(json.dumps({"active": {"usage": {"fiveHour": {"pct": pct}}}}))
+"""
+
+
 def setup(tmp_path, rows=(), crew=CREW):
     bindir = tmp_path / "bin"
     bindir.mkdir(exist_ok=True)
+    (bindir / "cswap").write_text(CSWAP_STUB)
+    (bindir / "cswap").chmod(0o755)
     (bindir / "claude").write_text(STUB)
     (bindir / "claude").chmod(0o755)
     # a stub tmux: a window launch never reaches a real tmux server (and its real claude)
@@ -883,3 +892,18 @@ def test_a_window_worker_whose_tree_path_holds_a_space_is_still_a_worker(tmp_pat
     rows = [{"sessionId": "s-w", "name": "w", "kind": "interactive", "pid": "-", "cwd": str(tree)}]
     project, env = setup(tmp_path, rows)
     assert run(project, env, "is-worker", "w").returncode == 0
+
+
+def test_a_start_over_the_concurrency_cap_is_refused_and_starts_nothing(tmp_path):
+    """Red arm: 14 usage-limit stops in 11 sessions within 13 minutes."""
+    busy = [{"id": f"b{i}", "name": f"S{i}", "status": "busy", "pid": 1} for i in range(10)]
+    project, env = setup(tmp_path, rows=busy)
+    proc = run(project, env, "AC-12-impl", "--bg", GO)
+    assert proc.returncode == 3
+    assert "we-worker: refused, no worker started: 10 sessions busy (limit 10" in proc.stderr
+    assert "active account 5h at 10 % (limit 80 %" in proc.stderr
+    assert not started(tmp_path)
+    (project / ".weside" / "config.json").write_text(
+        json.dumps({"workers": {"max_busy_sessions": 11}})
+    )
+    assert run(project, env, "AC-12-impl", "--bg", GO).returncode == 0

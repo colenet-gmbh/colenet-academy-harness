@@ -356,8 +356,10 @@ def test_the_master_card_carries_the_effort_rule_and_the_epic_update():
         "give a story to one worker (the default)",
         "two to\n  four workers only for independent chunks",
         "Multi-agent work costs ~15\u00d7 the tokens.",
-        "After every merged story: `/we:epic` update (Updates Log, ticket mirror) before you pull"
-        " the next one.",
+        "After every merged story: `/we:epic` update (Updates Log, ticket mirror), then `/compact`,"
+        " before\n  you pull the next one; past 250 k context, `/compact` at your next natural"
+        " boundary too.",
+        "Parked, you end your process instead of idling with your context",
     ):
         assert phrase in card, phrase
 

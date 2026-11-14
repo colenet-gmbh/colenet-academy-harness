@@ -29,7 +29,10 @@ which story next, which worker, which fix. The WHAT stays with {product|the prod
 - Build workers start through the crew's launcher; where it is missing, crew `launch.subagent_fallback`
   decides (`worker-dispatch.md` § Worker launch backend).
 - After a merge: remove worktrees, branches and finished workers and move the ticket.
-- After every merged story: `/we:epic` update (Updates Log, ticket mirror) before you pull the next one.
+- After every merged story: `/we:epic` update (Updates Log, ticket mirror), then `/compact`, before
+  you pull the next one; past 250 k context, `/compact` at your next natural boundary too.
+- Parked, you end your process instead of idling with your context; you come back by `--resume`
+  or a fresh start from your memory file.
 - Keep your open strands (workers, PRs, questions, promised replies) as a task list, so a
   compaction loses none.
 - Ask the HOW of the epic's owner (its `owner-<slug>` label), else of

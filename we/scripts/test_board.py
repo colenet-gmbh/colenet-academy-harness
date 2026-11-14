@@ -1191,6 +1191,41 @@ class TestMergeQuestion:
         item = board_of(crewless)["owner_queue"][-1]
         assert (item["cause"], item["pr_url"], item["one_way"]) == ("merge-go", PR_URL, "money")
 
+    @pytest.mark.usefixtures("merge_gh")
+    def test_a_merge_go_carries_the_required_checks_of_its_pr(self, crewless):
+        """Red arm: a merge-go named one review skip while CI Summary was red and the backend
+        tests cancelled; the merge left main red for hours."""
+        data = json.loads((crewless / "gh.json").read_text())
+        data[PR_URL] = {
+            **data[PR_URL],
+            "checks": [
+                {"name": "lint", "bucket": "pass"},
+                {"name": "CI Summary", "bucket": "fail"},
+                {"name": "Backend (Test)", "bucket": "cancel"},
+                {"name": "Codex Review", "bucket": "pending"},
+            ],
+            "checks_exit": 1,
+        }
+        (crewless / "gh.json").write_text(json.dumps(data), encoding="utf-8")
+        answer_with(crewless, CLEAR)
+        assert go(crewless, *self.merge_argv("--pr", "o/r#5")) == 0
+        item = board_of(crewless)["owner_queue"][-1]
+        assert item["checks"] == (
+            "required checks: 1 green, 1 red (CI Summary), 1 cancelled (Backend (Test)),"
+            " 1 pending (Codex Review)"
+        )
+        assert item["ask"].endswith("\n" + item["checks"])
+        read = jsonl(crewless / "reader-calls.jsonl")[-1]
+        assert item["checks"] in json.dumps(read)
+
+    @pytest.mark.usefixtures("merge_gh")
+    def test_a_merge_go_on_a_pr_without_required_checks_says_so(self, crewless):
+        answer_with(crewless, CLEAR)
+        assert go(crewless, *self.merge_argv("--pr", "o/r#5")) == 0
+        assert board_of(crewless)["owner_queue"][-1]["checks"] == (
+            "required checks: none reported by gh"
+        )
+
     def test_one_way_without_merge_go_is_refused(self, crewless, capsys):
         assert go(crewless, *ask_argv(), "--one-way", "money") == 1
         assert "--one-way belongs to a merge-go question" in capsys.readouterr().err
@@ -3514,15 +3549,32 @@ def test_ask_owner_by_name_and_an_unknown_owner_is_refused(crewed, capsys):
     assert "--owner 'nobody' is no crew member" in capsys.readouterr().err
 
 
-def test_a_second_question_on_an_open_key_warns_and_replace_takes_the_first_off(crewless, capsys):
+def test_a_second_question_with_the_same_cause_on_an_open_key_is_refused_before_the_reader(
+    crewless, capsys
+):
+    """Red arm: the same question twice in 3 minutes; a warning let the second one through."""
     answer_with(crewless, CLEAR)
     assert go(crewless, *ask_argv()) == 0
     first = capsys.readouterr().out.strip().split()[-1]
+    before = (crewless / "board.json").read_bytes()
+    reads = (crewless / "reader-calls.jsonl").read_bytes()
+    assert go(crewless, *ask_argv()) == 1
+    err = capsys.readouterr().err
+    assert f"refused: {first} on PROJ-12 (cause prod) is still open" in err
+    assert f"--replace {first}" in err
+    assert (crewless / "board.json").read_bytes() == before
+    assert (crewless / "reader-calls.jsonl").read_bytes() == reads
+
+
+def test_another_cause_on_an_open_key_warns_and_replace_takes_the_first_off(crewless, capsys):
+    answer_with(crewless, CLEAR)
     assert go(crewless, *ask_argv()) == 0
+    first = capsys.readouterr().out.strip().split()[-1]
+    assert go(crewless, *ask_argv(**{"--cause": "plan"})) == 0
     out = capsys.readouterr()
     assert f"warning: {first} on PROJ-12 is still open" in out.err
     second = out.out.strip().split()[-1]
-    assert go(crewless, *ask_argv(), "--replace", second) == 0
+    assert go(crewless, *ask_argv(**{"--cause": "plan"}), "--replace", second) == 0
     out = capsys.readouterr()
     queue_ids = [q["id"] for q in board_of(crewless)["owner_queue"]]
     assert second not in queue_ids and first in queue_ids

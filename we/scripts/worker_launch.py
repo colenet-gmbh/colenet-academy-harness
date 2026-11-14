@@ -40,7 +40,19 @@ Usage:
   worker_launch.py backend [--repo <dir>]          prints `subagent` or the template; 2 = invalid
   worker_launch.py check --name <n> (--brief-file <f|-> | --no-brief) [--repo <dir>] [--prefix <p>]
                                                    prints the story key; 2 with the refusal lines
-                                                   (and the template) on stderr
+                                                   (and the template) on stderr; a living session
+                                                   of the same key is named on stderr as the
+                                                   SendMessage target of a follow-up
+  worker_launch.py capacity [--repo <dir>] [--prefix <p>]
+                                                   exit 0: a worker may start; 3: refused while
+                                                   the busy sessions reach
+                                                   workers.max_busy_sessions (10) or the active
+                                                   account's 5h window (`cswap status --json`) is
+                                                   above workers.max_active_5h_percent (80), both
+                                                   from .weside/config.json, both values named;
+                                                   an unreadable value skips its check (stderr;
+                                                   silent without cswap on PATH);
+                                                   2: a limit that is no number
   worker_launch.py settings --repo <dir> --key <K> --out <file> [--session-start <command>]
                                                    writes the worker's `--settings` file: the
                                                    granted rights of that repo as permissions.allow,
@@ -231,6 +243,80 @@ def backend(repo: Path) -> str:
 
 
 AGENTS_TIMEOUT_S = 30
+CAP_DEFAULTS = {"max_busy_sessions": 10, "max_active_5h_percent": 80}
+CSWAP_TIMEOUT_S = 20
+
+
+def cap_limits(repo: Path) -> dict[str, float]:
+    """`workers.max_busy_sessions` and `workers.max_active_5h_percent` of the repo's
+    `.weside/config.json`, each defaulting to `CAP_DEFAULTS`; a value that is no number refuses."""
+    top = Path(_git(repo, "rev-parse", "--show-toplevel") or repo)
+    path = top / ".weside" / "config.json"
+    try:
+        config = json.loads(path.read_text())
+    except FileNotFoundError:
+        config = {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LaunchError(f"{path}: unreadable ({exc})", 2) from exc
+    block = config.get("workers") if isinstance(config, dict) else None
+    block = block if isinstance(block, dict) else {}
+    limits = {}
+    for key, default in CAP_DEFAULTS.items():
+        value = block.get(key, default)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise LaunchError(f"workers.{key}: needs a number, not {value!r}", 2)
+        limits[key] = value
+    return limits
+
+
+def five_hour_percent() -> float | None:
+    """The active account's 5h window in percent (`cswap status --json`), None when unreadable."""
+    try:
+        out = subprocess.run(
+            ["cswap", "status", "--json"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=CSWAP_TIMEOUT_S,
+        )
+        pct = json.loads(out.stdout)["active"]["usage"]["fiveHour"]["pct"]
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+        return None
+    return float(pct) if isinstance(pct, (int, float)) and not isinstance(pct, bool) else None
+
+
+def capacity(repo: Path, prefix: str) -> None:
+    """Refuse a new worker (`LaunchError`, exit 3) while the busy sessions on this machine
+    (`claude agents --json`, `status` busy) reach `workers.max_busy_sessions` or the active
+    account's 5h window is above `workers.max_active_5h_percent`; the refusal names both measured
+    values. A value that cannot be read skips its check with one stderr warning; without `cswap` on
+    PATH (it is optional) the 5h check is skipped silently."""
+    limits = cap_limits(repo)
+    max_busy, max_pct = limits["max_busy_sessions"], limits["max_active_5h_percent"]
+    try:
+        busy: int | None = sum(1 for r in sessions() if r.get("status") == "busy")
+    except LaunchError as exc:
+        busy = None
+        print(
+            f"{prefix}: warning: busy sessions unreadable ({exc}); that check is skipped",
+            file=sys.stderr,
+        )
+    pct = five_hour_percent() if shutil.which("cswap") else None
+    if pct is None and shutil.which("cswap"):
+        print(
+            f"{prefix}: warning: the active account's 5h window is unreadable"
+            " (cswap status --json failed); that check is skipped",
+            file=sys.stderr,
+        )
+    if (busy is not None and busy >= max_busy) or (pct is not None and pct > max_pct):
+        shown_busy = "?" if busy is None else str(busy)
+        shown_pct = "?" if pct is None else f"{pct:g}"
+        raise LaunchError(
+            f"refused, no worker started: {shown_busy} sessions busy (limit {max_busy:g},"
+            f" workers.max_busy_sessions), active account 5h at {shown_pct} % (limit {max_pct:g} %,"
+            " workers.max_active_5h_percent); try again later",
+            3,
+        )
 
 
 def sessions() -> list[dict]:
@@ -657,6 +743,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--repo", type=Path, default=Path.cwd())
     p.add_argument("--prefix", default="worker_launch")
+    p = sub.add_parser("capacity")
+    p.add_argument("--repo", type=Path, default=Path.cwd())
+    p.add_argument("--prefix", default="worker_launch")
     p = sub.add_parser("settings")
     p.add_argument("--repo", type=Path, required=True)
     p.add_argument("--key", required=True)
@@ -677,17 +766,43 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def same_key_hint(name: str, key: str, prefix: str) -> None:
+    """One stderr hint per living session of the same story key (its name is the key or starts
+    with `<key>-`) other than `name`: a follow-up goes to it by `SendMessage`. Best effort: when
+    `claude agents --json` fails, nothing is printed."""
+    try:
+        rows = sessions()
+    except LaunchError:
+        return
+    for row in rows:
+        other = str(row.get("name") or "")
+        if other == name or not (other == key or other.startswith(f"{key}-")):
+            continue
+        if not _pid_lives(row.get("pid", "-")):
+            continue
+        print(
+            f"{prefix}: hint: {other} ({row.get('status') or 'running'}) works on {key} and"
+            f" lives: a follow-up goes to it by SendMessage, not to a new worker {name}",
+            file=sys.stderr,
+        )
+
+
 def _check_verb(args: argparse.Namespace) -> int:
-    """`check`: the key on stdout, or exit 2 with the refusal under `--prefix`."""
+    """`check`: the key on stdout, or exit 2 with the refusal under `--prefix`; a living
+    worker of the same key is named as the follow-up's target (`same_key_hint`)."""
     try:
         if args.no_brief:
             key_re = key_pattern(args.repo)
-            print(check_name(args.name, key_re, _example_key(args.repo, key_re)))
-            return 0
-        if not args.brief_file:
-            raise LaunchError("check needs --brief-file <f|-> or --no-brief", 2)
-        brief = sys.stdin.read() if args.brief_file == "-" else Path(args.brief_file).read_text()
-        print(check(args.name, brief, args.repo, args.prefix))
+            key = check_name(args.name, key_re, _example_key(args.repo, key_re))
+        else:
+            if not args.brief_file:
+                raise LaunchError("check needs --brief-file <f|-> or --no-brief", 2)
+            text = (
+                sys.stdin.read() if args.brief_file == "-" else Path(args.brief_file).read_text()
+            )
+            key = check(args.name, text, args.repo, args.prefix)
+        same_key_hint(args.name, key, args.prefix)
+        print(key)
     except OSError as exc:
         print(f"{args.prefix}: brief: {exc}", file=sys.stderr)
         return 2
@@ -701,6 +816,13 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.cmd == "check":
         return _check_verb(args)
+    if args.cmd == "capacity":
+        try:
+            capacity(args.repo, args.prefix)
+        except LaunchError as exc:
+            print(f"{args.prefix}: {exc}", file=sys.stderr)
+            return exc.code
+        return 0
     try:
         if args.cmd == "backend":
             print(backend(args.repo))

@@ -26,7 +26,7 @@ Scratch files go to the session's scratchpad directory (`$S`).
 Run `LV plan ready <KEY>` (`--plan <path>` for a plan outside `docs/plans/<KEY>-story.md`; the panel stays
 bound to that file) or `LV plan t2 <PR>`. It writes a fresh verdict file bound to today's plan blob or
 PR head and prints the dispatch entries as JSON (`id`, `lens`, `agent`, `questions`, `registry`, and `plan`
-plus `plan_blob`, or `pr` plus `head`). Exit 1 (no plan file here nor on `origin/main`, the Ready gate refuses the plan, head unknown) or 2 (crew file, verdict
+plus `plan_blob`, or `pr` plus `head`). Exit 1 (no plan file here nor on `origin/main`, the Ready gate refuses the plan, a Ready panel on the same blob still missing lenses: finish that round, head unknown) or 2 (crew file, verdict
 directory): relay the line and stop.
 
 An entry whose `agent` is not one this plugin ships (`we:lens-product`, `we:lens-architecture`,
@@ -46,9 +46,9 @@ through a shell heredoc or `echo`: the answer is foreign text), then:
 LV write <id> <lens> < "$S/lens-<id>-<lens>.txt"
 ```
 
-- Exit 0 prints `lens <lens>: green|red`.
-- `no parseable answer`: spawn that agent once more with the same entry; a second miss leaves the lens
-  missing (red). Say so.
+- Exit 0 prints `lens <lens>: green|red`; the write that completes the panel prints the `check` lines after it (§ 5).
+- `no parseable answer`: spawn that agent once more with the same entry; a second miss:
+  `LV write <id> <lens> --failed "no parseable answer"` (red). Say so.
 - `key '<k>' refused` or another refusal of the answer's shape: spawn that agent once more with the entry
   plus the refusal line; a second refusal: `LV write <id> <lens> --failed "<the refusal line>"`.
 - On T2, run the red arms (§ 4) before this step.
