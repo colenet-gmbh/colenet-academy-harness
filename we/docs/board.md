@@ -270,6 +270,7 @@ and its status, the read before any session repeats it or writes the same answer
 | `answer` | `accept`, `deny`, `discuss`, `info`, `update` or `withdraw` for a question; `read` for a news item |
 | `ts` | when it was pressed, ISO UTC |
 | `session` | the name of the session the line was written in, as `claude agents` lists it; `null` when the live column does not know it |
+| `ask`, `recommendation` | the open question's ask and recommendation, verbatim, on a line `board.py` wrote; a pane line takes them from the board item when it is delivered |
 | `via`, `quote` | only on a line `board.py answer` wrote (`chat`, and the owner's own words when given) or `board.py signals` read from a ticket (`ticket`, and the reply; § Several humans) |
 
 The file only grows (`answer.py` and `board.py` append with `O_APPEND`, nothing rewrites it);
@@ -303,7 +304,7 @@ minutes. Per line it writes one row per recipient to
 
 | Recipient (`role`) | When | Carrier | Delivered when |
 |---|---|---|---|
-| `coordinator` (the orchestrator) | always, unless the line came from its own chat (`via: chat`, `session` = the orchestrator) | a prompt as if typed: `<id>: proposal accepted` (an Accept on a one-way `merge-go` with its PR, **Yes, I'll do it**: `<id>: the owner approves or merges <pr_url> by hand — do not merge or arm it; the question stays open until the PR is merged`; **Taken** on a task: `<id>: taken — the owner does this task; do not do it yourself`), `<id>: proposal denied`, `<id>: let's talk about it`, `<id>: I need more information` or `<id>: please check whether this question is still current and correctly worded (goal still active? needs an update?)`, then where it was written (`(answered from the board pane in <session>)`, `(answered in the chat of <session>)` or `(answered on ticket <KEY> (<human>))` after a space: transparency, no check), the owner's words on a line of their own when the line has a `quote` | the session stored the prompt as a user row |
+| `coordinator` (the orchestrator) | always, unless the line came from its own chat (`via: chat`, `session` = the orchestrator) | a prompt as if typed: `<id>: proposal accepted` (an Accept on a one-way `merge-go` with its PR, **Yes, I'll do it**: `<id>: the owner approves or merges <pr_url> by hand — do not merge or arm it; the question stays open until the PR is merged`; **Taken** on a task: `<id>: taken — the owner does this task; do not do it yourself`), `<id>: proposal denied`, `<id>: let's talk about it`, `<id>: I need more information` or `<id>: please check whether this question is still current and correctly worded (goal still active? needs an update?)`, then where it was written (`(answered from the board pane in <session>)`, `(answered in the chat of <session>)` or `(answered on ticket <KEY> (<human>))` after a space: transparency, no check), then on lines of their own the question (`The question: "<ask>"`), its recommendation (`The recommendation accepted: "…"`, `denied` on a Deny) and the owner's words when the line has a `quote` | the session stored the prompt as a user row |
 | `asker` (`owner_queue[].session`) | unless the line was written in the asker's own session; a question no longer on the board has none | a message to that session: the same text, for **Update** `check whether <id> is still current and well worded; re-ask it with a new id or withdraw it` | the engine queued it there |
 | `owner` (`owner_queue[].owner`) | unless it is the coordinator, the asker or the session that wrote the line | a message to that session: the coordinator's text plus `(copy for the owner of this subject)`; a refusal is a ledger row only, no routing line | the engine queued it there |
 | `route` (the orchestrator) | the asker was not reached | a prompt: `<id>: the owner's answer (<kind>) did not reach <asker> (<reason>); wake that session or route the answer` | as `coordinator` |
@@ -570,13 +571,14 @@ adds. Every rule runs before any write; a refusal writes no row, calls no adapte
 
 | Verb | Rule as the script checks it | Refusal |
 |---|---|---|
-| `select <KEY> [--plan PATH]` | `ENTRY_RULES["selected"]`, in order: the Ready gate's story checks on the checkout's plan (default `docs/plans/<KEY>-story.md` under `git rev-parse --show-toplevel`), the plan-only tier, a green `ready-<KEY>` lens verdict bound to the current plan blob (green with carried warnings counts, `lens_verdict.py` § Carried warnings) | `board.py select <KEY>: refused (ready gate\|tier\|lenses)`, then the group's lines; a later group does not run |
+| `select <KEY> [--plan PATH]` | `ENTRY_RULES["selected"]`, in order: the plan on `risk.rules_from` after one fetch (default path `docs/plans/<KEY>-story.md` under `git rev-parse --show-toplevel`), the Ready gate's story checks on that blob, the plan-only tier, a green `ready-<KEY>` lens verdict bound to that blob (green with carried warnings counts, `lens_verdict.py` § Carried warnings); the checkout's copy of the plan is never read, so a stale or missing one selects what main carries | `board.py select <KEY>: refused (plan on main\|ready gate\|tier\|lenses)`, then the group's lines; a later group does not run |
 | `move <KEY> on_hold --reopen T` | a non-blank reopen trigger, kept in the row as `reopen` | `board.py move <KEY> <state>: refused: <reason>`, one line per failure |
 | `move <KEY> backlog --epic EPIC` | exactly one `*-epic.md` under `docs/plans/` names `EPIC` (`ticket:`, `epic:` or `linked_epics:`), and its `status:` starts `approved` | as above |
 | `move <KEY> selected` | always refused: `use board.py select` | as above |
 | `move <KEY> in_progress` | the key's last row in the transitions log is `selected`; from `in_review` or `in_test` only with `--reopen "<reason>"` (a revert of the merged PR, a failed test), kept as `reopen` | as above |
 | `move <KEY> in_test` | the crew maps an In Test status (`board.states.in_test`, default null: no In Test step) and the key is `in_review`; owned per § Several humans | as above; `the crew maps no in_test status` without the mapping |
 | `move <KEY> in_review --pr REF…` | every `REF` (a URL, `<owner>/<repo>#<n>`, or a bare number) is `MERGED` by `gh pr view` and carries `<KEY>` as a whole token in its head branch or title; a bare number is refused as ambiguous when the plan's phases name a `**Repo:**` other than the checkout's `origin` | as above |
+| `move <KEY> done --already-fixed REF [--comment-file FILE]` | from any state but `done`: `REF` (`<owner>/<repo>#<n>` or a URL) is `MERGED` by `gh pr view`, the PR that fixed the story before it was built; the row says `via: already-fixed` and `pr`, the comment names the PR and adds the file's text | as above |
 | `move <KEY> done --comment-file FILE` | the key's last row is `in_review` or `in_test` (`last move is <state>, not in_review`; with an owner of `in_test` only `in_test`, § Several humans), and the file holds a line matching `^Not proven:\s*\S`; the row says `via: comment` and the file's text is the comment. A receipts verdict reaches `done` only through `accept.py` (§ Acceptance), which calls `move_done` in process with the entry; the CLI has no `--verdict` | as above |
 
 `select` has no option that waits for, asks
@@ -603,12 +605,13 @@ verdict file's round was derived from logged runs (`lens_verdict.py` § Derived 
 `<N> (derived: …)`, and in a later round `<N> (base: round <M> derived: …)`, also printed as
 `round: …`); `from` is
 the key's previous row's `to`, `by` the calling session's name, `ticket` the transport (`none`,
-`carried`).
+or `pending` while the session still carries the `carry:` ops and the read-back).
 
 **Ticket.** `board.ticketing` picks the transport (`ticket_adapter.py`). `none`: nothing to carry.
 `jira`: the script holds no credential; its last stdout line is `carry: [{"op": "transition", "key":
 <KEY>, "status": <board.states.<state>>}]`, which the session executes with its ticketing tool and
-verifies by re-reading the status. A `done` move adds a `{"op": "comment", "key": <KEY>, "text":
+verifies by re-reading the status; stderr says so and names the fallback when no ticketing tool
+answers (tell the starter which keys stay unmoved, never report the move as done). A `done` move adds a `{"op": "comment", "key": <KEY>, "text":
 <the acceptance comment>}` after its transition. The row is written before the line, so an
 unexecuted `carry:` shows in `check`.
 

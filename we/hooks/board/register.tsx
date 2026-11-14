@@ -373,7 +373,14 @@ async function deliverTick($: $, file: string) {
       await appendRows($, c.ledgerPath, [{ epoch: isoOf(await $.clock.now()) }])
       return
     }
-    const lines = answerLines((await readText($, c.answersPath)) ?? '')
+    const lines = answerLines((await readText($, c.answersPath)) ?? '').map(l => {
+      const q = c.board.queue.find(x => x.id === l.id)
+      return {
+        ...l,
+        ...(!l.ask && q?.ask ? { ask: q.ask } : {}),
+        ...(!l.recommendation && q?.recommendation ? { recommendation: q.recommendation } : {}),
+      }
+    })
     const askerOf = (id: string) => c.board.queue.find(q => q.id === id)?.session ?? undefined
     const ownerOf = (id: string) => c.board.queue.find(q => q.id === id)?.owner ?? undefined
     const acceptOf = (id: string) => {

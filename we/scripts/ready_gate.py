@@ -781,10 +781,14 @@ def _crew_for(plan: Path) -> tuple[dict[str, Any], Path]:
     return data, path.parent.parent
 
 
-def story_failures(plan: Path) -> tuple[list[str], list[str]]:
+def story_failures(plan: Path, text: str | None = None) -> tuple[list[str], list[str]]:
     """(failures, warnings) of checks 1-9 on a story plan, as the CLI prints them; the tier is the
-    caller's. ``OSError`` on the plan propagates; a ``CrewError`` is one failure."""
-    text = plan.read_text(encoding="utf-8").replace("\r\n", "\n")
+    caller's. ``text`` is the plan's content when it does not come from ``plan`` (``board.py
+    select`` passes the blob on main). ``OSError`` on the plan propagates; a ``CrewError`` is one
+    failure."""
+    if text is None:
+        text = plan.read_text(encoding="utf-8")
+    text = text.replace("\r\n", "\n")
     try:
         crew_data, root = _crew_for(plan)
     except crew.CrewError as exc:

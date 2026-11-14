@@ -17,8 +17,9 @@ const boardOf = (extra: Record<string, unknown> = {}) =>
     updated: '2026-11-03T15:00:00Z',
     updated_by: 'coord',
     owner_queue: [
-      { id: 'Q1', session: 'asker', key: 'PROJ-40', ask: 'Ship it?', since: '2026-11-03', recommendation: 'yes' },
-      { id: 'Q2', session: 'other', key: 'PROJ-41', ask: 'Which one?', since: '2026-11-03', recommendation: '' },
+      // no ask or recommendation: the texts below stay one line; 'the answer quotes …' adds them
+      { id: 'Q1', session: 'asker', key: 'PROJ-40', since: '2026-11-03' },
+      { id: 'Q2', session: 'other', key: 'PROJ-41', since: '2026-11-03' },
     ],
     sessions: [{ name: 'coord', role: 'master' }],
     ...extra,
@@ -195,11 +196,11 @@ test('a coordinator prompt that is never stored is submitted once more after the
   await $.command.run({ command: 'board', args: '', origin: { kind: 'composer' } } as never)
   await clock.settle()
   const ui = await pane($)
-  await ui.press({ key: 'accept-Q1' })
+  await ui.press({ key: 'deny-Q1' })
   await clock.advance(3_000)
   await turn($, 't1')
   await clock.advance(3_000)
-  expect(h.submitted).toEqual(['Q1: proposal accepted (answered from the board pane in coord)', 'Q1: proposal accepted (answered from the board pane in coord)'])
+  expect(h.submitted).toEqual(['Q1: proposal denied (answered from the board pane in coord)', 'Q1: proposal denied (answered from the board pane in coord)'])
   await ui.unmount()
 })
 
@@ -441,6 +442,21 @@ test('a chat answer written back: from the asker\'s chat to the coordinator, fro
   expect(h.rows('Q2').map(r => r.role)).toEqual(['asker'])
 })
 
+test('the answer quotes its question and the recommendation it accepts or denies, from the board or the line', async ($, on) => {
+  const board = boardOf({
+    owner_queue: [
+      { id: 'Q1', session: 'asker', key: 'PROJ-40', ask: 'Ship it?', since: '2026-11-03', recommendation: 'Ship on Monday' },
+      { id: 'Q2', session: 'other', key: 'PROJ-41', since: '2026-11-03' },
+    ],
+  })
+  const { clock, h } = await coordinator($, on, { board })
+  await h.click({ id: 'Q1', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
+  await h.click({ id: 'Q2', answer: 'deny', ts: iso(T0 + 1_500), session: 'coord', via: 'chat', ask: 'Which one?', recommendation: 'The first' })
+  await clock.advance(3_000)
+  expect(h.submitted).toEqual(['Q1: proposal accepted (answered from the board pane in foxy)\nThe question: "Ship it?"\nThe recommendation accepted: "Ship on Monday"'])
+  expect(h.sent).toContainEqual({ to: 'other', text: 'Q2: proposal denied (answered in the chat of coord)\nThe question: "Which one?"\nThe recommendation denied: "The first"' })
+})
+
 test('an Accept or Deny line on a closed id sends nothing', async ($, on) => {
   const { clock, h } = await coordinator($, on)
   await h.click({ id: 'Q1', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
@@ -470,7 +486,7 @@ test('a pane in any other session appends the line and delivers nothing', async 
   await $.command.run({ command: 'board', args: '', origin: { kind: 'composer' } } as never)
   await clock.settle()
   const ui = await pane($)
-  await ui.press({ key: 'accept-Q1' })
+  await ui.press({ key: 'deny-Q1' })
   await clock.advance(9_000)
   expect(h.files.get(h.answersPath)).toContain('"session":"foxy"')
   expect([h.submitted, h.sent, h.ledger()]).toEqual([[], [], [{ epoch: '2026-11-03T15:00:00.000Z' }]])
@@ -587,8 +603,8 @@ test('a crew whose board has no updated_by: its coordinator from crew.json deliv
   const { clock, h } = await crewSession($, on, 'Ada', { crew: acmeCrew(), board: acmeBoard() })
   await h.click({ id: 'Q7', answer: 'accept', ts: iso(T0 + 1_000), session: 'Ada' })
   await clock.advance(3_000)
-  expect(h.submitted).toEqual(['Q7: proposal accepted (answered from the board pane in Ada)'])
-  expect(h.sent).toEqual([{ to: 'Tess', text: 'Q7: proposal accepted (answered from the board pane in Ada)' }])
+  expect(h.submitted).toEqual(['Q7: proposal accepted (answered from the board pane in Ada)\nThe question: "Ship it?"\nThe recommendation accepted: "yes"'])
+  expect(h.sent).toEqual([{ to: 'Tess', text: 'Q7: proposal accepted (answered from the board pane in Ada)\nThe question: "Ship it?"\nThe recommendation accepted: "yes"' }])
   expect(h.rows('Q7').map(r => [r.role, r.to, r.delivered])).toEqual([
     ['asker', 'Tess', true],
     ['coordinator', 'Ada', true],
@@ -684,7 +700,7 @@ test('the owner of a question gets a copy of the answer; a failed copy is a row,
   await clock.advance(3_000)
   expect(h.sent.map(s => s.to).sort()).toEqual(['Vic', 'asker'])
   expect(h.sent.find(s => s.to === 'Vic')?.text).toBe(
-    'Q1: proposal accepted (answered from the board pane in foxy)\n(copy for the owner of this subject)',
+    'Q1: proposal accepted (answered from the board pane in foxy)\nThe question: "Ship it?"\nThe recommendation accepted: "yes"\n(copy for the owner of this subject)',
   )
   const rows = h.rows('Q1')
   expect(rows.map(r => [r.role, r.delivered]).sort()).toEqual([
@@ -692,7 +708,7 @@ test('the owner of a question gets a copy of the answer; a failed copy is a row,
     ['coordinator', true],
     ['owner', false],
   ])
-  expect(h.submitted).toEqual(['Q1: proposal accepted (answered from the board pane in foxy)'])
+  expect(h.submitted).toEqual(['Q1: proposal accepted (answered from the board pane in foxy)\nThe question: "Ship it?"\nThe recommendation accepted: "yes"'])
 })
 
 test('an owner who is the asker or the writer gets no second copy', async ($, on) => {
@@ -722,7 +738,7 @@ test('a one-way "Yes, I\'ll do it" tells coordinator and asker the owner merges 
   const { clock, h } = await coordinator($, on, { board })
   await h.click({ id: 'Q1', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
   await clock.advance(3_000)
-  const text = `Q1: the owner approves or merges ${pr} by hand — do not merge or arm it; the question stays open until the PR is merged (answered from the board pane in foxy)`
+  const text = `Q1: the owner approves or merges ${pr} by hand — do not merge or arm it; the question stays open until the PR is merged (answered from the board pane in foxy)\nThe question: "Merge it?"\nThe recommendation accepted: "yes"`
   expect(h.submitted).toEqual([text])
   expect(h.sent).toEqual([{ to: 'asker', text }])
   expect([...h.submitted, ...h.sent.map(s => s.text)].some(t => t.includes('proposal accepted'))).toBe(false)
@@ -736,5 +752,5 @@ test('Taken on a task says the owner does it; an accept_hand wording leaves the 
   const { clock, h } = await coordinator($, on, { board })
   await h.click({ id: 'Q1', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
   await clock.advance(3_000)
-  expect(h.submitted).toEqual(['Q1: taken — the owner does this task; do not do it yourself (answered from the board pane in foxy)'])
+  expect(h.submitted).toEqual(['Q1: taken — the owner does this task; do not do it yourself (answered from the board pane in foxy)\nThe question: "Rotate the key"\nThe recommendation accepted: "today"'])
 })

@@ -17,7 +17,8 @@ file's `board.ticketing`:
 - `jira` → `SessionTransport`: the script holds no credential; it returns the ops, `board.py`
   prints them as the last stdout line `carry: <JSON list>`, and the session executes them with
   its ticketing tool (a transition first, a comment second, a label third) and re-reads the
-  status. The transitions row says `ticket: carried`.
+  status. The transitions row says `ticket: pending`: the ticket moves only once the session
+  carried the ops and read the status back.
 
 `FakeAdapter` is for tests only and is injected in code (`board.main(argv, adapter=…)`); no
 command-line flag selects it. A REST transport that moves the ticket itself and re-reads its
@@ -109,7 +110,7 @@ class NoneAdapter(TicketAdapter):
 
 
 class SessionTransport(TicketAdapter):
-    name = "carried"
+    name = "pending"
 
     def move(self, key: str, status_name: str) -> list[CarryOp]:
         return [CarryOp("transition", key, status_name)]
