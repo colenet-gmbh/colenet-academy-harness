@@ -938,7 +938,7 @@ export const registerBoard = (on: On, options: PluginOptions) => {
       ])
     }
 
-    const groups = groupSessions(sessions)
+    const groups = groupSessions(sessions, s => verdictOf(s).start.level === 'bad')
     const working = groups.filter(g => !isResting(g))
     const resting = groups.filter(isResting)
     const restCount = resting.reduce((n, g) => n + (g.head ? 1 : 0) + g.workers.length, 0)

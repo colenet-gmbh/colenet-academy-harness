@@ -44,6 +44,26 @@ test('masters first, wait-owner on top, then priority with null last; workers un
   expect(groups[4]?.workers.map(w => w.name)).toEqual(['Kiska'])
 })
 
+test('master frames sort by lamp: waits, runs, red start mode, rests and unknown; priority within a colour', async () => {
+  const s = (name: string, extra: Partial<BoardSession>): BoardSession => ({ name, role: 'master', ...extra })
+  const red = new Set(['redRuns', 'redWaits', 'redRests'])
+  const groups = groupSessions([
+    s('rests', { state: 'idle', priority: 1 }),
+    s('unknown', { priority: 2 }),
+    s('redRests', { state: 'idle', priority: 3 }),
+    s('redRuns', { state: 'build', priority: 1 }),
+    s('runsLow', { state: 'ci', priority: 5 }),
+    s('runsHigh', { state: 'build', priority: 2 }),
+    s('redWaits', { state: 'wait-owner', priority: 4 }),
+    s('waits', { state: 'wait-owner', priority: 1 }),
+    s('w1', { role: 'worker', parent: 'runsHigh', state: 'idle' }),
+    s('w2', { role: 'worker', parent: 'runsHigh', state: 'build' }),
+  ], x => red.has(x.name))
+  expect(groups.map(g => g.head?.name)).toEqual(['waits', 'redWaits', 'runsHigh', 'runsLow', 'redRuns', 'redRests', 'rests', 'unknown'])
+  // The workers inside a frame keep their order.
+  expect(groups[2]?.workers.map(w => w.name)).toEqual(['w1', 'w2'])
+})
+
 test('the file parses with missing fields left out', async () => {
   const board = parseBoard('{"updated":"2026-10-30T18:10:00+01:00","sessions":[{"name":"x"}]}')
   expect(board.queue).toEqual([])
