@@ -71,7 +71,9 @@ unread `news` in one frame (§ News) and, when set, the older `notes` folded to 
 master with its workers inside, each worker on one line cut to the pane. A master whose group neither
 runs nor waits (`idle` or `done`, workers too) and a headless worker group at rest fold into the
 last line, **+ N idle/other** (with `(k stale)` when k of them are stale), which opens and closes
-them; every session running but not on the board is named in a warning line under it. The frame's border takes the master's lamp colour, red when its start mode is red. The pane
+them; every session running but not on the board is named in a warning line under it. The frame's border takes the master's lamp colour, red when its start mode is red. The frames
+sort by that colour: yellow (waits) first, then green (runs), red, and grey (rests or unknown); a red
+frame that waits counts as yellow, and within one colour `priority` orders them. The pane
 breaks a header line between its parts, never inside a frame, so it stays readable at 60 columns.
 
 ## News

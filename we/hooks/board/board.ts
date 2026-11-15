@@ -239,12 +239,22 @@ export const ageDays = (since: string | undefined, now: number): number | undefi
 export const sortQueue = (queue: readonly BoardQueueItem[]): BoardQueueItem[] =>
   [...queue].sort((a, b) => (a.since ?? '9999').localeCompare(b.since ?? '9999'))
 
-const bySession = (a: BoardSession, b: BoardSession) => {
-  const waits = Number(b.state === 'wait-owner') - Number(a.state === 'wait-owner')
-  if (waits) return waits
+const byPriority = (a: BoardSession, b: BoardSession) => {
   const pa = typeof a.priority === 'number' ? a.priority : Infinity
   const pb = typeof b.priority === 'number' ? b.priority : Infinity
   return pa === pb ? 0 : pa < pb ? -1 : 1
+}
+
+const bySession = (a: BoardSession, b: BoardSession) =>
+  Number(b.state === 'wait-owner') - Number(a.state === 'wait-owner') || byPriority(a, b)
+
+// A master frame's colour rank (docs/board.md § Layout): waits, runs, red start mode, then rests and unknown.
+// A frame that waits counts as yellow even with a red start mode.
+const frameRank = (s: BoardSession, isRed: (s: BoardSession) => boolean) => {
+  const lamp = lampOf(s.state)
+  if (lamp === 'waits') return 0
+  if (isRed(s)) return 2
+  return lamp === 'runs' ? 1 : 3
 }
 
 // A master by role, or by being named as some session's parent (docs/board.md).
@@ -253,11 +263,14 @@ export const isMasterOf = (session: BoardSession, all: readonly BoardSession[]) 
 
 export type SessionGroup = { head?: BoardSession; workers: BoardSession[] }
 
-// Masters first, each with its workers under it; workers whose parent is not on the board last, headless.
-export const groupSessions = (sessions: readonly BoardSession[]): SessionGroup[] => {
+// Masters first, sorted by frame colour, then priority, each with its workers under it; workers whose parent is
+// not on the board last, headless. `isRed` names a master whose start mode is red (register.tsx, live probe).
+export const groupSessions = (sessions: readonly BoardSession[], isRed: (s: BoardSession) => boolean = () => false): SessionGroup[] => {
   const names = new Set(sessions.map(s => s.name))
   const isChild = (s: BoardSession) => !!s.parent && names.has(s.parent)
-  const heads = sessions.filter(s => !isChild(s) && isMasterOf(s, sessions)).sort(bySession)
+  const heads = sessions
+    .filter(s => !isChild(s) && isMasterOf(s, sessions))
+    .sort((a, b) => frameRank(a, isRed) - frameRank(b, isRed) || byPriority(a, b))
   const groups: SessionGroup[] = heads.map(head => ({
     head,
     workers: sessions.filter(s => s.parent === head.name).sort(bySession),
