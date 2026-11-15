@@ -385,8 +385,9 @@ write leaves no line.
 **`set` — the session's own line.** `board.py set now="<step>" state=<state> waiting_on=<role>`
 writes the line whose `name` is the caller's, as `claude agents --json` lists it for its
 `CLAUDE_CODE_SESSION_ID` (a missing line is appended with `name` and `session_id`; a session without
-a name is told to `/rename` first). Only `waiting_on`, `state`, `now`, `topic` (one line) and `keys` (comma-separated, each a match of
-`naming.key`; an empty value clears it) are settable; `state` takes
+a name is told to `/rename` first; `--session <name>` is only checked against that name). Only `waiting_on`, `state`, `now`, `topic` (one line), `keys` (comma-separated, each a match of
+`naming.key`; an empty value clears it) and `epic` (a ticket key or an epic number, read by
+`scripts/epic_state.py`) are settable; `state` takes
 the values of `sessions[].state` above, `waiting_on` a role key or `human`. `--for <name>` writes
 another session's line and is the coordinator's (`roles.coordinator`). A new `waiting_on` stamps
 `since` and `sla_due`; the same role keeps both; another role resets them; `waiting_on=` on a waiting
@@ -489,8 +490,9 @@ every open `owner_queue` question of that session with cause `access-click` post
 `obsolete: "<labels.prompt_resolved> <HH:MM>"` (crew time zone): the question stays in the queue,
 so nobody answers a dead prompt and nothing vanishes silently.
 
-**`decision` — an owner's cut or fence.** `board.py decision <area> <cut|fence> --key <KEY> --text
-"<decision>"` needs the caller to hold `roles.<area>`. It writes the news item
+**`decision` — an owner's cut, fence or process decision.** `board.py decision <area>
+<cut|fence|process> --key <KEY> --text "<decision>"` needs the caller to hold `roles.<area>`; a
+decision without a ticket names a plan slug as `--key`, as `ask` does. It writes the news item
 `{id: "D<n>", kind: "decision", title: "<area> <kind> <KEY>: <decision>", ts, by}`, then appends
 `{id, kind: "decision", title, ts, by, area, decision, key, text}` to `board-decisions.jsonl`.
 
@@ -577,7 +579,7 @@ adds. Every rule runs before any write; a refusal writes no row, calls no adapte
 | `move <KEY> selected` | always refused: `use board.py select` | as above |
 | `move <KEY> in_progress` | the key's last row in the transitions log is `selected`; from `in_review` or `in_test` only with `--reopen "<reason>"` (a revert of the merged PR, a failed test), kept as `reopen` | as above |
 | `move <KEY> in_test` | the crew maps an In Test status (`board.states.in_test`, default null: no In Test step) and the key is `in_review`; owned per § Several humans | as above; `the crew maps no in_test status` without the mapping |
-| `move <KEY> in_review --pr REF…` | every `REF` (a URL, `<owner>/<repo>#<n>`, or a bare number) is `MERGED` by `gh pr view` and carries `<KEY>` as a whole token in its head branch or title; a bare number is refused as ambiguous when the plan's phases name a `**Repo:**` other than the checkout's `origin` | as above |
+| `move <KEY> in_review --pr REF…` | every `REF` (a URL, `<owner>/<repo>#<n>`, or a bare number) is `MERGED` by `gh pr view` and carries `<KEY>` as a whole token in its head branch or title, or on a body line that starts with `Ticket(s)`, `Refs`, `Closes`, `Fixes`, `Resolves` or `Delivers` (a story delivered by a bundle PR or another story's PR); a bare number is refused as ambiguous when the plan's phases name a `**Repo:**` other than the checkout's `origin` | as above |
 | `move <KEY> done --already-fixed REF [--comment-file FILE]` | from any state but `done`: `REF` (`<owner>/<repo>#<n>` or a URL) is `MERGED` by `gh pr view`, the PR that fixed the story before it was built; the row says `via: already-fixed` and `pr`, the comment names the PR and adds the file's text | as above |
 | `move <KEY> done --comment-file FILE` | the key's last row is `in_review` or `in_test` (`last move is <state>, not in_review`; with an owner of `in_test` only `in_test`, § Several humans), and the file holds a line matching `^Not proven:\s*\S`; the row says `via: comment` and the file's text is the comment. A receipts verdict reaches `done` only through `accept.py` (§ Acceptance), which calls `move_done` in process with the entry; the CLI has no `--verdict` | as above |
 

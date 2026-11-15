@@ -1283,16 +1283,25 @@ class TestDecision:
         [
             ("vic", "product", "fence", "this session does not hold roles.product"),
             ("ada", "legal", "fence", "area 'legal' is no role key"),
-            ("ada", "product", "veto", "kind 'veto' is not one of cut, fence"),
+            ("ada", "product", "veto", "kind 'veto' is not one of cut, fence, process"),
+            ("ada", "product", "fence", "--key 'proj-40' does not match naming.key"),
         ],
     )
     def test_refusals_write_nothing(self, crewed, capsys, monkeypatch, who, area, kind, message):
         pin(monkeypatch, who)
         before = (crewed / "board.json").read_bytes()
-        assert decide(crewed, area=area, kind=kind) == 1
+        key = "proj-40" if "proj-40" in message else "PROJ-40"
+        assert decide(crewed, area=area, kind=kind, key=key) == 1
         assert message in capsys.readouterr().err
         assert (crewed / "board.json").read_bytes() == before
         assert not (crewed / "board-decisions.jsonl").exists()
+
+    def test_a_process_decision_without_a_ticket_takes_a_plan_slug(self, crewed, monkeypatch):
+        """Red arm: an owner's process decision without a ticket was refused ('jira-sync' does
+        not match naming.key) and filed under an unrelated epic key."""
+        pin(monkeypatch, "ada")
+        assert decide(crewed, kind="process", key="jira-sync", text="weekly sync") == 0
+        assert board_of(crewed)["news"][-1]["title"] == "product process jira-sync: weekly sync"
 
 
 class TestBundle:
@@ -2363,6 +2372,18 @@ class TestMoveInReview:
         gh_answers(moving, {"7 -R acme/app": pr(headRefName="feat/x", title=f"{KEY}: export")})
         assert act(moving, "move", KEY, "in_review", "--pr", "acme/app#7", adapter=fake()) == 0
 
+    def test_linked_by_a_ticket_line_in_the_body_passes(self, moving, capsys):
+        """A story delivered by a bundle PR or another story's PR. Red arm: refused "not linked"
+        although the PR body listed the key on its ticket line."""
+        body = f"## Summary\nx\n\n**Tickets:** PROJ-1, {KEY}, PROJ-3\n"
+        gh_answers(moving, {"7 -R acme/app": pr(headRefName="feat/x", title="t", body=body)})
+        assert act(moving, "move", KEY, "in_review", "--pr", "acme/app#7", adapter=fake()) == 0
+        # a key mentioned in passing in the prose is no link
+        prose = f"## Summary\nunlike {KEY}, this changes the export\n"
+        gh_answers(moving, {"8 -R acme/app": pr(headRefName="feat/x", title="t", body=prose)})
+        assert act(moving, "move", KEY, "in_review", "--pr", "acme/app#8", adapter=fake()) == 1
+        assert "is not linked" in capsys.readouterr().err
+
     def test_two_prs_with_one_unlinked_name_that_one(self, moving, capsys):
         gh_answers(
             moving,
@@ -2391,7 +2412,7 @@ class TestMoveInReview:
         gh_answers(moving, {"7 -R acme/app": pr(), url: pr(url=url)})
         argv = ["--pr", "acme/app#7", "--pr", url]
         assert act(moving, "move", KEY, "in_review", *argv, adapter=fake()) == 0
-        fields = ["--json", "state,mergedAt,headRefName,title,url"]
+        fields = ["--json", "state,mergedAt,headRefName,title,body,url"]
         assert gh_calls(moving) == [
             ["pr", "view", "7", "-R", "acme/app", *fields],
             ["pr", "view", url, *fields],
@@ -3600,3 +3621,40 @@ def test_replace_of_a_question_on_another_key_is_refused(crewless, capsys):
         capsys.readouterr().err
     )
     assert first in [q["id"] for q in board_of(crewless)["owner_queue"]]
+
+
+def test_set_takes_epic_and_its_own_name_as_session(crewless, capsys):
+    """Red arm: `set --session <own name>` was an unrecognized argument and `epic=` not settable,
+    although the compaction hook says "set `epic` on your board line"."""
+    assert go(crewless, "set", "--session", "lead-12", "epic=PROJ-7", "state=build") == 0
+    assert line_of(crewless, "lead-12")["epic"] == "PROJ-7"
+    assert go(crewless, "set", "epic=42") == 0
+    assert line_of(crewless, "lead-12")["epic"] == "42"
+    assert go(crewless, "set", "epic=") == 0
+    assert "epic" not in line_of(crewless, "lead-12")
+    assert go(crewless, "set", "epic=not a key") == 1
+    assert "epic 'not a key' is neither" in capsys.readouterr().err
+    # another session's name is no way around --for
+    assert go(crewless, "set", "--session", "other-3", "state=idle") == 1
+    assert "set writes this session's own line, named lead-12" in capsys.readouterr().err
+
+
+def test_distinct_lets_another_question_on_the_same_key_and_cause_through(crewless, capsys):
+    """Red arm: two unrelated prod questions on one key; the second was refused as a duplicate
+    and had to go onto another key."""
+    answer_with(crewless, CLEAR)
+    assert go(crewless, *ask_argv()) == 0
+    first = capsys.readouterr().out.strip().split()[-1]
+    assert go(crewless, *ask_argv(**{"--ask": "Other step: may the delta run tonight?"})) == 1
+    assert "add `--distinct`" in capsys.readouterr().err
+    assert (
+        go(
+            crewless,
+            *ask_argv(**{"--ask": "Other step: may the delta run tonight?"}),
+            "--distinct",
+        )
+        == 0
+    )
+    out = capsys.readouterr()
+    assert f"warning: {first} on PROJ-12 is still open" in out.err
+    assert [q.get("key") for q in board_of(crewless)["owner_queue"]].count("PROJ-12") == 2
