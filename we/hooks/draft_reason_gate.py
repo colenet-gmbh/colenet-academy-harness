@@ -150,6 +150,24 @@ def _has_reason(body: str | None) -> bool:
     return bool(_DRAFT_LINE.match(first)) and not _PLACEHOLDER.search(first)
 
 
+_VALUE_FLAGS = ("--body-file", "-F", "--body", "-b", "--repo", "-R", "--title", "-t")
+
+
+def _selector_of(args: list[str]) -> str | None:
+    """The first positional argument of `gh pr edit`, skipping the values of the flags that take
+    one (`--body-file f.md 7` selects 7); None when the edit names no PR."""
+    skip = False
+    for raw in args:
+        a = raw.rstrip(";&|")
+        if skip:
+            skip = False
+        elif a in _VALUE_FLAGS:
+            skip = True
+        elif not a.startswith("-"):
+            return a
+    return None
+
+
 def _edited_body(
     command: str, found: tuple | None, ready_at: int, selector: str | None, cwd: str | None
 ) -> tuple[str | None] | None:
@@ -157,8 +175,7 @@ def _edited_body(
     in this command; the body is None (fail open) when it cannot be read. None: no such edit."""
     if found is None or found[1] != "edit" or found[0] > ready_at:
         return None
-    edit_sel = next((a.rstrip(";&|") for a in found[2] if not a.startswith("-")), None)
-    if edit_sel != selector:
+    if _selector_of(found[2]) != selector:
         return None
     verb, body, seen = vg._body_of(command, cwd)
     if verb != "edit" or not seen:

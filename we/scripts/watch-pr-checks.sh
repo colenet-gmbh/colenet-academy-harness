@@ -359,10 +359,13 @@ while :; do
     [ -n "$OPEN_RUNS" ] && PENDING=1
     # A cancelled run with a newer run of the same workflow and event on the head was replaced
     # (`gh pr ready` cancels the draft run, a push or edit cancels the older run): its checks are
-    # history, never a failure, a progress line or a --fail-fast exit.
-    SUPERSEDED=$(awk -F'\t' '{ id[NR] = $1; c[NR] = $4; k[NR] = $5 "\t" $6 }
+    # history, never a failure, a progress line or a --fail-fast exit, but only while the newer
+    # run is still open: once it finished, CLASSIFY already shows its result for every check it
+    # reported, and a cancelled check it never reported stays the latest for its name, so red.
+    SUPERSEDED=$(awk -F'\t' '{ id[NR] = $1; s[NR] = $3; c[NR] = $4; k[NR] = $5 "\t" $6 }
       END { for (i = 1; i <= NR; i++) if (c[i] == "cancelled") for (j = 1; j <= NR; j++)
-        if (k[j] == k[i] && id[j] + 0 > id[i] + 0) { print id[i]; break } }' <<<"$RUNROWS")
+        if (k[j] == k[i] && id[j] + 0 > id[i] + 0 && s[j] ~ /^(queued|in_progress|requested|pending)$/) {
+          print id[i]; break } }' <<<"$RUNROWS")
     FAILED=""
     FAILED_RUNS=""
     STATE=""

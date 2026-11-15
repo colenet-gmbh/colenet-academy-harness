@@ -788,10 +788,23 @@ def test_a_cancelled_run_replaced_by_a_newer_run_counts_for_nothing(tmp_path):
     }
     queued = {**cancelled, "databaseId": 101, "status": "queued", "conclusion": ""}
     done = {**queued, "status": "completed", "conclusion": "success"}
+    # the ready run reports Repo and ci-summary green, newer than the draft run's rows
+    ready = copy.deepcopy(d)
+    for name, job in (("Repo", 3), ("ci-summary", 4)):
+        new = copy.deepcopy(base)
+        new.update(
+            name=name, startedAt="2026-10-05T00:00:00Z", detailsUrl=RUN_URL.format(101, job)
+        )
+        ready["statusCheckRollup"].append(new)
     code, out = run(
-        tmp_path, [d, d, d], "--fail-fast", runs=[[cancelled, queued], [cancelled, done]]
+        tmp_path, [d, d, ready], "--fail-fast", runs=[[cancelled, queued], [cancelled, done]]
     )
     assert (code, out) == (0, [f"final {SHA}: green · {MERGE}"])
+    # the newer run finished without reporting the cancelled check: it is the latest, so red
+    (tmp_path / "d").mkdir()
+    code, out = run(tmp_path / "d", [d], runs=[[cancelled, done]])
+    assert code == 1 and out[-1].startswith(f"final {SHA}: red · failed: "), out
+    assert "Repo" in out[-1], out
     # without a newer run of that workflow and event the cancelled run still counts
     (tmp_path / "b").mkdir()
     other = {**done, "event": "workflow_dispatch"}

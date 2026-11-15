@@ -115,6 +115,22 @@ def test_ready_undo_reads_the_body_an_edit_before_it_sets(tmp_path):
     )
 
 
+def test_ready_undo_reads_the_edit_body_whatever_the_argument_order(tmp_path):
+    """The selector after `--body-file f.md`, or no selector on either side. Red arm: the hook
+    took `f.md` for the edit's PR, read the old body and denied an equivalent spelling."""
+    (tmp_path / "f.md").write_text(REASONED)
+    (tmp_path / "plain.md").write_text(PLAIN)
+    for chained in (
+        "gh pr edit --body-file f.md 7 && gh pr ready 7 --undo",
+        "gh pr edit -F f.md 7 && gh pr ready 7 --undo",
+        "gh pr edit --body-file f.md && gh pr ready --undo",
+    ):
+        assert run(tmp_path, chained, view_body=PLAIN) is None, chained
+        assert run(tmp_path, chained.replace("f.md", "plain.md"), view_body=REASONED), chained
+    # another PR after the body flag still does not stand in for this one
+    assert run(tmp_path, "gh pr edit --body-file f.md 8 && gh pr ready 7 --undo", PLAIN)
+
+
 def test_ready_undo_fails_open_and_plain_ready_passes(tmp_path):
     assert run(tmp_path, "gh pr ready 7 --undo", view_body=None) is None
     assert run(tmp_path, "gh pr ready 7", view_body=PLAIN) is None
