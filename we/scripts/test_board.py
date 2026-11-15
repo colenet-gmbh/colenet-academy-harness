@@ -2378,8 +2378,12 @@ class TestMoveInReview:
         body = f"## Summary\nx\n\n**Tickets:** PROJ-1, {KEY}, PROJ-3\n"
         gh_answers(moving, {"7 -R acme/app": pr(headRefName="feat/x", title="t", body=body)})
         assert act(moving, "move", KEY, "in_review", "--pr", "acme/app#7", adapter=fake()) == 0
-        # a key mentioned in passing in the prose is no link
-        prose = f"## Summary\nunlike {KEY}, this changes the export\n"
+        gh_answers(
+            moving, {"9 -R acme/app": pr(headRefName="feat/x", title="t", body=f"Closes {KEY}\n")}
+        )
+        assert act(moving, "move", KEY, "in_review", "--pr", "acme/app#9", adapter=fake()) == 0
+        # a key mentioned in passing in the prose, even on a line opening with Fixes, is no link
+        prose = f"## Summary\n- Fixes the export crash seen after {KEY}\n"
         gh_answers(moving, {"8 -R acme/app": pr(headRefName="feat/x", title="t", body=prose)})
         assert act(moving, "move", KEY, "in_review", "--pr", "acme/app#8", adapter=fake()) == 1
         assert "is not linked" in capsys.readouterr().err

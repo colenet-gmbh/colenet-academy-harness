@@ -911,10 +911,7 @@ def test_a_start_over_the_concurrency_cap_is_refused_and_starts_nothing(tmp_path
     project, env = setup(tmp_path, rows=busy)
     proc = run(project, env, "AC-12-impl", "--bg", GO)
     assert proc.returncode == 3
-    assert (
-        "we-worker: refused, no worker started: 10 background sessions busy (limit 10"
-        in proc.stderr
-    )
+    assert "we-worker: refused, no worker started: 10 workers busy (limit 10" in proc.stderr
     assert "active account 5h at 10 % (limit 80 %" in proc.stderr
     assert not started(tmp_path)
     (project / ".weside" / "config.json").write_text(

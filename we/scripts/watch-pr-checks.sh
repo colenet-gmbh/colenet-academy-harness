@@ -7,12 +7,14 @@
 #                     `--sha "$(git rev-parse HEAD)"`; GitHub reports the old head for seconds).
 #   --until-merged    for an auto-merge PR: on green keep watching until MERGED or CLOSED, the
 #                     interval doubling up to WATCH_MAX_INTERVAL while it waits; exit 0 then means
-#                     green but not merging (conflict, behind, auto-merge off). A failed check that is
+#                     merged (`final … merged`) or green but not merging (conflict, behind,
+#                     auto-merge off): read the final line, the code alone does not tell them apart. A failed check that is
 #                     no review does not end it while the PR can still merge (armed, mergeStateStatus
 #                     CLEAN, UNSTABLE or HAS_HOOKS: GitHub merges past a red non-required check).
 #   --human-merge     for a PR only a human merges (one-way, never armed): --until-merged that
 #                     waits past `auto-merge off` and BLOCKED (the approve) until MERGED or CLOSED;
-#                     only a conflict or a stale base (DIRTY, BEHIND) still ends it with exit 0.
+#                     only a conflict or a stale base (DIRTY, BEHIND) still ends it with exit 0 (as
+#                     does the merge: `final … merged`).
 #   --max-hours <h>   lifetime cap, default 6.
 # Prints a failed or cancelled check once, when it concludes, and one final line:
 #   final <sha>: green · merge: <state>                     exit 0

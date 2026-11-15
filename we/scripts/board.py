@@ -2897,10 +2897,13 @@ def _gh_argv(ref):
     return [ref]
 
 
-# A body line that names the tickets a PR delivers: `Ticket: …`, `Refs: …`, `Closes …`, a bundle
-# PR's `Tickets: A-1, A-2` (Markdown emphasis and list marks allowed before the word).
+# A body line that names the tickets a PR delivers: `Ticket: …`, `Refs: …`, a bundle PR's
+# `**Tickets:** A-1, A-2`, or `Closes A-1` (Markdown emphasis and list marks allowed before the
+# word). The word is followed by a colon or directly by a key, so a prose bullet `- Fixes the
+# crash seen after A-2` links nothing.
 _TICKET_LINE = re.compile(
-    r"^[\s>*_#-]*(?:tickets?|refs?|closes|fixes|resolves|delivers)\b.*$",
+    r"^[\s>*_#-]*(?:tickets?|refs?|closes|fixes|resolves|delivers)[*_]*"
+    r"(?:\s*:.*|\s+[*_`]*[A-Za-z][A-Za-z0-9]*-\d+.*)$",
     re.IGNORECASE | re.MULTILINE,
 )
 
