@@ -24,7 +24,8 @@
 #   head never reached <expected> (still <sha>) after <n>s  exit 5
 #   final <sha>: codex <WARNING|BLOCKING> · auto-merge <disarmed|off> — then /we:ci-review   exit 6
 #       (the head's `<!-- codex-review -->` comment judged it and its check is not green: a skip with a reason turns it green)
-#   final <sha>: merged [(red: <names>)]                    exit 7  (with --until-merged, the red
+#   final <sha>: merged                                     exit 0  (a merge is the good end)
+#   final <sha>: merged (red: <names>)                      exit 7  (with --until-merged, the red
 #       non-required checks it watched past stay in the line)
 #   final <sha>: closed                                     exit 8
 #   gave up after <n>s on <sha>                             exit 9  (--max-hours reached)
@@ -54,7 +55,8 @@
 # `DIRTY/… — conflicts with the base: merge it`, a stale branch `BEHIND/… — behind the base: merge
 # it` (`mergeable` CONFLICTING ends the watch with exit 12 first).
 # A check name that ran more than once on the head (a draft run, then the ready run) is judged
-# by its newest run only (`startedAt`; a run not started yet is the newest).
+# by its newest run only (`startedAt`; a run not started yet is the newest). The checks of a
+# cancelled run that a newer run of the same workflow and event replaced count for nothing.
 # Final means: the head's checks are non-empty, none pending, no workflow run for the head SHA
 # queued or in progress (a rerun counts as pending until it completes), and the whole set
 # unchanged for WATCH_QUIET seconds and at least two reads. Checks register seconds after a
@@ -133,8 +135,8 @@ CLASSIFY='def ckey: [(.workflowName // ""), (.name // .context // "")];
   + "\t" + (.name // .context)
   + "\t" + (((.detailsUrl // .targetUrl // "") | capture("/actions/runs/(?<id>[0-9]+)") | .id) // "")
   + "\t" + (.detailsUrl // .targetUrl // "")))'
-# One line per workflow run on the head SHA: <id>\t<attempt>\t<status>.
-RUNS='.[] | "\(.databaseId)\t\(.attempt)\t\(.status)"'
+# One line per workflow run on the head SHA: <id>\t<attempt>\t<status>\t<conclusion>\t<workflow>\t<event>.
+RUNS='.[] | "\(.databaseId)\t\(.attempt)\t\(.status)\t\(.conclusion // "")\t\(.workflowName // "")\t\(.event // "")"'
 # The body of the last Codex review comment (one sticky comment, edited per reviewed head).
 CODEX_BODY='[.comments[]? | select(.body | contains("<!-- codex-review -->"))] | last | .body // ""'
 
@@ -179,7 +181,7 @@ view() {
 field() { sed -n 2p <<<"$OUT" | cut -f"$1"; }
 closed_exit() {  # a merged or closed PR ends the watch with its own line, never "red"
   case "$(field 3)" in
-    MERGED) echo "final $1: merged${WAITING:+ (red: $WAITING)}"; exit 7 ;;
+    MERGED) echo "final $1: merged${WAITING:+ (red: $WAITING)}"; [ -n "$WAITING" ] && exit 7; exit 0 ;;
     CLOSED) echo "final $1: closed"; exit 8 ;;
   esac
 }
@@ -340,7 +342,7 @@ CODEX_TRIES=0
 RERUN=""
 WAITING=""
 while :; do
-  if view && gh_try RUNROWS run list -R "$REPO" --commit "$SHA" --limit 100 --json databaseId,attempt,status --jq "$RUNS"; then
+  if view && gh_try RUNROWS run list -R "$REPO" --commit "$SHA" --limit 100 --json databaseId,attempt,status,conclusion,workflowName,event --jq "$RUNS"; then
     closed_exit "$SHA"
     NOW_SHA=$(head -n 1 <<<"$OUT")
     if [ "$NOW_SHA" != "$SHA" ]; then echo "head moved $SHA -> $NOW_SHA"; exit 3; fi
@@ -353,13 +355,24 @@ while :; do
     OPEN_RUNS=$(awk -F'\t' '$3 ~ /^(queued|in_progress|requested|pending)$/ { print $1 }' <<<"$RUNROWS")
     PENDING=""
     [ -n "$OPEN_RUNS" ] && PENDING=1
+    # A cancelled run with a newer run of the same workflow and event on the head was replaced
+    # (`gh pr ready` cancels the draft run, a push or edit cancels the older run): its checks are
+    # history, never a failure, a progress line or a --fail-fast exit.
+    SUPERSEDED=$(awk -F'\t' '{ id[NR] = $1; c[NR] = $4; k[NR] = $5 "\t" $6 }
+      END { for (i = 1; i <= NR; i++) if (c[i] == "cancelled") for (j = 1; j <= NR; j++)
+        if (k[j] == k[i] && id[j] + 0 > id[i] + 0) { print id[i]; break } }' <<<"$RUNROWS")
     FAILED=""
     FAILED_RUNS=""
     STATE=""
     CODEX_DONE=""
     CODEX_GREEN=""
+    LIVE=""
     while IFS=$'\t' read -r verdict name run url; do
       [ -z "$name" ] && continue
+      if [ -n "$run" ] && grep -qx "$run" <<<"$SUPERSEDED"; then
+        STATE="$STATE"$'\n'"superseded"$'\t'"$name"; continue
+      fi
+      LIVE=1
       # A stale failure whose run was re-queued is pending, not failed.
       if [ -n "$run" ] && grep -qx "$run" <<<"$OPEN_RUNS"; then verdict=pending; fi
       STATE="$STATE"$'\n'"$verdict"$'\t'"$name"
@@ -386,7 +399,7 @@ while :; do
       codex_exit
     fi
     NOW=$(date +%s)
-    if [ -z "$ROWS" ]; then
+    if [ -z "$LIVE" ]; then
       if [ -z "$RUNROWS" ] && [ $((NOW - START)) -ge "$NO_RUN_TIMEOUT" ]; then
         echo "no workflow ran on $SHA after ${NO_RUN_TIMEOUT}s"; exit 10
       fi
@@ -396,7 +409,7 @@ while :; do
     fi
     SNAP="$(sort <<<"$STATE")"$'\n--\n'"$(sort <<<"$RUNROWS")"
     if [ "$SNAP" != "$LAST" ]; then LAST=$SNAP; STABLE_SINCE=$NOW; READS=1; else READS=$((READS + 1)); fi
-    if [ -n "$ROWS" ] && [ -z "$PENDING" ] && [ "$READS" -ge 2 ] && [ $((NOW - STABLE_SINCE)) -ge "$QUIET" ]; then
+    if [ -n "$LIVE" ] && [ -z "$PENDING" ] && [ "$READS" -ge 2 ] && [ $((NOW - STABLE_SINCE)) -ge "$QUIET" ]; then
       if [ -n "$FAILED" ]; then
         # A red non-required check (an auto-merge workflow) does not stop a PR GitHub still merges.
         if [ -n "$UNTIL_MERGED" ] && can_merge && ! grep -qiE "$REVIEW_RX" <<<"$(tr ',' '\n' <<<"$FAILED")"; then

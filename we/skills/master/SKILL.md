@@ -224,9 +224,10 @@ Then one `we:dev-medium` finisher in `<int>` runs the finish sequence.
      review check) → `/we:ci-review <PR>`, which re-arms when green. Never from the shared main checkout: `EnterWorktree(path=<wt>)` first,
      or a `we:dev-medium` worker in `<wt>` runs it. Green but not yet armed → the same, open threads and
      findings remain on a green run.
-   - exit 7 (merged) → `/we:merged <PR>` yourself; exit 8 (closed) → report.
-   - exit 3 (head moved), 12 (conflict, before the checks) or 0 under `--until-merged` (behind,
-     auto-merge off) → handle it, then re-arm on the new head.
+   - `final … merged` (exit 0, or 7 with red non-required checks named) → `/we:merged <PR>` yourself;
+     exit 8 (closed) → report.
+   - exit 3 (head moved), 12 (conflict, before the checks) or 0 under `--until-merged` without `merged`
+     (behind, auto-merge off) → handle it, then re-arm on the new head.
    - exit 10 (no workflow ran on the head) → push an empty commit once; again 10 → report.
    - exit 11 (the review hit its quota; auto-merge left as it was) → rerun the review check after the
      quota resets, then watch again.
