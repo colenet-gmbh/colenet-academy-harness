@@ -342,7 +342,7 @@ def test_a_non_github_origin_is_no_fallback(tmp_path):
     assert code == 2 and out and out[-1].startswith("gh failed 2 times"), out
 
 
-@pytest.mark.parametrize("state, code, word", [("MERGED", 7, "merged"), ("CLOSED", 8, "closed")])
+@pytest.mark.parametrize("state, code, word", [("MERGED", 0, "merged"), ("CLOSED", 8, "closed")])
 def test_a_merged_or_closed_pr_is_never_red(tmp_path, state, code, word):
     # The merge cancelled the checks; the old watcher said `final … red`.
     cancelled = copy.deepcopy(REAL)
@@ -451,7 +451,7 @@ def test_until_merged_keeps_watching_green_until_merged(tmp_path):
     armed = {**_green(), "autoMergeRequest": {"enabledAt": "x"}, "mergeStateStatus": "BLOCKED"}
     merged = {**armed, "state": "MERGED"}
     code, out = run(tmp_path, [armed, armed, armed, armed, merged], "--until-merged")
-    assert (code, out) == (7, [f"final {SHA}: merged"])
+    assert (code, out) == (0, [f"final {SHA}: merged"])
     assert int((tmp_path / "views" / "count").read_text()) >= 5
 
 
@@ -480,7 +480,7 @@ def test_human_merge_waits_past_auto_merge_off_and_blocked_until_merged(tmp_path
     unarmed = {**_green(), "mergeStateStatus": "BLOCKED"}
     merged = {**unarmed, "state": "MERGED"}
     code, out = run(tmp_path, [unarmed] * 5 + [merged], "--human-merge")
-    assert (code, out) == (7, [f"final {SHA}: merged"])
+    assert (code, out) == (0, [f"final {SHA}: merged"])
 
 
 def test_human_merge_still_stops_on_a_conflict(tmp_path):
@@ -766,3 +766,52 @@ def test_only_the_newest_run_of_a_check_counts(tmp_path):
     (tmp_path / "c").mkdir()
     code, out = run(tmp_path / "c", [other])
     assert code == 1 and "fail: ci-summary" in out
+
+
+def test_a_cancelled_run_replaced_by_a_newer_run_counts_for_nothing(tmp_path):
+    """`gh pr ready` cancelled the draft run (red `ci-summary`, cancelled `Repo`); the ready run of
+    the same workflow is still queued, its jobs not yet on the head. Red arm: --fail-fast ended
+    `red · failed: Repo` on the draft run's leftovers while the ready run went on."""
+    d = _green()
+    base = d["statusCheckRollup"][1]
+    old_repo, old_sum = copy.deepcopy(base), copy.deepcopy(base)
+    old_repo.update(name="Repo", conclusion="CANCELLED", detailsUrl=RUN_URL.format(100, 1))
+    old_sum.update(name="ci-summary", conclusion="FAILURE", detailsUrl=RUN_URL.format(100, 2))
+    d["statusCheckRollup"] += [old_repo, old_sum]
+    cancelled = {
+        "databaseId": 100,
+        "attempt": 1,
+        "status": "completed",
+        "conclusion": "cancelled",
+        "workflowName": "CI",
+        "event": "pull_request",
+    }
+    queued = {**cancelled, "databaseId": 101, "status": "queued", "conclusion": ""}
+    done = {**queued, "status": "completed", "conclusion": "success"}
+    # the ready run reports Repo and ci-summary green, newer than the draft run's rows
+    ready = copy.deepcopy(d)
+    for name, job in (("Repo", 3), ("ci-summary", 4)):
+        new = copy.deepcopy(base)
+        new.update(
+            name=name, startedAt="2026-10-05T00:00:00Z", detailsUrl=RUN_URL.format(101, job)
+        )
+        ready["statusCheckRollup"].append(new)
+    code, out = run(
+        tmp_path, [d, d, ready], "--fail-fast", runs=[[cancelled, queued], [cancelled, done]]
+    )
+    assert (code, out) == (0, [f"final {SHA}: green · {MERGE}"])
+    # the newer run finished without reporting the cancelled check: it is the latest, so red
+    (tmp_path / "d").mkdir()
+    code, out = run(tmp_path / "d", [d], runs=[[cancelled, done]])
+    assert code == 1 and out[-1].startswith(f"final {SHA}: red · failed: "), out
+    assert "Repo" in out[-1], out
+    # without a newer run of that workflow and event the cancelled run still counts
+    (tmp_path / "b").mkdir()
+    other = {**done, "event": "workflow_dispatch"}
+    code, out = run(tmp_path / "b", [d], runs=[[cancelled, other]])
+    assert code == 1 and out[-1].startswith(f"final {SHA}: red · failed: "), out
+    # only leftovers of the replaced run: nothing to judge yet, never green
+    (tmp_path / "c").mkdir()
+    only_old = {**d, "statusCheckRollup": [old_repo, old_sum]}
+    code, out = run(tmp_path / "c", [only_old], runs=[[cancelled, queued]], timeout_s="0")
+    assert code == 4, out

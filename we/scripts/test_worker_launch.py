@@ -719,7 +719,7 @@ def test_capacity_refuses_above_either_limit_and_names_both_values(cap):
     out = cap(10, 50.0)
     assert out.returncode == 3
     assert out.stderr.strip() == (
-        "we-worker: refused, no worker started: 10 sessions busy (limit 10,"
+        "we-worker: refused, no worker started: 10 workers busy (limit 10,"
         " workers.max_busy_sessions), active account 5h at 50 % (limit 80 %,"
         " workers.max_active_5h_percent); try again later"
     )
@@ -761,3 +761,36 @@ def test_capacity_without_cswap_on_path_skips_the_window_check_silently(
     monkeypatch.setattr(wl, "sessions", list)
     wl.capacity(tmp_path, "we-worker")
     assert capsys.readouterr().err == ""
+
+
+def test_capacity_counts_busy_background_sessions_only(cap, env):
+    """Interactive companions answering their humans are busy too. Red arm: five busy
+    companions let the default limit of 10 start only five workers."""
+    rows = [{"name": f"C{i}", "kind": "interactive", "status": "busy", "pid": 1} for i in range(5)]
+    rows += [{"name": f"W{i}", "kind": "background", "status": "busy", "pid": 1} for i in range(5)]
+    cap(0, 10.0)
+    env["state"].write_text(json.dumps(rows))
+    out = _run("capacity", "--repo", str(env["wt"]), "--prefix", "we-worker")
+    assert out.returncode == 0, out.stderr
+    env["state"].write_text(json.dumps(rows + rows[5:]))
+    out = _run("capacity", "--repo", str(env["wt"]), "--prefix", "we-worker")
+    assert out.returncode == 3 and "10 workers busy" in out.stderr
+    # a window worker is interactive too, and still counts: its tree carries the launcher marker
+    gd = subprocess.run(
+        ["git", "-C", str(env["wt"]), "rev-parse", "--absolute-git-dir"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    Path(gd, "we-worker.json").write_text(json.dumps({"name": "KEY-1-win"}))
+    win = {
+        "name": "KEY-1-win",
+        "sessionId": "s-win",
+        "kind": "interactive",
+        "status": "busy",
+        "pid": 1,
+        "cwd": str(env["wt"]),
+    }
+    env["state"].write_text(json.dumps([*rows, *rows[5:9], win]))  # 5 companions, 9 + 1 workers
+    out = _run("capacity", "--repo", str(env["wt"]), "--prefix", "we-worker")
+    assert out.returncode == 3 and "10 workers busy" in out.stderr, out.stderr

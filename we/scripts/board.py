@@ -7,7 +7,7 @@ Usage:
   board.py [--board FILE] freeze --reason "<why>" [--repo OWNER/REPO ...] [--by NAME]
   board.py [--board FILE] unfreeze
   board.py [--board FILE] path [--crew-only]
-  board.py [--board FILE] set [--for NAME] <field>=<value> …       fields: waiting_on, state, now
+  board.py [--board FILE] set [--for NAME | --session NAME] <field>=<value> …   fields: waiting_on, state, now, topic, keys, epic
   board.py [--board FILE] ask --session NAME --key KEY --key-title T --ask Q --recommendation R
            --cause <merge-go|plan|prod|cut-fence|access-click|window-go|info> [--urgent]
            [--pr REF [--one-way CLASS]] [--to HUMAN]
@@ -17,7 +17,7 @@ Usage:
   board.py [--board FILE] blocked <name> --kind <permission|chat> [--waiting-on ROLE]
            [--starter NAME] [--key KEY] [--command TEXT]
   board.py [--board FILE] blocked <name> --clear
-  board.py [--board FILE] decision <area> <cut|fence> --key KEY --text T
+  board.py [--board FILE] decision <area> <cut|fence|process> --key KEY --text T
   board.py [--board FILE] bundle
   board.py [--board FILE] escalation open --key KEY --parties ROLE,ROLE --question Q --a T --a-cost C
            --b T --b-cost C --reversible <yes|no> [--touches <vision|money|law|priority>]
@@ -58,7 +58,9 @@ set      writes the caller's own session line (found by `name` through `claude a
          `sla_due` (the crew's `sla`, counted in daytime hours); the same role keeps them, another
          resets them, `waiting_on=` ends a wait and clears all three. `state` and `now` never touch
          `since`. `topic=<text>` and `keys=<KEY>[,<KEY>…]` (each a match of the crew's
-         `naming.key`) write the line's own topic and keys; an empty value clears them. It stamps
+         `naming.key`) write the line's own topic and keys, `epic=<KEY or number>` the epic a
+         master's compaction hook reads (`epic_state.py`); an empty value clears them.
+         `--session <name>` is checked against the caller's own name and refused when it differs. It stamps
          the line's `updated_at` (UTC minute); the board's `updated` moves with every write of the
          coordinator (`write_board`), `updated_by` never.
 ask      posts a question for the owner after a cold reader (`cold_reader.py`) understood it
@@ -80,7 +82,8 @@ ask      posts a question for the owner after a cold reader (`cold_reader.py`) u
          skipped and the names of every one not green.
          An open question on the same key with the same cause, PR and `--to` refuses the ask
          before the reader, naming its id (a `duplicate` line in board-questions.jsonl); one with
-         another cause draws a warning. `--replace <QID>` takes that question off the queue (a
+         another cause draws a warning, and so does a duplicate under `--distinct` (the asker
+         says it is another question). `--replace <QID>` takes that question off the queue (a
          `replaced` line in board-questions.jsonl) and posts this one.
          `--to <human>` (a crew with `humans`, another human than this session's) asks a human on
          another machine on the ticket `--key`: the item keeps `to`, `to_name` and `label` (the
@@ -113,7 +116,8 @@ blocked  marks another session's line as blocked (docs/board.md § Blocked worke
          else; the same wait again writes nothing. `--clear` removes them once (refused while the
          permission prompt still stands) and marks the session's open `access-click` questions
          posted during the wait `obsolete` (`labels.prompt_resolved` and the time), never deleted.
-decision records an owner's cut or fence decision of their area (`roles.<area>`): one news item
+decision records an owner's cut, fence or process decision of their area (`roles.<area>`; `--key`
+         a ticket key or, for a decision without a ticket, a plan slug as in `ask`): one news item
          `D<n>` of kind `decision`, then one line in board-decisions.jsonl.
 bundle   the coordinator's evening bundle: one news item `B-<date>` of kind `todo` listing the
          decisions since the last bundle by area and the open questions oldest first, then a
@@ -257,9 +261,9 @@ KINDS = ("accept", "deny", "discuss", "info", "update", "withdraw")
 CLOSING = ("accept", "deny", "withdraw")  # withdraw: the asker's human takes back an `ask --to`
 # The one owner of the session state values; docs/board.md's `sessions[].state` row mirrors it.
 SESSION_STATES = ("build", "ci", "active", "wait-owner", "idle", "parked", "done")
-SET_FIELDS = ("waiting_on", "state", "now", "topic", "keys")
+SET_FIELDS = ("waiting_on", "state", "now", "topic", "keys", "epic")
 CAUSES = ("merge-go", "plan", "prod", "cut-fence", "access-click", "window-go", "info")
-DECISION_KINDS = ("cut", "fence")
+DECISION_KINDS = ("cut", "fence", "process")
 ASK_FIELDS = ("session", "key", "key_title", "ask", "recommendation", "cause")
 RETURN_PREFIX = "returned to "
 TOUCHES = ("vision", "money", "law", "priority")
@@ -729,6 +733,15 @@ def _parse_assignments(items, crew):
             failures.append(
                 f"board.py set: state {value!r} is not one of {', '.join(SESSION_STATES)}"
             )
+        elif (
+            key == "epic"
+            and value
+            and not (re.fullmatch(r"\d+", value) or not _key_failure(crew, value, "set"))
+        ):
+            failures.append(
+                f"board.py set: epic {value!r} is neither a ticket key of the crew's naming.key "
+                "nor an epic number"
+            )
         elif key in ("now", "topic") and "\n" in value:
             failures.append(f"board.py set: {key} is one line")
         elif key == "keys":
@@ -822,6 +835,12 @@ def cmd_set(state, args, crew, now):
         name, session_id = args.for_, None
     else:
         name, session_id = own_session_name()
+        if args.session is not None and args.session != name:
+            raise BoardError(
+                f"board.py set: --session {args.session}: set writes this session's own line, "
+                f"named {name} (claude agents); another session's line is the coordinator's "
+                "`--for <name>`"
+            )
     ended = []
 
     def mutate(board):
@@ -831,7 +850,7 @@ def cmd_set(state, args, crew, now):
             # the session set its own wait: a `blocked` mark of the old wait is over
             if ended[-1] is not None:
                 line.pop("blocked", None)
-        for key in ("state", "now", "topic", "keys"):
+        for key in ("state", "now", "topic", "keys", "epic"):
             if key in fields:
                 if fields[key] in ("", []):
                     line.pop(key, None)  # `topic=` / `keys=` clears it
@@ -1324,21 +1343,23 @@ def _take_off(board, qid, key=None):
     return [qid]
 
 
-def _same_key(state, fields, replacing):
+def _same_key(state, fields, replacing, distinct=False):
     """The open questions on the question's key (not the one `--replace` names): one with the
     same cause, PR and `--to` human is a duplicate and refuses the ask with one
-    `duplicate` line in board-questions.jsonl; another cause draws one stderr warning each."""
+    `duplicate` line in board-questions.jsonl, unless `distinct` (`--distinct`: the asker says it
+    is another question); every other one draws one stderr warning each."""
     key, cause = fields["key"], fields["cause"]
     for q in state.board().get("owner_queue") or []:
         if not isinstance(q, dict) or q.get("key") != key or q.get("id") == replacing:
             continue
         qid, text = q.get("id"), str(q.get("ask") or "")[:80]
         same = ("cause", "pr_url", "to")
-        if all(q.get(f) == fields.get(f) for f in same):
+        if not distinct and all(q.get(f) == fields.get(f) for f in same):
             state.append_question({**fields, "outcome": "duplicate", "of": qid})
             raise BoardError(
                 f"board.py ask: refused: {qid} on {key} (cause {cause}) is still open ({text!r}); "
-                f"wait for its answer, or ask anew with `--replace {qid}`"
+                f"wait for its answer, ask anew with `--replace {qid}`, or add `--distinct` "
+                "when this is another question on the same key and cause"
             )
         print(
             f"board.py ask: warning: {qid} on {key} is still open ({text!r}); this posts a "
@@ -1552,7 +1573,7 @@ def cmd_ask(state, args, crew, now):
     if args.one_way and args.one_way.strip():
         fields["one_way"] = args.one_way.strip()
     fields.update(_ask_extras(args, crew))
-    _same_key(state, {"ts": _iso(now), **fields}, args.replace)
+    _same_key(state, {"ts": _iso(now), **fields}, args.replace, args.distinct)
     if fields["cause"] == "merge-go":
         fields["checks"] = _required_checks(pr_url)
         fields["ask"] = f"{fields['ask']}\n{fields['checks']}"
@@ -1994,7 +2015,8 @@ def cmd_decision(state, args, crew, now):
         failures.append(
             f"board.py decision: kind {args.kind!r} is not one of {', '.join(DECISION_KINDS)}"
         )
-    failures += _key_failure(crew, args.key, "decision")
+    if not _is_plan_slug(crew, args.key):
+        failures += _key_failure(crew, args.key, "decision")
     if not args.text.strip():
         failures.append("board.py decision: missing --text")
     if failures:
@@ -2875,14 +2897,36 @@ def _gh_argv(ref):
     return [ref]
 
 
+# A body line that names the tickets a PR delivers: `Ticket: …`, `Refs: …`, a bundle PR's
+# `**Tickets:** A-1, A-2`, or `Closes A-1` (Markdown emphasis and list marks allowed before the
+# word). The word is followed by a colon or directly by a key, so a prose bullet `- Fixes the
+# crash seen after A-2` links nothing.
+_TICKET_LINE = re.compile(
+    r"^[\s>*_#-]*(?:tickets?|refs?|closes|fixes|resolves|delivers)[*_]*"
+    r"(?:\s*:.*|\s+[*_`]*[A-Za-z][A-Za-z0-9]*-\d+.*)$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
 def _linked(key, pr):
+    """The key as a whole token in the head branch or title, or on a ticket line of the body (a
+    story delivered by a bundle PR or another story's PR)."""
     rx = re.compile(r"(?<![A-Z0-9-])" + re.escape(key) + r"(?![0-9])")
-    return any(rx.search(str(pr.get(f) or "")) for f in ("headRefName", "title"))
+    if any(rx.search(str(pr.get(f) or "")) for f in ("headRefName", "title")):
+        return True
+    return any(rx.search(m.group(0)) for m in _TICKET_LINE.finditer(str(pr.get("body") or "")))
 
 
 def _view_pr(ref, root):
     """(the PR's JSON, None) or (None, the failure) for one `gh pr view` of `ref`."""
-    argv = ["gh", "pr", "view", *_gh_argv(ref), "--json", "state,mergedAt,headRefName,title,url"]
+    argv = [
+        "gh",
+        "pr",
+        "view",
+        *_gh_argv(ref),
+        "--json",
+        "state,mergedAt,headRefName,title,body,url",
+    ]
     try:
         done = subprocess.run(
             argv, capture_output=True, text=True, timeout=GH_TIMEOUT, check=False, cwd=root
@@ -3646,9 +3690,20 @@ def parser():
     u = verbs.add_parser("unfreeze", help="lift the freeze; prints the PRs to re-arm by hand")
     u.set_defaults(run=cmd_unfreeze)
 
-    s = verbs.add_parser("set", help="write this session's own board line")
+    s = verbs.add_parser(
+        "set",
+        help="write this session's own board line",
+        description=(
+            "Writes the line named as `claude agents` lists this session. Fields: "
+            f"{', '.join(SET_FIELDS)}; state is one of {', '.join(SESSION_STATES)}; "
+            "waiting_on a role key or human; an empty value clears a field."
+        ),
+    )
     s.add_argument(
         "--for", dest="for_", metavar="NAME", help="another session's line (coordinator)"
+    )
+    s.add_argument(
+        "--session", metavar="NAME", help="this session's own name, checked (as `ask` takes it)"
     )
     s.add_argument("assignments", nargs="+", metavar="field=value")
     s.set_defaults(run=cmd_set)
@@ -3674,6 +3729,11 @@ def parser():
         "--component", metavar="NAME", help="owner: the member whose components hold it"
     )
     q.add_argument("--replace", metavar="QID", help="replace this open question on the same --key")
+    q.add_argument(
+        "--distinct",
+        action="store_true",
+        help="another question on a key and cause that already has an open one",
+    )
     _add_remote_ask(q)
     q.set_defaults(run=cmd_ask)
     _add_human_verbs(verbs)
@@ -3685,7 +3745,9 @@ def parser():
     ).set_defaults(run=cmd_prune)
     _add_flow_verbs(verbs)
 
-    d = verbs.add_parser("decision", help="record a cut or fence decision of the caller's area")
+    d = verbs.add_parser(
+        "decision", help="record a cut, fence or process decision of the caller's area"
+    )
     d.add_argument("area")
     d.add_argument("kind")
     d.add_argument("--key", required=True)

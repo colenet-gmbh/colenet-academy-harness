@@ -37,6 +37,7 @@ from typing import Any, NamedTuple
 TIER_LINE = re.compile(r"^T[0-3]( one-way (\S+))?$")
 RUN_TIMEOUT = 60
 NO_COMMAND = "warning: tier check off: crew.json names no risk.command"
+NOT_ON_REF = "plan not on "  # the one failure a plan branch always has before its merge
 
 
 class TierResult(NamedTuple):
@@ -104,7 +105,7 @@ def _run(risk: dict[str, Any], root: Path, ref: str, key: str, plan_rel: str, co
     if _git(root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False).returncode:
         raise TierError(f"risk.rules_from {ref} is no commit here")
     if _git(root, "cat-file", "-e", f"{ref}:{plan_rel}", check=False).returncode:
-        raise TierError(f"plan not on {ref}: {plan_rel}")
+        raise TierError(f"{NOT_ON_REF}{ref}: {plan_rel}")
     blob = _git(root, "cat-file", "blob", f"{ref}:{words[0]}", check=False)
     if blob.returncode != 0:
         raise TierError(f"risk.command {words[0]} not on {ref}")
