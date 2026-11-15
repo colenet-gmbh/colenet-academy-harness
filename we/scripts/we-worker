@@ -48,7 +48,8 @@
 # (`worker_launch.py check`: Ziel/Goal, Ausgabe/Output, Werkzeuge und Quellen/Tools and sources, Grenzen
 # und wann stoppen/Limits and when to stop) gets a warning with the template while the check only warns
 # (worker_launch.BRIEF_ENFORCED), a refusal once it is enforced; a last argument starting with `-`, or
-# none, is an empty brief. A --resume/--continue start checks the name only. Without the plugin's worker_launch.py no worker
+# none, is an empty brief; a last argument that is blank (`"$(cat <brief>)"` of an empty or unwritten
+# file) refuses (exit 2), nothing starts. A --resume/--continue start checks the name only. Without the plugin's worker_launch.py no worker
 # starts. Every worker starts with `--settings <state dir>/<name>.settings.json` (`worker_launch.py
 # settings`: its rights in this repo, the never-list, WE_ROLE and WE_STORY_KEY) and WE_STORY_KEY=<key>.
 # The crew (`.weside/crew.json`, scripts/crew.py) adds, when set:
@@ -459,6 +460,12 @@ for a in "$@"; do
 done
 brief=""
 [[ $# -gt 0 && "${!#}" != -* ]] && brief=${!#}
+# A last argument that is there but blank is a brief that failed to arrive (`"$(cat brief)"` of a file
+# a refused command never wrote): the worker would run without a task, so nothing starts.
+if [[ $resuming -eq 0 && $# -gt 0 && -z "${brief//[[:space:]]/}" && "${!#}" != -* ]]; then
+  echo "we-worker: the brief is empty (the last argument holds no text); write the brief first, then start $name; no worker started" >&2
+  exit 2
+fi
 if [[ $resuming -eq 1 ]]; then
   key=$(python3 "$wl" check --name "$name" --no-brief --prefix we-worker) || exit 2
 else

@@ -321,6 +321,17 @@ def brakes(tmp_path):
     return [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else []
 
 
+@pytest.mark.parametrize("blank", ["", "  \n\t"])
+def test_a_blank_brief_refuses_before_claude(tmp_path, blank):
+    """`we-worker <name> --bg "$(cat brief)"` after a refused command never wrote the file: the
+    worker ran without a task until its master noticed. Red arm: it warned and started."""
+    project, env = setup(tmp_path)
+    proc = run(project, env, "AC-12-impl", "--bg", blank)
+    assert proc.returncode == 2
+    assert proc.stderr.startswith("we-worker: the brief is empty"), proc.stderr
+    assert not started(tmp_path)
+
+
 def test_a_pointer_brief_is_read_from_its_file(tmp_path):
     project, env = setup(tmp_path)
     good = Path(__file__).parent / "fixtures" / "briefs" / "complete-de.md"
@@ -900,7 +911,10 @@ def test_a_start_over_the_concurrency_cap_is_refused_and_starts_nothing(tmp_path
     project, env = setup(tmp_path, rows=busy)
     proc = run(project, env, "AC-12-impl", "--bg", GO)
     assert proc.returncode == 3
-    assert "we-worker: refused, no worker started: 10 sessions busy (limit 10" in proc.stderr
+    assert (
+        "we-worker: refused, no worker started: 10 background sessions busy (limit 10"
+        in proc.stderr
+    )
     assert "active account 5h at 10 % (limit 80 %" in proc.stderr
     assert not started(tmp_path)
     (project / ".weside" / "config.json").write_text(

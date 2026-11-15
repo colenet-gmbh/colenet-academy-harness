@@ -11,7 +11,9 @@ reason in the body. Contract: `skills/pr/SKILL.md` step 4.
     (heredoc bodies lifted out first, as in `verification_gate.py`).
   * `create`: the body comes from `--body`/`-b` or `--body-file`/`-F` (a heredoc written in the
     same command counts). No body flag at all is a body without the line: denied.
-  * `ready --undo`: the body comes from `gh pr view <selector> --json body`.
+  * `ready --undo`: the body comes from `gh pr view <selector> --json body`, unless the same
+    command runs `gh pr edit <selector> --body-file`/`--body` before it: that body is the one the
+    PR will carry (the edit has not run when the hook reads).
   * Passes when the body's first non-empty line starts with `**Draft:**` followed by a reason, and
     that line holds no `<placeholder>` (neither in the reason nor in the condition).
   * Fail-open when the body cannot be read (a substitution, `-`, `--web`, a missing file, a `gh`
@@ -148,6 +150,22 @@ def _has_reason(body: str | None) -> bool:
     return bool(_DRAFT_LINE.match(first)) and not _PLACEHOLDER.search(first)
 
 
+def _edited_body(
+    command: str, found: tuple | None, ready_at: int, selector: str | None, cwd: str | None
+) -> tuple[str | None] | None:
+    """(body,) when a `gh pr edit` on the same selector sets the body before the `ready --undo`
+    in this command; the body is None (fail open) when it cannot be read. None: no such edit."""
+    if found is None or found[1] != "edit" or found[0] > ready_at:
+        return None
+    edit_sel = next((a.rstrip(";&|") for a in found[2] if not a.startswith("-")), None)
+    if edit_sel != selector:
+        return None
+    verb, body, seen = vg._body_of(command, cwd)
+    if verb != "edit" or not seen:
+        return None
+    return (body,)
+
+
 def _create_refusal(command: str, rest: list[str], cwd: str | None) -> str | None:
     if not any(a.rstrip(";&|") in ("--draft", "-d") for a in rest) or "--web" in rest:
         return None
@@ -178,7 +196,8 @@ def refusal(payload: dict) -> str | None:
     cwd = vg._cwd_after_cd(argv, payload.get("cwd"), stop=at)
     if not undo:
         return _ready_refusal(selector, repo, cwd)
-    body = _pr_body(selector, repo, cwd)
+    edited = _edited_body(command, found, at, selector, payload.get("cwd"))
+    body = edited[0] if edited is not None else _pr_body(selector, repo, cwd)
     return (
         None
         if _has_reason(body)

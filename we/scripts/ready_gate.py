@@ -31,7 +31,8 @@ Ready gate reads); this docstring only lists the story checks in their order:
 10. the plan's tier (``plan_tier.py``): the repo's ``risk.command`` on the plan alone, in a
     scratch tree at ``risk.rules_from``. A success prints ``tier: <line 1>`` on stderr, a
     failure is one stdout line ``<plan>: tier: tier not computed: <reason>``; without a
-    ``risk.command`` one warning. The epic mode computes no tier.
+    ``risk.command``, and for a plan not yet on ``risk.rules_from`` (a plan branch: ``board.py
+    select`` computes the tier on main), one warning. The epic mode computes no tier.
 
 The epic mode also reads the finish line (``references/epic-plan.md`` § Finish line): an epic
 whose ``status:`` starts with ``approved`` without ``line:`` is refused, any other status without
@@ -475,7 +476,14 @@ class Gate:
             return
         result = plan_tier.plan_tier(self.crew, root, key, rel)
         self.warnings.extend(result.warnings)
-        if result.failure is not None:
+        if result.failure is not None and result.failure.startswith(plan_tier.NOT_ON_REF):
+            # A plan branch before its merge: `board.py select` computes the tier on main. As a
+            # failure it made every refiner's run exit 1, and a real failure above it went unread.
+            self.warnings.append(
+                f"warning: {self.plan}: tier deferred: {result.failure}; `board.py select` "
+                "computes it on main"
+            )
+        elif result.failure is not None:
             self.fail("tier", f"tier not computed: {result.failure}")
         else:
             self.warnings.append(f"tier: {result.line}")

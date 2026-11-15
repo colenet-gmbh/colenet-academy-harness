@@ -45,7 +45,7 @@ Usage:
                                                    SendMessage target of a follow-up
   worker_launch.py capacity [--repo <dir>] [--prefix <p>]
                                                    exit 0: a worker may start; 3: refused while
-                                                   the busy sessions reach
+                                                   the busy background sessions reach
                                                    workers.max_busy_sessions (10) or the active
                                                    account's 5h window (`cswap status --json`) is
                                                    above workers.max_active_5h_percent (80), both
@@ -286,15 +286,18 @@ def five_hour_percent() -> float | None:
 
 
 def capacity(repo: Path, prefix: str) -> None:
-    """Refuse a new worker (`LaunchError`, exit 3) while the busy sessions on this machine
-    (`claude agents --json`, `status` busy) reach `workers.max_busy_sessions` or the active
+    """Refuse a new worker (`LaunchError`, exit 3) while the busy background sessions on this
+    machine (`claude agents --json`, `status` busy; an interactive session is a human's companion
+    or master, busy whenever it answers, and never counts) reach `workers.max_busy_sessions` or the active
     account's 5h window is above `workers.max_active_5h_percent`; the refusal names both measured
     values. A value that cannot be read skips its check with one stderr warning; without `cswap` on
     PATH (it is optional) the 5h check is skipped silently."""
     limits = cap_limits(repo)
     max_busy, max_pct = limits["max_busy_sessions"], limits["max_active_5h_percent"]
     try:
-        busy: int | None = sum(1 for r in sessions() if r.get("status") == "busy")
+        busy: int | None = sum(
+            1 for r in sessions() if r.get("status") == "busy" and r.get("kind") != "interactive"
+        )
     except LaunchError as exc:
         busy = None
         print(
@@ -312,7 +315,7 @@ def capacity(repo: Path, prefix: str) -> None:
         shown_busy = "?" if busy is None else str(busy)
         shown_pct = "?" if pct is None else f"{pct:g}"
         raise LaunchError(
-            f"refused, no worker started: {shown_busy} sessions busy (limit {max_busy:g},"
+            f"refused, no worker started: {shown_busy} background sessions busy (limit {max_busy:g},"
             f" workers.max_busy_sessions), active account 5h at {shown_pct} % (limit {max_pct:g} %,"
             " workers.max_active_5h_percent); try again later",
             3,

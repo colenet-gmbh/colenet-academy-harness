@@ -649,6 +649,20 @@ def test_the_story_gate_prints_the_plan_tier(tmp_path, monkeypatch, env, code, s
         assert out.stdout.startswith(f"{PLANS}/PROJ-12-story.md: {stdout}"), out.stdout
 
 
+def test_a_plan_not_yet_on_main_defers_the_tier_and_leaves_real_failures_readable(tmp_path):
+    """A plan branch before its merge. Red arm: `tier not computed: plan not on origin/main` made
+    every refiner run exit 1, so a fence failure above it was read as the same known noise."""
+    root = tier_gate_repo(tmp_path)
+    new = f"{PLANS}/PROJ-13-story.md"
+    (root / new).write_text(
+        (root / PLANS / "PROJ-12-story.md").read_text().replace("story: PROJ-12", "story: PROJ-13")
+    )
+    out = gate(root, "story", new)
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert f"warning: {new}: tier deferred: plan not on origin/main: {new}" in out.stderr
+    assert "tier not computed" not in out.stdout
+
+
 def test_the_epic_gate_computes_no_tier(tmp_path):
     root = tier_gate_repo(tmp_path)
     out = gate(root, "epic", plan(root, "PROJ-1-epic"))
