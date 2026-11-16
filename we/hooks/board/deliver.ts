@@ -20,7 +20,7 @@
 import type { BoardAcceptVariant, BoardAnswer, BoardAnswerKind, BoardDeliveredKind, BoardDelivery, BoardDeliveryRole, BoardPromptKind } from '../../types'
 import { answerPrompt } from './board'
 
-const DELIVERED: readonly BoardDeliveredKind[] = ['accept', 'deny', 'discuss', 'info', 'update', 'withdraw']
+const DELIVERED: readonly BoardDeliveredKind[] = ['accept', 'deny', 'discuss', 'info', 'update', 'withdraw', 'rebuild']
 const CLOSING: readonly BoardAnswerKind[] = ['accept', 'deny', 'withdraw']
 
 // How long a pane waits for any ledger row of an answer before it marks the coordinator not running.
@@ -197,7 +197,9 @@ const quoteOf = (line: AnswerLine) => `${questionOf(line)}${line.quote ? `\nThe 
 // reply was read from (`board.py signals`, `via: ticket`), else the pane.
 const WRITTEN = { chat: 'in the chat of', ticket: 'on' } as Record<string, string>
 export const writerNote = (line: AnswerLine) =>
-  ` (answered ${WRITTEN[line.via ?? ''] ?? 'from the board pane in'} ${line.session ?? 'a session without a name'})`
+  line.answer === 'rebuild'
+    ? ` (Refresh pressed on the board pane in ${line.session ?? 'a session without a name'})`
+    : ` (answered ${WRITTEN[line.via ?? ''] ?? 'from the board pane in'} ${line.session ?? 'a session without a name'})`
 
 // The text kind of an answer: an Accept that means "I do it myself" takes its own (`accept`), never
 // "proposal accepted", which a coordinator would read as a go to merge or to do the task.
@@ -249,6 +251,20 @@ export const markerRows = (lines: readonly AnswerLine[], ledger: Ledger, coordin
     .map(line =>
       rowOf({ line, role: 'coordinator', to: coordinator }, new Date(Date.parse(line.ts) + MARK_AFTER_MS).toISOString(), false, NOT_RUNNING),
     )
+}
+
+// Refresh's request to the coordinator to rebuild the board: one answer line with this id and kind
+// `rebuild`, carried like any answer. A press writes none while one is still owed: a request newer
+// than the epoch whose coordinator row holds no verdict (a coordinator that is busy or not running
+// gets one request, not one per press), or, before the deliverer's first start, one younger than
+// REBUILD_MS. A stored request, or a refused one, lets the next press ask again.
+export const REBUILD_ID = 'rebuild'
+export const REBUILD_MS = 600_000
+export const rebuildWaits = (lines: readonly AnswerLine[], ledger: Ledger, now: number) => {
+  const asked = lines.filter(l => l.id === REBUILD_ID && l.answer === 'rebuild')
+  if (!ledger.epoch) return asked.some(l => now - Date.parse(l.ts) < REBUILD_MS)
+  const epoch = ledger.epoch
+  return asked.some(l => after(l.ts, epoch) && !isFinal(ledger.rows[keyOf(l.id, l.ts, 'coordinator')]))
 }
 
 // How long a pressed answer may wait without any delivered row before the pane says so.

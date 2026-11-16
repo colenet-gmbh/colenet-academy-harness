@@ -1,13 +1,13 @@
 // Pure logic of the /board pane: parse the orchestrator's board file, order it, judge each session's start mode.
 import type {
-  BoardAcceptVariant, BoardAnswer, BoardAnswerKind, BoardDeliveredKind, BoardFile, BoardNewsItem, BoardNewsKind, BoardPromptKind, BoardQueueItem, BoardSession,
+  BoardAcceptVariant, BoardAnswer, BoardAnswerKind, BoardDeliveredKind, BoardFile, BoardLogItem, BoardNewsItem, BoardNewsKind, BoardPromptKind, BoardQueueItem, BoardSession,
   BoardStaging, LiveSession, SessionAgeHours,
 } from '../../types'
 import type { Part } from './work'
 
 const MIN = 60_000
 const DAY = 86_400_000
-const DELIVERED_KINDS: readonly BoardDeliveredKind[] = ['accept', 'deny', 'discuss', 'info', 'update', 'withdraw']
+const DELIVERED_KINDS: readonly BoardDeliveredKind[] = ['accept', 'deny', 'discuss', 'info', 'update', 'withdraw', 'rebuild']
 const PROMPT_KINDS: readonly BoardPromptKind[] = [...DELIVERED_KINDS, 'update_asker', 'accept_hand', 'accept_task']
 const KINDS: readonly BoardAnswerKind[] = [...DELIVERED_KINDS, 'read']
 // An Accept, Deny or Withdraw closes its question: the pane strikes it, and later lines on that id change nothing.
@@ -32,7 +32,9 @@ const prioritiesOf = (raw: unknown): string | undefined => {
 
 const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
 
-// `news[]`: an item needs an id and a title; anything else in it is optional, an unknown kind counts as info.
+// `news[]`: an item needs an id and a title; anything else in it is optional, a kind outside the three
+// draws as info and is kept as `rawKind`. An older item without an id (a `text` and a `key`, or a title)
+// is no news: it goes to the log (`logOf`).
 const newsOf = (raw: unknown): BoardNewsItem[] => {
   if (!Array.isArray(raw)) return []
   const out: BoardNewsItem[] = []
@@ -43,7 +45,78 @@ const newsOf = (raw: unknown): BoardNewsItem[] => {
     const title = str(n.title)
     if (!id || !title) continue
     const kind = NEWS_KINDS.includes(n.kind as BoardNewsKind) ? (n.kind as BoardNewsKind) : undefined
-    out.push({ id, title, body: str(n.body), ts: str(n.ts), kind })
+    const rawKind = !kind ? str(n.kind) : undefined
+    out.push({ id, title, body: str(n.body), ts: str(n.ts), kind, ...(rawKind ? { rawKind } : {}) })
+  }
+  return out
+}
+
+// One log line from an item: its title, else `<key>: <text>` (an older news line); none without either.
+const logItemOf = (item: unknown): BoardLogItem | undefined => {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined
+  const n = item as Record<string, unknown>
+  const key = str(n.key)
+  const text = str(n.text)
+  const title = str(n.title) ?? (text ? (key && key !== '—' ? `${key}: ${text}` : text) : undefined)
+  if (!title) return undefined
+  const id = str(n.id)
+  const kind = str(n.kind)
+  return { ...(id ? { id } : {}), title, ...(str(n.body) ? { body: str(n.body) } : {}), ...(str(n.ts) ? { ts: str(n.ts) } : {}), ...(kind ? { kind } : {}) }
+}
+
+// `log[]` and every `news[]` item without an id, in file order.
+const logOf = (log: unknown, news: unknown): BoardLogItem[] => [
+  ...(Array.isArray(log) ? log : []),
+  ...(Array.isArray(news) ? news.filter(n => n && typeof n === 'object' && !str((n as Record<string, unknown>).id)) : []),
+].flatMap(item => logItemOf(item) ?? [])
+
+// Where a news item belongs: `news`, the owner's frame (info, gate, todo, any kind the coordinator
+// wrote by hand); `log`, folded under it (a decision, a sample, an `escalation` item, which board.py
+// writes only for a role holder: the owner's stage is a `todo`); `none` for a question returned to
+// its asker, whose asker has it.
+export type NewsShelf = 'news' | 'log' | 'none'
+const LOG_KINDS: readonly string[] = ['decision', 'sample', 'escalation']
+export const newsShelf = (n: BoardNewsItem): NewsShelf => {
+  if (n.rawKind === 'returned') return 'none'
+  return n.rawKind && LOG_KINDS.includes(n.rawKind) ? 'log' : 'news'
+}
+
+// The owner's news (unread, in file order) and the log, newest first: the board's `log` with every
+// news item that is not for the owner.
+export const shelveNews = (board: Pick<BoardFile, 'news' | 'log'>, answers: Record<string, BoardAnswer>) => {
+  const news = unreadNews(board.news.filter(n => newsShelf(n) === 'news'), answers)
+  const moved: BoardLogItem[] = board.news
+    .filter(n => newsShelf(n) === 'log')
+    .map(n => ({ id: n.id, title: n.title, ...(n.body ? { body: n.body } : {}), ...(n.ts ? { ts: n.ts } : {}), kind: n.rawKind ?? n.kind }))
+  const at = (l: BoardLogItem) => (l.ts ? Date.parse(l.ts) : NaN)
+  const log = [...board.log, ...moved]
+    .map((l, i) => ({ l, i }))
+    .sort((a, b) => (at(b.l) || 0) - (at(a.l) || 0) || b.i - a.i)
+    .map(x => x.l)
+  return { news, log }
+}
+
+// A title broken into at most `lines` lines no wider than `room`, at spaces where it can; the last line
+// is cut with an ellipsis when the text runs on.
+export const wrapTitle = (text: string, room: number, lines = 2): string[] => {
+  const width = Math.max(1, room)
+  const out: string[] = []
+  let rest = text.trim()
+  while (rest && out.length < lines) {
+    if (rest.length <= width) {
+      out.push(rest)
+      rest = ''
+      break
+    }
+    if (out.length === lines - 1) {
+      out.push(clip(rest, width))
+      rest = ''
+      break
+    }
+    const cut = rest.lastIndexOf(' ', width)
+    const at = cut > 0 ? cut : width
+    out.push(rest.slice(0, at).trimEnd())
+    rest = rest.slice(at).trimStart()
   }
   return out
 }
@@ -118,6 +191,7 @@ export const parseBoard = (text: string): BoardFile => {
     sessions: Array.isArray(file.sessions) ? (file.sessions as BoardSession[]) : [],
     priorities: prioritiesOf(file.priorities),
     news: newsOf(file.news),
+    log: logOf(file.log, file.news),
     notes: str(file.notes),
     answerPrompts: promptsOf(file.answer_prompts),
     staging: stagingOf(file.staging),
@@ -202,6 +276,8 @@ const DEFAULT_PROMPT: Record<BoardPromptKind, string> = {
   update_asker: 'check whether {id} is still current and well worded; re-ask it with a new id or withdraw it',
   accept_hand: '{id}: the owner approves or merges {pr} by hand — do not merge or arm it; the question stays open until the PR is merged',
   accept_task: '{id}: taken — the owner does this task; do not do it yourself',
+  rebuild:
+    'Rebuild the board: check the session lines, the open questions and the news against the ticketing system, git and the PRs, and correct every stale line (board.py set --for, withdraw, prune)',
 }
 
 export const answerPrompt = (answer: BoardPromptKind, id: string, own?: Partial<Record<BoardPromptKind, string>>, pr?: string) =>

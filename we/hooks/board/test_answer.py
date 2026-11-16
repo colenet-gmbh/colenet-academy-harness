@@ -63,6 +63,17 @@ def test_update_is_an_answer(tmp_path):
     }
 
 
+def test_refresh_writes_a_rebuild_line_for_the_coordinator(tmp_path):
+    path = tmp_path / "board-answers.jsonl"
+    assert answer.main(["answer.py", str(path), "rebuild", "rebuild", "t", "foxy"]) == 0
+    assert json.loads(path.read_text()) == {
+        "id": "rebuild",
+        "answer": "rebuild",
+        "ts": "t",
+        "session": "foxy",
+    }
+
+
 def test_a_pane_line_carries_no_via_and_the_command_line_refuses_one(tmp_path, capsys):
     path = tmp_path / "board-answers.jsonl"
     assert answer.main(["answer.py", str(path), "Q1", "accept", "t", "lead", "--via", "chat"]) == 2

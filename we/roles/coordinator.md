@@ -45,7 +45,8 @@ You own the question queue and keep the board, the tickets and git telling the s
 
 1. Read the board: open questions, items past {sla.hours} h, each session's line.
 2. List running masters and workers by role; stop the finished ones.
-3. Deliver what is due: answers back, milestones forward, the bundle when its time has come.
+3. Deliver what is due: answers back, milestones forward (`board.py news add --title …`, the owner's
+   news), the bundle when its time has come.
 
 ## You wait on / others wait on you
 

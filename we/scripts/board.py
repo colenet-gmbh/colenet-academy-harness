@@ -19,6 +19,7 @@ Usage:
   board.py [--board FILE] blocked <name> --clear
   board.py [--board FILE] decision <area> <cut|fence|process> --key KEY --text T
   board.py [--board FILE] bundle
+  board.py [--board FILE] news add --title T [--body B] [--kind <info|gate|todo>]
   board.py [--board FILE] escalation open --key KEY --parties ROLE,ROLE --question Q --a T --a-cost C
            --b T --b-cost C --reversible <yes|no> [--touches <vision|money|law|priority>]
   board.py [--board FILE] escalation <route|count>
@@ -66,7 +67,7 @@ set      writes the caller's own session line (found by `name` through `claude a
 ask      posts a question for the owner after a cold reader (`cold_reader.py`) understood it
          without context (`--key` is the crew's `naming.key` or, before the ticket exists, a
          lower-case plan slug like `onboarding-v2`; `proj-12`, a key in lower case, is refused); otherwise the reader's reason goes back as a `note` on the asking
-         session's line and a `returned` news item. Every run past the field check leaves one line
+         session's line and in the refusal; the owner's news gets nothing. Every run past the field check leaves one line
          in board-questions.jsonl, text included. Prints `posted Q<n>`. `--urgent` stamps
          `urgent: true` on the item and the log line; `bundle` lists urgent questions first.
          A `merge-go` question needs `--pr` (a URL, `<owner>/<repo>#<n>` or a number) on an OPEN
@@ -101,10 +102,11 @@ prune    drops what is handled from board.json (docs/board.md § Pruning) and pr
          the route row is), except a one-way merge-go accepted, which `close-merged` takes, and a
          `window-go` accepted, which stays until its asker runs `withdraw` once the go is typed; an
          unanswered `withdrawn` or `superseded` one; a news item the
-         owner marked read; a `returned` item or a bundle (`B-…`) PRUNE_AFTER_H after its `ts`. Escalation
+         owner marked read; a `returned` item at once; a bundle (`B-…`) PRUNE_AFTER_H after its `ts`. Escalation
          items (`E<n>`, `E<n>a`) stay for `escalation settle`. Each drop appends one `pruned` line
          to board-questions.jsonl. Every write of board.json runs the same pass, so leftovers go
-         on the first write after an update.
+         on the first write after an update; it also moves a `decision` or `sample` item and an
+         older item without an id from `news` into `log` (`tidy_news`, the newest LOG_KEEP kept).
          A wait that ends or changes on a line (`set`, `blocked`) appends one row
          `{key, session, waiting_on, since, ended, duration_s}` to board-waits.jsonl.
 log      `log correction <session> <kind>` (the coordinator): one `correction` line in the flow log
@@ -117,13 +119,16 @@ blocked  marks another session's line as blocked (docs/board.md § Blocked worke
          permission prompt still stands) and marks the session's open `access-click` questions
          posted during the wait `obsolete` (`labels.prompt_resolved` and the time), never deleted.
 decision records an owner's cut, fence or process decision of their area (`roles.<area>`; `--key`
-         a ticket key or, for a decision without a ticket, a plan slug as in `ask`): one news item
-         `D<n>` of kind `decision`, then one line in board-decisions.jsonl.
+         a ticket key or, for a decision without a ticket, a plan slug as in `ask`): one `log`
+         entry `D<n>` of kind `decision`, then one line in board-decisions.jsonl.
 bundle   the coordinator's evening bundle: one news item `B-<date>` of kind `todo` listing the
          decisions since the last bundle by area and the open questions oldest first, then a
          marker line in board-decisions.jsonl. Nothing to show prints `bundle: nothing`. It runs
          `escalation route` first and lists the open bundle-stage escalations after the open
          questions.
+news     `news add` (the coordinator): one item `N<n>` for the owner at the top of `news`, kind
+         `info` (default), `gate` or `todo`, a one-line `--title` and an optional `--body`;
+         prints the item. The pane's News frame is for the owner: milestones, gates, todos.
 escalation the decision story between two owners (docs/board.md § Escalations): events in
          board-escalations.jsonl (`open`, `route`, `advise`, `settle`), a record is the fold of
          its events. `open` (a session holding one of the two `--parties` roles) writes `E<n>` at
@@ -183,7 +188,7 @@ move     moves a story to another state when that state's entry rule holds (docs
          any state but done with --already-fixed <owner>/<repo>#<n> (a merged PR fixed it
          before it was built; row `via: already-fixed`, `pr`); a `done`
          move carries the transition and then the acceptance comment, and every
-         `acceptance.done_sample`-th `via: receipt` row adds a `sample` news item. A
+         `acceptance.done_sample`-th `via: receipt` row adds a `sample` `log` entry. A
          refusal prints `board.py move <KEY> <state>: refused: <reason>` per failure.
          Both write one row to board-transitions.jsonl after every rule passed, call the
          ticketing adapter once (`ticket_adapter.py`, by `board.ticketing`) and, with
@@ -287,7 +292,12 @@ DELIVERED_KINDS = KINDS  # the answer kinds the deliverer carries; `read` is not
 PRUNE_AFTER_H = 24
 # board-questions.jsonl outcomes that take a question off the board for good
 GONE = ("withdrawn", "superseded")
-EXPIRING_NEWS_KINDS = ("returned",)
+# A `returned` item is the asker's, who has it as its line's note: it leaves `news` on the next write.
+RETURNED_KIND = "returned"
+# The board's `log` (docs/board.md § News): what is kept for the record, not for the owner to read.
+LOG_KINDS = ("decision", "sample")
+LOG_KEEP = 50  # newest entries `log` keeps; board-decisions.jsonl and the transitions log keep all
+NEWS_KINDS = ("info", "gate", "todo")  # what `news add` writes
 BUNDLE_ID = re.compile(r"B-\d{4}-\d{2}-\d{2}(?:-\d+)?")
 ESCALATION_ID = re.compile(r"E\d+a?")  # owned by `escalation route|settle`, never pruned
 
@@ -421,7 +431,8 @@ class StateDir:
         board = self.board()
         result = mutate(board)
         pruned = self.last_pruned = prune(board, self, self.now or _now())
-        if result is UNCHANGED and not pruned:
+        tidied = tidy_news(board)
+        if result is UNCHANGED and not pruned and not tidied:
             return result
         if self.stamps_updated:
             board["updated"] = (self.now or _now()).astimezone().isoformat(timespec="seconds")
@@ -536,7 +547,7 @@ class StateDir:
         pattern = re.compile(re.escape(prefix) + r"(\d+)")
         seen = [
             item.get("id")
-            for field in ("owner_queue", "news")
+            for field in ("owner_queue", "news", "log")
             for item in board.get(field) or []
             if isinstance(item, dict)
         ]
@@ -625,11 +636,15 @@ def prune(board, state, now):
             return {"reason": "withdrawn"}
         if close:
             return answered(item, qid, close)
-        if field == "news" and last.get(qid) == "read":
+        return news_verdict(item, qid) if field == "news" else None
+
+    def news_verdict(item, qid):
+        if last.get(qid) == "read":
             return {"reason": "read"}
-        expiring = item.get("kind") in EXPIRING_NEWS_KINDS or BUNDLE_ID.fullmatch(qid)
+        if item.get("kind") == RETURNED_KIND:
+            return {"reason": "returned"}
         posted = _parse_ts(item.get("ts"))
-        if field == "news" and expiring and posted and now - posted >= after:
+        if BUNDLE_ID.fullmatch(qid) and posted and now - posted >= after:
             return {"reason": "expired"}
         return None
 
@@ -650,6 +665,56 @@ def prune(board, state, now):
         if len(kept) != len(items):
             board[field] = kept
     return lines
+
+
+def _log_entry(item):
+    """One `log` entry from a news item: kept as it is with an id, else (an older line with `text`
+    and `key`, or a bare string) its title made from them; None when nothing readable is left."""
+    if isinstance(item, str):
+        return {"title": item.strip()} if item.strip() else None
+    if not isinstance(item, dict):
+        return None
+    if isinstance(item.get("id"), str) and item["id"]:
+        return item
+    text = str(item.get("text") or "").strip()
+    key = str(item.get("key") or "").strip()
+    title = str(item.get("title") or "").strip() or (
+        f"{key}: {text}" if text and key and key != "—" else text
+    )
+    if not title:
+        return None
+    entry = {"title": title}
+    entry.update({k: item[k] for k in ("body", "ts", "kind") if item.get(k)})
+    return entry
+
+
+def append_log(board, entries):
+    """Append `entries` to the board's `log` (in place), keeping the newest LOG_KEEP."""
+    log = board.get("log") if isinstance(board.get("log"), list) else []
+    board["log"] = (log + list(entries))[-LOG_KEEP:]
+
+
+def tidy_news(board):
+    """Move what is no news for the owner from `news` into `log` (in place): a `decision` or
+    `sample` item, and an older item without an id. Returns whether the board changed."""
+    news = board.get("news")
+    if not isinstance(news, list):
+        return False
+    kept, moved = [], []
+    for item in news:
+        has_id = isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]
+        if has_id and item.get("kind") not in LOG_KINDS:
+            kept.append(item)
+            continue
+        entry = _log_entry(item)
+        if entry is not None:
+            moved.append(entry)
+    if len(kept) == len(news):
+        return False
+    board["news"] = kept
+    if moved:
+        append_log(board, moved)
+    return True
 
 
 def load_crew(start=None):
@@ -1604,19 +1669,12 @@ def cmd_ask(state, args, crew, now):
         text = f"{RETURN_PREFIX}{session}: {reason}"
 
         def returned(board):
-            # Only an empty note or an earlier return is replaced; another note stays and the
-            # news item below carries the return.
+            # Only an empty note or an earlier return is replaced; another note stays. The asker
+            # has the return in its exit and its line, the log in board-questions.jsonl: the
+            # owner's news gets nothing.
             for line in asker_lines(board):
                 if not str(line.get("note") or "").strip() or _is_return_note(line["note"]):
                     line["note"] = text
-            board.setdefault("news", []).append(
-                {
-                    "id": state.next_id("R", board),
-                    "kind": "returned",
-                    "title": f"{fields['key']} {text}",
-                    "ts": base["ts"],
-                }
-            )
 
         state.write_board(
             returned,
@@ -2031,7 +2089,7 @@ def cmd_decision(state, args, crew, now):
             "ts": _iso(now),
             "by": args.area,
         }
-        board.setdefault("news", []).append(item)
+        append_log(board, [item])
         return item
 
     def log(item):
@@ -2099,6 +2157,31 @@ def close_merged(state, now):
 def cmd_close_merged(state, _args, _crew, now):
     gone = close_merged(state, now)
     print("closed: " + (", ".join(gone) if gone else "none"))
+    return 0
+
+
+def cmd_news(state, args, crew, now):
+    """`news add`: one item for the owner at the top of `news` (the coordinator's milestones)."""
+    failures = []
+    if not crew_mod.holds_role(crew, "coordinator", os.environ):
+        failures.append("board.py news add: only the coordinator writes the owner's news")
+    title = (args.title or "").strip()
+    if not title or "\n" in title:
+        failures.append("board.py news add: --title is one non-empty line")
+    if failures:
+        raise BoardError("\n".join(failures))
+
+    def mutate(board):
+        item = {"id": state.next_id("N", board), "kind": args.kind, "title": title}
+        body = (args.body or "").strip()
+        if body:
+            item["body"] = body
+        item["ts"] = _iso(now)
+        news = board.get("news") if isinstance(board.get("news"), list) else []
+        board["news"] = [item, *news]
+        return item
+
+    print(json.dumps(state.write_board(mutate), ensure_ascii=False))
     return 0
 
 
@@ -3305,7 +3388,7 @@ def _sample_keeper(crew):
 
 
 def _sample(state, crew, key, now):
-    """Every `acceptance.done_sample`-th row `to: done, via: receipt` adds one `sample` news
+    """Every `acceptance.done_sample`-th row `to: done, via: receipt` adds one `sample` log
     item for the acceptance keeper; the count is the log's, so it survives restarts.
     `lenses.acceptance.sample` is the lens sampler's (lens_verdict.py) and not read here."""
     n = (crew.get("acceptance") or {}).get("done_sample")
@@ -3319,13 +3402,16 @@ def _sample(state, crew, key, now):
     keeper = _sample_keeper(crew)
 
     def mutate(board):
-        board.setdefault("news", []).append(
-            {
-                "id": state.next_id("S", board),
-                "kind": "sample",
-                "title": f"Sample {key}: accepted by the receipts job, {keeper} checks it post hoc",
-                "ts": _iso(now),
-            }
+        append_log(
+            board,
+            [
+                {
+                    "id": state.next_id("S", board),
+                    "kind": "sample",
+                    "title": f"Sample {key}: accepted by the receipts job, {keeper} checks it post hoc",
+                    "ts": _iso(now),
+                }
+            ],
         )
 
     state.write_board(mutate)
@@ -3542,6 +3628,19 @@ def _add_escalation_verbs(verbs):
     ec.set_defaults(run=cmd_escalation_count)
 
 
+def _add_news_verbs(verbs):
+    verbs.add_parser(
+        "bundle", help="the coordinator's evening bundle as one news item"
+    ).set_defaults(run=cmd_bundle)
+    n = verbs.add_parser("news", help="the owner's news (the coordinator)")
+    steps = n.add_subparsers(dest="step", required=True)
+    add = steps.add_parser("add", help="one item at the top of news, for the owner")
+    add.add_argument("--title", required=True)
+    add.add_argument("--body")
+    add.add_argument("--kind", choices=NEWS_KINDS, default="info")
+    add.set_defaults(run=cmd_news)
+
+
 def _add_staging_verbs(verbs):
     bk = verbs.add_parser("book", help="book staging for this session until a UTC minute")
     bk.add_argument("target", choices=("staging",))
@@ -3754,9 +3853,7 @@ def parser():
     d.add_argument("--text", required=True)
     d.set_defaults(run=cmd_decision)
 
-    verbs.add_parser(
-        "bundle", help="the coordinator's evening bundle as one news item"
-    ).set_defaults(run=cmd_bundle)
+    _add_news_verbs(verbs)
 
     _add_escalation_verbs(verbs)
 

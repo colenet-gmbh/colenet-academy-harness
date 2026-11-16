@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import {
   acceptVariantOf, ageDays, answerPrompt, answersPathOf, clip, countBoard, deliveriesPathOf, freshness, groupSessions, isClosed, isMasterProfile, isResting, lastAnswers,
   liveByName,
-  majorityMode, ownName, pack, parseBoard, sessionAge, shownAnswer, sortQueue, startModeOf, unreadNews,
+  majorityMode, newsShelf, ownName, pack, parseBoard, sessionAge, shelveNews, shownAnswer, sortQueue, startModeOf, unreadNews, wrapTitle,
 } from './board'
 import type { BoardSession, LiveSession } from '../../types'
 
@@ -73,19 +73,28 @@ test('the file parses with missing fields left out', async () => {
   expect(board.news).toEqual([])
 })
 
-test('news keeps items with an id and a title; an unknown kind is left out; a read item drops out', () => {
+test('news keeps items with an id and a title; an unknown kind is kept raw; an item without an id goes to the log; a read item drops out', () => {
   const board = parseBoard(JSON.stringify({
     news: [
       { id: 'N1', title: ' Prod on v2.4.1 ', body: 'rollout done', ts: '2026-10-30', kind: 'gate' },
       { id: 'N2', title: 'Sign the agreement', kind: 'urgent' },
       { id: 'N3' },
       { title: 'no id' },
+      { ts: '2026-11-04T16:14:52Z', key: '—', text: 'Security stays with the security owner' },
+      { ts: '2026-11-04T11:51:46Z', key: 'PROJ-27', text: 'Finish the build first' },
       'loose text',
     ],
+    log: [{ id: 'D2', kind: 'decision', title: 'product cut PROJ-9: web only', ts: '2026-11-01' }, { kind: 'x' }],
   }))
   expect(board.news).toEqual([
     { id: 'N1', title: 'Prod on v2.4.1', body: 'rollout done', ts: '2026-10-30', kind: 'gate' },
-    { id: 'N2', title: 'Sign the agreement', body: undefined, ts: undefined, kind: undefined },
+    { id: 'N2', title: 'Sign the agreement', body: undefined, ts: undefined, kind: undefined, rawKind: 'urgent' },
+  ])
+  expect(board.log).toEqual([
+    { id: 'D2', kind: 'decision', title: 'product cut PROJ-9: web only', ts: '2026-11-01' },
+    { title: 'no id' },
+    { title: 'Security stays with the security owner', ts: '2026-11-04T16:14:52Z' },
+    { title: 'PROJ-27: Finish the build first', ts: '2026-11-04T11:51:46Z' },
   ])
   expect(parseBoard('{"news":"one string"}').news).toEqual([])
   const answers = lastAnswers([
@@ -93,6 +102,39 @@ test('news keeps items with an id and a title; an unknown kind is left out; a re
     '{"id":"N2","answer":"discuss","ts":"2026-10-30T18:00:00Z"}',
   ].join('\n'))
   expect(unreadNews(board.news, answers).map(n => n.id)).toEqual(['N2'])
+})
+
+test("the owner's news holds info, gate, todo and hand-written kinds; decisions, samples and escalations fold into the log; a return shows nowhere", () => {
+  const board = parseBoard(JSON.stringify({
+    news: [
+      { id: 'N1', title: 'RC cut', ts: '2026-11-16T10:00:00Z' },
+      { id: 'N2', kind: 'todo', title: 'Sign it', ts: '2026-11-16T09:00:00Z' },
+      { id: 'R57', kind: 'returned', title: 'PROJ-95 returned to crate: no recommendation', ts: '2026-11-16T15:06:03Z' },
+      { id: 'D21', kind: 'decision', title: 'coordinator process PROJ-89: weekly sync', ts: '2026-11-16T16:13:38Z' },
+      { id: 'S3', kind: 'sample', title: 'Sample PROJ-12', ts: '2026-11-15T12:00:00Z' },
+      { id: 'E1', kind: 'escalation', for: 'escalation', title: 'Escalation E1', ts: '2026-11-16T08:00:00Z' },
+      { id: 'E2', kind: 'escalation', for: 'human', title: 'Escalation E2', ts: '2026-11-16T08:00:00Z' },
+      { id: 'M1', kind: 'milestone', title: 'Prod live', ts: '2026-11-16T07:00:00Z' },
+    ],
+    log: [{ id: 'D20', kind: 'decision', title: 'older decision', ts: '2026-11-16T12:00:00Z' }],
+  }))
+  expect(board.news.map(n => [n.id, newsShelf(n)])).toEqual([
+    ['N1', 'news'], ['N2', 'news'], ['R57', 'none'], ['D21', 'log'], ['S3', 'log'], ['E1', 'log'], ['E2', 'log'], ['M1', 'news'],
+  ])
+  const read = lastAnswers('{"id":"N2","answer":"read","ts":"2026-11-16T11:00:00Z"}')
+  const { news, log } = shelveNews(board, read)
+  expect(news.map(n => n.id)).toEqual(['N1', 'M1'])
+  // Newest first, the board's own log and the folded items together; equal times keep the later first.
+  expect(log.map(l => [l.id, l.kind])).toEqual([['D21', 'decision'], ['D20', 'decision'], ['E2', 'escalation'], ['E1', 'escalation'], ['S3', 'sample']])
+})
+
+test('wrapTitle breaks at spaces into at most two lines and cuts the second', () => {
+  expect(wrapTitle('short', 20)).toEqual(['short'])
+  expect(wrapTitle('one two three four five', 10)).toEqual(['one two', 'three fou…'])
+  expect(wrapTitle('one two three', 10)).toEqual(['one two', 'three'])
+  // A word longer than the line is cut where the line ends.
+  expect(wrapTitle('abcdefghijklmnop qr', 6)).toEqual(['abcdef', 'ghijk…'])
+  expect(wrapTitle('one two three', 10, 1)).toEqual(['one two t…'])
 })
 
 test('priorities as a list or one string make one line; notes is a trimmed string or nothing', () => {

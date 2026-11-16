@@ -8,16 +8,16 @@ import type { EngineInterface, PluginOptions, Register, RenderChildren } from 'c
 type On = Parameters<Register>[0]
 
 import type {
-  BoardAnswerKind, BoardAnswersView, BoardDeliveriesView, BoardDelivery, BoardNewsItem, BoardNewsKind, BoardQueueItem, BoardSession, BoardView,
+  BoardAnswerKind, BoardAnswersView, BoardDeliveriesView, BoardDelivery, BoardLogItem, BoardNewsItem, BoardNewsKind, BoardQueueItem, BoardSession, BoardView,
   BoardWork, FlowPhase, LiveView, WorkNode,
 } from '../../types'
 import {
   acceptVariantOf, ageDays, answersPathOf, clip, countBoard, deliveriesPathOf, freshness, groupSessions, isClosed, isMasterOf, isResting, lampOf, lastAnswers,
-  liveByName, majorityMode, ownName, pack, parseBoard, sessionAge, shownAnswer, sortQueue, stagingLines, startModeOf, unreadNews,
+  liveByName, majorityMode, ownName, pack, parseBoard, sessionAge, shelveNews, shownAnswer, sortQueue, stagingLines, startModeOf, wrapTitle,
 } from './board'
 import type { Lamp, Liveness, SessionGroup, StartMode } from './board'
 import {
-  NOTICE, RESUBMITTED, STUCK_MS, answerLines, stuckAnswers, askerText, ownerText, deliveryLine, isMissed, keyOf, ledgerState, markerRows, noticeMatches, pendingLines, promptTextOf, rowOf,
+  NOTICE, REBUILD_ID, RESUBMITTED, STUCK_MS, answerLines, stuckAnswers, askerText, ownerText, deliveryLine, isMissed, keyOf, ledgerState, markerRows, noticeMatches, pendingLines, promptTextOf, rebuildWaits, rowOf,
   storedHits, versionAtLeast,
 } from './deliver'
 import type { Awaiting, Delivery, Ledger } from './deliver'
@@ -41,6 +41,9 @@ const deliveries = atom({ plugin: 'we', key: 'boardDeliveries' } as const, null,
 const isOpen = atom({ plugin: 'we', key: 'boardOpen' } as const, false)
 const isRestOpen = atom({ plugin: 'we', key: 'boardRestOpen' } as const, false)
 const isNotesOpen = atom({ plugin: 'we', key: 'boardNotesOpen' } as const, false)
+const isLogOpen = atom({ plugin: 'we', key: 'boardLogOpen' } as const, false)
+// How many log lines the open fold shows, newest first.
+const LOG_SHOWN = 20
 const work = atom({ plugin: 'we', key: 'boardWork' } as const, null, { shape: 'board-work-1' })
 // The masters whose work tree is open, by name; every box starts closed.
 const workOpen = atom({ plugin: 'we', key: 'boardWorkOpen' } as const, [], { shape: 'board-work-open-1' })
@@ -70,6 +73,7 @@ const ANSWER: Record<BoardAnswerKind, { label: string; color: string }> = {
   update: { label: 'update asked', color: 'suggestion' },
   withdraw: { label: 'withdrawn', color: 'inactive' },
   read: { label: 'read', color: 'inactive' },
+  rebuild: { label: 'rebuild asked', color: 'inactive' },
 }
 
 const NEWS: Record<BoardNewsKind, { glyph: string; color: string }> = {
@@ -584,6 +588,29 @@ function refreshAll($: $, file: string) {
   })
 }
 
+// Refresh also asks the coordinator to rebuild the board: one `rebuild` answer line, which the deliverer
+// carries like an answer (by prompt in the coordinator's own session, at once when that is this one).
+// None while an earlier request is still owed (deliver.ts rebuildWaits).
+async function askRebuild($: $, file: string) {
+  try {
+    await loadBoard($, file, true)
+    const v = await read($, view)
+    // Without a coordinator the pane already says so in red; nobody would carry the line.
+    if (!coordinatorFor(v?.board) || !v?.path) return
+    const lines = answerLines((await readText($, answersPathOf(v.path))) ?? '')
+    const ledger = ledgerState((await readText($, deliveriesPathOf(v.path))) ?? '')
+    if (rebuildWaits(lines, ledger, await $.clock.now())) return
+    await answerQuestion($, file, REBUILD_ID, 'rebuild')
+  } catch (err) {
+    $.ui.log(`board: rebuild request: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+function refreshPressed($: $, file: string) {
+  refreshAll($, file)
+  $.clock.after(0, () => void askRebuild($, file))
+}
+
 // /board's work, also the flow pane's Board button: a plugin's own $.command.run does not reach its own hook.
 export async function openBoard($: $, options: PluginOptions): Promise<string> {
   await update($, isOpen, () => true)
@@ -693,6 +720,7 @@ export const registerBoard = (on: On, options: PluginOptions) => {
     const ledgerRows = deliveriesView?.rows ?? {}
     const restOpen = await read($, isRestOpen)
     const notesOpen = await read($, isNotesOpen)
+    const logOpen = await read($, isLogOpen)
     const opened = await read($, workOpen)
     const trees = (await read($, work)) ?? {}
     const now = await $.clock.now()
@@ -803,27 +831,50 @@ export const registerBoard = (on: On, options: PluginOptions) => {
       )
     }
 
-    // One news item on one line: Read first so the buttons form a column, then kind glyph, bold title cut
-    // to the line and its age; the body dimmed and indented under it. No blank line between items.
+    const ageText = (ts: string | undefined) => {
+      const days = ageDays(ts, now)
+      return days === undefined ? '' : days === 0 ? 'today' : `${days} d`
+    }
+
+    // One news item: Read first so the buttons form a column, then kind glyph and the bold title on up to
+    // two lines (cut at the end of the second), its age after the last; the body dimmed and indented
+    // under it. No blank line between items.
     const newsItem = (n: BoardNewsItem) => {
       const kind = NEWS[n.kind ?? 'info']
-      const days = ageDays(n.ts, now)
-      const age = days === undefined ? '' : days === 0 ? 'today' : `${days} d`
+      const age = ageText(n.ts)
       const read = { label: 'Read', width: 8 }
       const room = inner - read.width - 1
-      const parts: Part[] = [{ text: `${kind.glyph} `, color: kind.color, bold: true }]
       const ageRoom = age ? age.length + 2 : 0
-      parts.push({ text: clip(n.title, Math.max(8, room - widthOf(parts) - ageRoom)), bold: true })
-      if (age) parts.push({ text: `  ${age}`, dim: true })
+      const title = wrapTitle(n.title, Math.max(8, room - 2 - ageRoom))
       return (
         <Box key={`n-${n.id}`} flexDirection="column">
           <Box flexDirection="row" gap={1}>
             <Button key={`read-${n.id}`} label={read.label} onPress={() => void answerQuestion($, file, n.id, 'read')} />
-            {textLine([parts], room, 't')}
+            <Box flexDirection="column">
+              {title.map((line, i) => {
+                const parts: Part[] = [
+                  ...(i ? [] : [{ text: `${kind.glyph} `, color: kind.color, bold: true }]),
+                  { text: line, bold: true },
+                  ...(age && i === title.length - 1 ? [{ text: `  ${age}`, dim: true }] : []),
+                ]
+                // A second line starts under the title's first letter, past the glyph.
+                return i ? <Box key={`t-${i}`} paddingLeft={2}>{textLine([parts], room - 2, 't')}</Box> : textLine([parts], room, `t-${i}`)
+              })}
+            </Box>
           </Box>
           {n.body ? <Box paddingLeft={read.width + 3}><Text dimColor>{n.body}</Text></Box> : null}
         </Box>
       )
+    }
+
+    // One log line: kind, title cut to the line, age; no button.
+    const logItem = (item: BoardLogItem, i: number) => {
+      const age = ageText(item.ts)
+      const head: Part[] = [{ text: item.kind ? `${item.kind} ` : '', dim: true }]
+      // The fold sits outside a frame, indented by two.
+      const line = width - 2
+      const room = line - widthOf(head) - (age ? age.length + 2 : 0)
+      return textLine([[...head, { text: clip(item.title, Math.max(8, room)) }, ...(age ? [{ text: `  ${age}`, dim: true }] : [])]], line, `l-${i}`)
     }
 
     const verdictOf = (s: BoardSession) => {
@@ -945,7 +996,7 @@ export const registerBoard = (on: On, options: PluginOptions) => {
     // A stale line folded into the rest is counted on the fold's button, never hidden without a trace.
     const restStale = resting.flatMap(g => [...(g.head ? [g.head] : []), ...g.workers]).filter(s => ageOf(s)?.level === 'stale').length
 
-    const news = board ? unreadNews(board.news, given) : []
+    const { news, log } = board ? shelveNews(board, given) : { news: [], log: [] }
     const counts = countBoard(sessions)
     const barWidth = Math.min(20, counts.masters * 4, width - 2)
     const cells = (n: number) => (counts.masters ? Math.round((n / counts.masters) * barWidth) : 0)
@@ -984,6 +1035,19 @@ export const registerBoard = (on: On, options: PluginOptions) => {
               <Text key="t" bold>{`News (${news.length})`}</Text>,
               <Box key="items" flexDirection="column">{news.map(newsItem)}</Box>,
             ])}
+          </Box>
+        )}
+        {log.length > 0 && (
+          <Box flexDirection="column" marginTop={news.length ? 0 : 1}>
+            <Box flexDirection="row">
+              <Button key="log" label={`${logOpen ? '▾' : '▸'} Log (${log.length})`} onPress={() => void update($, isLogOpen, open => !open)} />
+            </Box>
+            {logOpen && (
+              <Box flexDirection="column" paddingLeft={2}>
+                {log.slice(0, LOG_SHOWN).map(logItem)}
+                {log.length > LOG_SHOWN ? <Text dimColor>{`… ${log.length - LOG_SHOWN} older in board.json`}</Text> : null}
+              </Box>
+            )}
           </Box>
         )}
         {board?.notes && (
@@ -1040,7 +1104,7 @@ export const registerBoard = (on: On, options: PluginOptions) => {
           <Box key={`foot-${i}`} flexDirection="row" gap={2} marginTop={i ? 0 : 1}>
             {line.map(b =>
               b.key === 'refresh' ? (
-                <Button key="refresh" hotkey="r" label="Refresh" onPress={() => refreshAll($, file)} />
+                <Button key="refresh" hotkey="r" label="Refresh" onPress={() => refreshPressed($, file)} />
               ) : b.key === 'flow' ? (
                 <Button key="flow" label="Flow" onPress={() => void openFlow($, '')} />
               ) : (
