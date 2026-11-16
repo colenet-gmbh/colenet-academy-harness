@@ -2,8 +2,9 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { paint } from './paint'
 
-// Shaped like a real orchestrator's board: priorities as one string, three news items (one already read)
-// and the older notes string, four questions,
+// Shaped like a real orchestrator's board: priorities as one string, three news items for the owner (one
+// already read), two that are not (a decision, which folds into the log; a question returned to its
+// asker, which shows nowhere), a `log` with a sample and an older news line without an id, the older notes string, four questions,
 // masters with and without workers, one master resting; two sessions carry the restore fields `cwd`
 // and `session_id`, which the pane never shows.
 const BOARD = JSON.stringify({
@@ -15,7 +16,11 @@ const BOARD = JSON.stringify({
       body: 'The rollout hung on a GitHub 502 and was restarted; the lead re-tests once it is live.' },
     { id: 'N2', kind: 'todo', title: 'Sign the processor agreement in the billing dashboard before Friday so the EU checkout can open on time', ts: '2026-10-28' },
     { id: 'N1', title: 'Kernel runs on its own until the money stories merged', ts: '2026-10-27' },
+    { id: 'D4', kind: 'decision', title: 'product cut PROJ-60: EUR only at launch', ts: '2026-10-30T19:00:00Z', by: 'product' },
+    { id: 'R5', kind: 'returned', title: 'PROJ-69 returned to legal: no recommendation', ts: '2026-10-30T18:00:00Z' },
+    { ts: '2026-10-25T10:00:00Z', key: 'PROJ-17', text: 'Kernel paused until the money stories merged' },
   ],
+  log: [{ id: 'S1', kind: 'sample', title: 'Sample PROJ-58: accepted by the receipts job, tess checks it post hoc', ts: '2026-10-29T12:00:00Z' }],
   notes: 'v2.4.1 is tagged, prod still reports v2.4.0: the rollout hung on a GitHub 502 and was restarted.',
   answer_prompts: { accept: '{id}: Vorschlag angenommen' },
   owner_queue: [
@@ -77,8 +82,10 @@ Finish what is open → money → marketing. The kernel runs on its own.
 │ [ Read ] ⚑ v2.4.1 is tagged, prod still reports v2.4.0  today                                    │
 │            The rollout hung on a GitHub 502 and was restarted; the lead re-tests once it is      │
 │            live.                                                                                 │
-│ [ Read ] ◉ Sign the processor agreement in the billing dashboard before Friday so the EU c…  2 d │
+│ [ Read ] ◉ Sign the processor agreement in the billing dashboard before Friday so the EU         │
+│            checkout can open on time  2 d                                                        │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[ ▸ Log (3) ]
 
 [ ▸ Notes ]  v2.4.1 is tagged, prod still reports v2.4.0: the rollout hung on a GitHub 502 and was …
 
@@ -145,11 +152,14 @@ its own.
 
 ╭──────────────────────────────────────────────────────────╮
 │ News (2)                                                 │
-│ [ Read ] ⚑ v2.4.1 is tagged, prod still reports …  today │
+│ [ Read ] ⚑ v2.4.1 is tagged, prod still reports          │
+│            v2.4.0  today                                 │
 │            The rollout hung on a GitHub 502 and was      │
 │            restarted; the lead re-tests once it is live. │
-│ [ Read ] ◉ Sign the processor agreement in the bil…  2 d │
+│ [ Read ] ◉ Sign the processor agreement in the           │
+│            billing dashboard before Friday so the …  2 d │
 ╰──────────────────────────────────────────────────────────╯
+[ ▸ Log (3) ]
 
 [ ▸ Notes ]  v2.4.1 is tagged, prod still reports v2.4.0: t…
 
@@ -240,19 +250,33 @@ test('/board at 100 and 60 columns: frames, cards and folded rest, no line past 
     await ui.press({ key: 'rest' })
     const open = await text()
     await ui.press({ key: 'rest' })
+    await ui.press({ key: 'log' })
+    const log = await text()
+    await ui.press({ key: 'log' })
     await ui.unmount()
-    return { folded, open }
+    return { folded, open, log }
   }
 
   const wide = await draw(100)
   expect(`\n${withoutToggle(wide.folded).join('\n')}`).toBe(AT_100)
   const narrow = await draw(60)
   expect(`\n${withoutToggle(narrow.folded).join('\n')}`).toBe(AT_60)
+  // The log opens under the news, newest first: the decision, the sample, the older line without an id;
+  // the returned question shows nowhere.
+  const logAt = wide.log.indexOf('[ ▾ Log (3) ]')
+  expect(wide.log.slice(logAt, logAt + 4)).toEqual([
+    '[ ▾ Log (3) ]',
+    '  decision product cut PROJ-60: EUR only at launch  today',
+    '  sample Sample PROJ-58: accepted by the receipts job, tess checks it post hoc  1 d',
+    '  PROJ-17: Kernel paused until the money stories merged  5 d',
+  ])
+  expect(narrow.log).toContain('  sample Sample PROJ-58: accepted by the receipts job,…  1 d')
+  for (const line of [...wide.folded, ...wide.log, ...narrow.folded, ...narrow.log]) expect(line.includes('returned to')).toBe(false)
   // Every master with keys carries the closed toggle; at 60 columns it moves to a line of its own.
   expect(wide.folded.filter(line => line.includes('[ ▸ Work ]')).length).toBe(3)
   expect(narrow.folded).toContain('│ [ ▸ Work ]'.padEnd(59) + '│')
-  for (const { folded, open } of [wide, narrow]) {
-    expect(Math.max(...[...folded, ...open].map(line => line.length))).toBeLessThanOrEqual(folded === wide.folded ? 100 : 60)
+  for (const { folded, open, log } of [wide, narrow]) {
+    expect(Math.max(...[...folded, ...open, ...log].map(line => line.length))).toBeLessThanOrEqual(folded === wide.folded ? 100 : 60)
   }
   // The narrow pane breaks between segments, never inside a frame's border.
   expect(narrow.folded.filter(line => line.startsWith('│')).every(line => line.length === 60 && line.endsWith('│'))).toBe(true)

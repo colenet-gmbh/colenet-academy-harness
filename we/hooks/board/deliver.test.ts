@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
-import { answerLines, deliveryLine, isFinal, keyOf, ledgerState, markerRows, noticeMatches, versionAtLeast, writerNote } from './deliver'
+import { answerLines, deliveryLine, isFinal, keyOf, ledgerState, markerRows, noticeMatches, rebuildWaits, versionAtLeast, writerNote } from './deliver'
 
 type T$ = Parameters<TestBody>[0]
 type TOn = Parameters<TestBody>[1]
@@ -753,4 +753,69 @@ test('Taken on a task says the owner does it; an accept_hand wording leaves the 
   await h.click({ id: 'Q1', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
   await clock.advance(3_000)
   expect(h.submitted).toEqual(['Q1: taken — the owner does this task; do not do it yourself (answered from the board pane in foxy)\nThe question: "Rotate the key"\nThe recommendation accepted: "today"'])
+})
+
+// Refresh asks the coordinator to rebuild the board: a `rebuild` line carried like an answer.
+const REBUILD_TEXT =
+  'Rebuild the board: check the session lines, the open questions and the news against the ticketing system, git and the PRs, and correct every stale line (board.py set --for, withdraw, prune)'
+
+test('Refresh in the coordinator session submits the rebuild request there, once until it is stored', async ($, on) => {
+  // Red arm: Refresh only re-read the files; the coordinator never heard that the owner wants the board rebuilt.
+  const { clock, h } = await coordinator($, on, { stores: () => false })
+  await $.command.run({ command: 'board', args: '', origin: { kind: 'composer' } } as never)
+  await clock.settle()
+  const ui = await pane($)
+  await ui.press({ key: 'refresh' })
+  await clock.settle()
+  expect(h.submitted).toEqual([`${REBUILD_TEXT} (Refresh pressed on the board pane in coord)`])
+  // A second press while the first waits unstored adds no line and no prompt.
+  await clock.advance(5_000)
+  await ui.press({ key: 'refresh' })
+  await clock.settle()
+  expect(h.files.get(h.answersPath)!.split('\n').filter(Boolean)).toHaveLength(1)
+  // Stored: its row is delivered, and the next press asks again.
+  await h.store(h.submitted[0]!)
+  await clock.settle()
+  expect(h.rows('rebuild', 'coordinator').map(r => r.delivered)).toEqual([true])
+  await ui.press({ key: 'refresh' })
+  await clock.settle()
+  expect(h.files.get(h.answersPath)!.split('\n').filter(Boolean)).toHaveLength(2)
+  expect(h.sent).toEqual([])
+  await ui.unmount()
+})
+
+test('Refresh in another session appends the rebuild line; a second press waits ten minutes while it is not stored', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  mock.store(on)
+  const h = home($, on, { self: { sessionId: 's-foxy', name: 'foxy' }, ledger: EPOCH })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'board', args: '', origin: { kind: 'composer' } } as never)
+  await clock.settle()
+  const ui = await pane($)
+  await ui.press({ key: 'refresh' })
+  await clock.settle()
+  const lines = () => h.files.get(h.answersPath)!.split('\n').filter(Boolean).map(l => JSON.parse(l) as Record<string, unknown>)
+  expect(lines().map(l => [l.id, l.answer, l.session])).toEqual([['rebuild', 'rebuild', 'foxy']])
+  expect(h.submitted).toEqual([])
+  await clock.advance(60_000)
+  await ui.press({ key: 'refresh' })
+  await clock.settle()
+  expect(lines()).toHaveLength(1)
+  await clock.advance(600_000)
+  await ui.press({ key: 'refresh' })
+  await clock.settle()
+  expect(lines()).toHaveLength(2)
+  await ui.unmount()
+})
+
+test('rebuildWaits: a request younger than ten minutes waits until its coordinator row is delivered', () => {
+  const last = { id: 'rebuild', answer: 'rebuild' as const, ts: iso(T0) }
+  const row = (delivered: boolean) => ({
+    [keyOf('rebuild', iso(T0), 'coordinator')]: { id: 'rebuild', answer_ts: iso(T0), to: 'coord', role: 'coordinator' as const, click_ts: iso(T0), ts: iso(T0 + 1_000), delivered },
+  })
+  expect(rebuildWaits(undefined, {}, T0)).toBe(false)
+  expect(rebuildWaits(last, {}, T0 + 60_000)).toBe(true)
+  expect(rebuildWaits(last, row(false), T0 + 60_000)).toBe(true)
+  expect(rebuildWaits(last, row(true), T0 + 60_000)).toBe(false)
+  expect(rebuildWaits(last, {}, T0 + 600_000)).toBe(false)
 })

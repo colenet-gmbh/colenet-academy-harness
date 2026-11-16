@@ -121,6 +121,20 @@ export type BoardNewsItem = {
   body?: string
   ts?: string
   kind?: BoardNewsKind
+  // The item's `kind` as written when it is none of the three (`decision`, `sample`, `escalation`,
+  // `returned`, …), and `for`, the role or `human` an item is meant for: they decide its shelf (board.ts newsShelf).
+  rawKind?: string
+  for?: string
+}
+
+// One line of the folded log under the news (docs/board.md § News): the board's `log`, an older news item
+// without an id, or a news item that is not for the owner.
+export type BoardLogItem = {
+  id?: string
+  title: string
+  body?: string
+  ts?: string
+  kind?: string
 }
 
 // `staging`: the booking and acceptance board.py mirrors from the crew repo's issues (docs/board.md § Staging).
@@ -139,6 +153,8 @@ export type BoardFile = {
   priorities?: string
   // `news`: items the owner reads and acknowledges, each with its own id.
   news: BoardNewsItem[]
+  // `log`: what board.py keeps for the record (decisions, samples), plus `news` items without an id.
+  log: BoardLogItem[]
   // `notes`: the older free-text field, drawn as a collapsed block under the news.
   notes?: string
   // `answer_prompts`: the orchestrator's own wording of the prompts a press sends.
@@ -175,8 +191,9 @@ export type BoardView = {
 }
 
 // One line of the answers file, <stem>-answers.jsonl (docs/board.md): a press of Accept, Deny, Discuss, More info, Update or
-// Withdraw (a question sent to another human) on a question, or of Read on a news item.
-export type BoardAnswerKind = 'accept' | 'deny' | 'discuss' | 'info' | 'update' | 'withdraw' | 'read'
+// Withdraw (a question sent to another human) on a question, of Read on a news item, or Refresh's
+// request to the coordinator to rebuild the board (`rebuild`, id `rebuild`).
+export type BoardAnswerKind = 'accept' | 'deny' | 'discuss' | 'info' | 'update' | 'withdraw' | 'read' | 'rebuild'
 // The answers the deliverer carries; Read only appends its line.
 export type BoardDeliveredKind = Exclude<BoardAnswerKind, 'read'>
 // The texts a delivery sends, each overridable by the board's `answer_prompts`: one per delivered kind
@@ -247,6 +264,7 @@ declare module 'claude-code' {
       boardOpen: boolean
       boardRestOpen: boolean
       boardNotesOpen: boolean
+      boardLogOpen: boolean
       boardWork: Shaped<BoardWorkView | null>
       boardWorkOpen: Shaped<string[]>
     }

@@ -14,11 +14,14 @@ Finish what is open → money → marketing.
 
 ╭──────────────────────────────────────────────────────────╮
 │ News (2)                                                 │
-│ [ Read ] ⚑ v2.4.1 is tagged, prod still reports …  today │
+│ [ Read ] ⚑ v2.4.1 is tagged, prod still reports          │
+│            v2.4.0  today                                 │
 │            The rollout hung on a GitHub 502 and was      │
 │            restarted; the lead re-tests once it is live. │
-│ [ Read ] ◉ Sign the processor agreement in the bil…  2 d │
+│ [ Read ] ◉ Sign the processor agreement in the           │
+│            billing dashboard before Friday so the …  2 d │
 ╰──────────────────────────────────────────────────────────╯
+[ ▸ Log (3) ]
 
 [ ▸ Notes ]  older free text, folded to its first line
 
@@ -67,7 +70,7 @@ second ● = start mode
 
 From the top: the header with the board's age and a counter (a bar of the masters by lamp, how many
 are active, how many questions wait for you, how many sessions are in CI), the `priorities` line, the
-unread `news` in one frame (§ News) and, when set, the older `notes` folded to one line. Then one frame with every question, oldest first, and one frame per
+unread `news` in one frame with the folded **▸ Log** under it (§ News) and, when set, the older `notes` folded to one line. Then one frame with every question, oldest first, and one frame per
 master with its workers inside, each worker on one line cut to the pane. A master whose group neither
 runs nor waits (`idle` or `done`, workers too) and a headless worker group at rest fold into the
 last line, **+ N idle/other** (with `(k stale)` when k of them are stale), which opens and closes
@@ -78,7 +81,11 @@ breaks a header line between its parts, never inside a frame, so it stays readab
 
 ## News
 
-`news` is a list of short items the orchestrator wants the owner to see, each on one line:
+`news` is a list of short items for the owner: what happened that the owner wants to know (an RC cut,
+prod live, an epic done), what blocks (`gate`) and what the owner must do (`todo`). The coordinator
+writes one with `board.py news add --title "<one line>" [--body "<detail>"] [--kind info|gate|todo]`
+(at the top, id `N<n>`), the machinery writes `todo` items itself (bundle, staging past its SLA,
+signals):
 
 ```json
 "news": [
@@ -93,15 +100,26 @@ breaks a header line between its parts, never inside a frame, so it stays readab
 | Field | Meaning |
 |---|---|
 | `id` | required, unique across `news` and `owner_queue` (both answer into one file); a changed message takes a new id |
-| `title` | required, one line, bold; cut to the pane's width |
+| `title` | required, one line, bold; the pane breaks it onto a second line and cuts it at the end of that |
 | `body` | optional detail, dimmed and indented under the title; keep it to a few lines |
 | `ts` | optional date or ISO timestamp; shown as its age (`today`, `2 d`) |
-| `kind` | optional: `info` (`•`, the default), `gate` (`⚑`, something blocks), `todo` (`◉`, the owner must act) |
+| `kind` | optional: `info` (`•`, the default), `gate` (`⚑`, something blocks), `todo` (`◉`, the owner must act); another kind draws as `info`, except those below |
+| `for` | optional: the role an `escalation` item waits on (§ Escalations) |
 
 The list keeps the file's order, so the orchestrator puts the newest or most urgent first. Each item
 carries **Read** in front; a press appends a `read` line to the answers file (§ Answers) and the item
 leaves the pane at once; `board.py` drops it from `news` on its next write (§ Pruning). Until then
 an item whose newest line is `read` stays hidden. With every item read the frame is gone.
+
+**Not for the owner.** What a session keeps for the record stays out of the frame. Under it,
+**▸ Log (n)** folds the board's `log` (newest first, twenty lines when open, no buttons): a
+`decision` (§ Questions and decisions), a `sample` (§ Acceptance), an `escalation` item whose `for`
+is a role (the holder's signal, § Escalations; one `for: human` stands in the frame), and an older
+`news` item without an `id`. `board.py` writes decisions and samples to `log` itself, and every write
+moves such items, and any `news` item without an `id`, from `news` into `log`, keeping the newest 50
+(`tidy_news`, `LOG_KEEP`). A question the cold reader returned (`returned to <asker>: …`) is its
+asker's: the refusal and the line's `note` carry it, the owner's news never; an older `returned` item
+shows nowhere and goes on the next write (§ Pruning).
 
 `notes` as one string works too: it folds to **▸ Notes** and its first line, dimmed,
 and opens to the whole text on a press. A new board writes `news`.
@@ -154,6 +172,20 @@ files. It needs no `cwd` and nothing is fetched for it:
 | `key`, `title`, `status` | shown as written; a story's `status` stands where the lamp would without a `phase` |
 | `phase` | a story's lamp, one of `/flow`'s phases: `idea`, `draft`, `refined`, `dev`, `ci`, `ci-red`, `ready`, `merged`, `closed` |
 | `children` | a saga's epics, an epic's stories |
+
+## Refresh
+
+**Refresh** (hotkey `r`) re-reads the board file, the answers file, the ledger and the live column, and
+derives every open work tree with a fresh fetch. It also asks the coordinator to rebuild the board: one
+line `{"id": "rebuild", "answer": "rebuild", ts, session}` in the answers file, which the deliverer
+carries like an answer (§ Delivery): by prompt into the coordinator's session (at once when the pane
+runs there), with its ledger row, resubmit and refusal. The prompt is the board's
+`answer_prompts.rebuild`, else `Rebuild the board: check the session lines, the open questions and
+the news against the ticketing system, git and the PRs, and correct every stale line (board.py set
+--for, withdraw, prune)`, followed by `(Refresh pressed on the board pane in <session>)`. A press
+writes no line while the last request is younger than ten minutes and the coordinator's session has
+not stored it yet (`rebuildWaits`, `REBUILD_MS` in `deliver.ts`); without a coordinator it writes none.
+Opening the pane re-reads without asking.
 
 ## Opening it
 
@@ -224,9 +256,10 @@ names are those of the default board. The freeze flag follows the same stem (`fr
 |---|---|
 | `updated` | ISO timestamp of the last write; `board.py` stamps it on every write of the coordinator (a worker's `set` leaves it); the header shows its age, yellow from 2 h, red from 8 h |
 | `updated_by` | who wrote it, shown beside the age |
-| `answer_prompts` | optional `accept`, `accept_hand`, `accept_task`, `deny`, `discuss`, `info`, `update`, `withdraw` and `update_asker` texts the deliverer sends (§ Answers) |
+| `answer_prompts` | optional `accept`, `accept_hand`, `accept_task`, `deny`, `discuss`, `info`, `update`, `withdraw`, `update_asker` and `rebuild` texts the deliverer sends (§ Answers, § Refresh) |
 | `priorities` | a list or one string; the pane shows it as one dimmed line under the header, a list joined with ` · ` |
-| `news[]` | optional: short items with `id`, `title`, `body`, `ts`, `kind`, each with a **Read** button (§ News); `board.py` writes the kinds `decision`, `todo` (the bundle, an escalation at stage `bundle`, and a signal `S<n>` with `for` the role and `key`, § Several humans), `escalation` (a record at stage `escalation`, with `for` the role waited on), `sample` (§ Acceptance), `returned`, which the pane draws as info until it has glyphs for them |
+| `news[]` | optional: short items for the owner with `id`, `title`, `body`, `ts`, `kind`, each with a **Read** button (§ News); `board.py` writes `info`, `gate` and `todo` (`news add`; the bundle, an escalation at stage `bundle`, a signal `S<n>` with `for` the role and `key`, § Several humans; staging past its SLA) and `escalation` (a record at stage `escalation`, with `for` the role waited on, shown in the log) |
+| `log[]` | optional, written by `board.py`: entries kept for the record (`decision`, `sample`, older news without an id), the newest 50; the pane folds them under the news (§ News) |
 | `notes` | optional, older: one free text, folded under the news to its first line (§ News) |
 | `staging` | optional, written by `board.py staging`, `book` and `unbook` only: `synced`, `repo`, `sla_hours`, `booking` (`issue`, `holder`, `until`) and `acceptance` (`issue`, `rc`, `opened`, `due`, `keys`, `past_sla`, `news`), each `null` when none is open; the pane draws one `◇ Staging` line per open one, a booking past its `until` as expired, and the past-SLA mark with the block's `sla_hours` (§ Staging) |
 | `owner_queue[]` | questions only the owner can answer, oldest `since` (YYYY-MM-DD) first, its age in days yellow from 2, red from 7 |
@@ -269,7 +302,7 @@ and its status, the read before any session repeats it or writes the same answer
 | Field | Meaning |
 |---|---|
 | `id` | the question's `owner_queue[].id`, or the item's `news[].id` |
-| `answer` | `accept`, `deny`, `discuss`, `info`, `update` or `withdraw` for a question; `read` for a news item |
+| `answer` | `accept`, `deny`, `discuss`, `info`, `update` or `withdraw` for a question; `read` for a news item; `rebuild` for Refresh's request (id `rebuild`, § Refresh) |
 | `ts` | when it was pressed, ISO UTC |
 | `session` | the name of the session the line was written in, as `claude agents` lists it; `null` when the live column does not know it |
 | `ask`, `recommendation` | the open question's ask and recommendation, verbatim, on a line `board.py` wrote; a pane line takes them from the board item when it is delivered |
@@ -416,10 +449,10 @@ form findings: more than one decision, no recommendation, more than three option
 language than the labels. A question that passes lands in `owner_queue` as `Q<n>` (one above every
 `Q` number on the board, in the answers file and in the log), with `since` and `ts` stamped by the
 script, and prints `posted Q<n>`. One that does not comes back, never silently: exit 1 with
-`returned to <asker>: <reason>`, the same text as the asker's line's `note`, and a news item `R<n>`
-of kind `returned` for the coordinator. The asker's next posted question clears a `returned to`
-note; a note that does not start with `returned to` is never overwritten, and the news item alone
-carries the return. A reader that cannot run (no `claude`, 90 s, no parseable
+`returned to <asker>: <reason>`, the same text as the asker's line's `note`; the owner's news gets
+nothing. The asker's next posted question clears a `returned to` note; a note that does not start
+with `returned to` is never overwritten, and the refusal and the `returned` line in
+`board-questions.jsonl` alone carry the return. A reader that cannot run (no `claude`, 90 s, no parseable
 answer) posts nothing and exits 1 with `reader-error: <cause>`.
 
 Every `ask` past the field check appends one line to `board-questions.jsonl`:
@@ -453,12 +486,13 @@ the board lock (`prune` in `board.py`), and `board.py prune` runs it alone and p
 | a question (or item) an Accept or Deny closed | nothing is owed to its asker any more, since the deliverer finds the asker only on the board: each answer line on the id is older than the ledger's `epoch`, written in the asker's own session, or has an asker row `delivered: true` in `board-deliveries.jsonl` (refused, or not taken 24 h after the answer: a delivered `route` row, which the deliverer writes to the coordinator then, `ROUTE_AFTER_MS` in `deliver.ts`). A close no one carried stays however old, a `duplicate-answer` line changes nothing, an Accept ("Yes, I'll do it") on a one-way merge-go stays until `close-merged` sees its PR merged or closed, and an Accept on a `window-go` stays until its asker runs `board.py withdraw <id> --reason done` once the go is typed |
 | a question its asker took back, unanswered | a `withdrawn` or `superseded` line names it (`board.py withdraw`, `supersede`; § Several humans) |
 | a news item | its newest answer line is `read` |
-| a `returned` item, a bundle `B-<date>` | 24 h after its `ts` (`PRUNE_AFTER_H`) |
+| a `returned` item | at once (reason `returned`): its asker has it |
+| a bundle `B-<date>` | 24 h after its `ts` (`PRUNE_AFTER_H`) |
 | an escalation item `E<n>`, `E<n>a` | never: `escalation settle` drops it |
 
 Discuss, More info and Update keep a question. Each drop appends one line
 `{id, ts, outcome: "pruned", field, reason, answer?}` to `board-questions.jsonl`
-(`reason` `answered`, `withdrawn`, `read` or `expired`), so a dropped id is never handed out again. Leftovers from before the pass go on the
+(`reason` `answered`, `withdrawn`, `read`, `returned` or `expired`), so a dropped id is never handed out again. Leftovers from before the pass go on the
 first write after the update.
 
 ### Blocked workers
@@ -494,7 +528,7 @@ so nobody answers a dead prompt and nothing vanishes silently.
 
 **`decision` — an owner's cut, fence or process decision.** `board.py decision <area>
 <cut|fence|process> --key <KEY> --text "<decision>"` needs the caller to hold `roles.<area>`; a
-decision without a ticket names a plan slug as `--key`, as `ask` does. It writes the news item
+decision without a ticket names a plan slug as `--key`, as `ask` does. It writes the `log` entry
 `{id: "D<n>", kind: "decision", title: "<area> <kind> <KEY>: <decision>", ts, by}`, then appends
 `{id, kind: "decision", title, ts, by, area, decision, key, text}` to `board-decisions.jsonl`.
 
@@ -670,7 +704,7 @@ a rerun writes nothing twice. Every op of the run goes into one `carry:` last li
 `board.py move <KEY> done --comment-file`.
 
 **Sample.** After a `via: receipt` row, every `acceptance.done_sample`-th such row in the log (the
-crew's `acceptance` block, default 5) adds one news item `{id: S<n>, kind: sample, title: "Sample
+crew's `acceptance` block, default 5) adds one `log` entry `{id: S<n>, kind: sample, title: "Sample
 <KEY>: accepted by the receipts job, <keeper> checks it post hoc", ts}` and prints
 `sample: <KEY> → <keeper>`; the keeper is `lenses.acceptance.keeper`, else `roles.acceptance`.
 `via: comment` rows never count; `done_sample: null` writes none. The count is the log's, so it

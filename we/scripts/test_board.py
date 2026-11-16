@@ -484,7 +484,8 @@ LIVE = {
     "updated": "2026-11-03T09:00:00Z",
     "updated_by": "coord",
     "owner_queue": [{"id": "Q7", "session": "asker", "since": "2026-11-01"}],
-    "news": [{"id": "D3", "kind": "decision", "title": "hand-written"}],
+    "news": [{"id": "N2", "kind": "info", "title": "RC cut"}],
+    "log": [{"id": "D3", "kind": "decision", "title": "hand-written"}],
     "sessions": [
         {"name": "lead-12", "state": "build", "now": "phase 2"},
         {"name": "other", "state": "active", "since": "2026-11-02T08:15Z", "note": None},
@@ -1031,12 +1032,8 @@ class TestAskReader:
         after = board_of(crewless)
         assert after["owner_queue"] == before["owner_queue"]
         assert line_of(crewless, "lead-12")["note"] == f"returned to lead-12: {reason}"
-        assert after["news"][-1] == {
-            "id": "R1",
-            "kind": "returned",
-            "title": f"PROJ-12 returned to lead-12: {reason}",
-            "ts": "2026-11-03T10:00:00Z",
-        }
+        # The return is the asker's (exit, note, log line); the owner's news gets nothing.
+        assert after["news"] == before["news"]
         [line] = jsonl(crewless / "board-questions.jsonl")
         assert (line["outcome"], line["reason"], line["ask"]) == (
             "returned",
@@ -1076,14 +1073,18 @@ class TestAskReader:
             "posted ask dropped a note"
         )
 
-    def test_a_return_leaves_an_unrelated_note_and_still_writes_news(self, crewless):
+    def test_a_return_leaves_an_unrelated_note_and_writes_no_news(self, crewless, capsys):
+        """Red arm: every return landed in the owner's news as `returned to <session>`,
+        a line meant for the asker."""
         self.note_on_lead(crewless, "CI red on main")
         answer_with(crewless, {**CLEAR, "form": ["no recommendation"]})
         assert go(crewless, *ask_argv()) == 1
         after = board_of(crewless)
         assert line_of(crewless, "lead-12")["note"] == "CI red on main", "return overwrote a note"
-        assert after["news"][-1]["id"] == "R1"
-        assert after["news"][-1]["title"] == "PROJ-12 returned to lead-12: no recommendation"
+        assert "returned to lead-12: no recommendation" in capsys.readouterr().err
+        assert not any(i.get("kind") == "returned" for i in after["news"])
+        [line] = jsonl(crewless / "board-questions.jsonl")
+        assert line["outcome"] == "returned"
 
     def test_a_return_replaces_an_earlier_return(self, crewless):
         self.note_on_lead(crewless, "returned to lead-12: German text")
@@ -1265,7 +1266,9 @@ class TestDecision:
     def test_the_area_holder_writes_the_item_and_the_line(self, crewed, monkeypatch):
         pin(monkeypatch, "ada")
         assert decide(crewed) == 0
-        item = board_of(crewed)["news"][-1]
+        # A decision is for the record: the board's log, not the owner's news.
+        assert not any(i.get("kind") == "decision" for i in board_of(crewed)["news"])
+        item = board_of(crewed)["log"][-1]
         assert item == {
             "id": "D4",
             "kind": "decision",
@@ -1276,7 +1279,7 @@ class TestDecision:
         [line] = jsonl(crewed / "board-decisions.jsonl")
         assert {k: line[k] for k in item} == item
         assert decide(crewed, kind="cut", text="drop export") == 0
-        assert board_of(crewed)["news"][-1]["id"] == "D5"
+        assert board_of(crewed)["log"][-1]["id"] == "D5"
 
     @pytest.mark.parametrize(
         "who, area, kind, message",
@@ -1301,7 +1304,50 @@ class TestDecision:
         not match naming.key) and filed under an unrelated epic key."""
         pin(monkeypatch, "ada")
         assert decide(crewed, kind="process", key="jira-sync", text="weekly sync") == 0
-        assert board_of(crewed)["news"][-1]["title"] == "product process jira-sync: weekly sync"
+        assert board_of(crewed)["log"][-1]["title"] == "product process jira-sync: weekly sync"
+
+
+class TestNewsAdd:
+    def test_the_coordinator_adds_one_item_at_the_top(self, crewed, monkeypatch, capsys):
+        pin(monkeypatch, "otto")
+        assert (
+            go(
+                crewed,
+                "news",
+                "add",
+                "--title",
+                "RC v2.5.0-rc.1 cut",
+                "--body",
+                "PROJ-40, PROJ-41",
+            )
+            == 0
+        )
+        item = json.loads(capsys.readouterr().out)
+        assert item == {
+            "id": "N3",
+            "kind": "info",
+            "title": "RC v2.5.0-rc.1 cut",
+            "body": "PROJ-40, PROJ-41",
+            "ts": "2026-11-03T10:00:00Z",
+        }
+        assert board_of(crewed)["news"][0] == item
+        assert go(crewed, "news", "add", "--title", "Prod is live", "--kind", "gate") == 0
+        assert [n["id"] for n in board_of(crewed)["news"]][:2] == ["N4", "N3"]
+
+    @pytest.mark.parametrize(
+        "who, title, message",
+        [
+            ("ada", "RC cut", "only the coordinator writes the owner's news"),
+            ("otto", "two\nlines", "--title is one non-empty line"),
+            ("otto", "  ", "--title is one non-empty line"),
+        ],
+    )
+    def test_refusals_write_nothing(self, crewed, monkeypatch, capsys, who, title, message):
+        pin(monkeypatch, who)
+        before = (crewed / "board.json").read_bytes()
+        assert go(crewed, "news", "add", "--title", title) == 1
+        assert message in capsys.readouterr().err
+        assert (crewed / "board.json").read_bytes() == before
 
 
 class TestBundle:
@@ -2622,8 +2668,8 @@ def set_sample(state_dir, sample, keeper=None, lens_sample=None):
     path.write_text(json.dumps(data), encoding="utf-8")
 
 
-def news_of(state_dir, kind):
-    return [n for n in board_of(state_dir).get("news") or [] if n.get("kind") == kind]
+def news_of(state_dir, kind, field="news"):
+    return [n for n in board_of(state_dir).get(field) or [] if n.get("kind") == kind]
 
 
 class TestMoveDone:
@@ -2792,7 +2838,9 @@ class TestMoveDone:
             )
             samples.append(sample)
         assert samples == [None, None, None, None, "sample: PROJ-15 → tess", None]
-        [item] = news_of(crewed, "sample")
+        # A sample is for the acceptance keeper, not the owner: the board's log.
+        assert news_of(crewed, "sample") == []
+        [item] = news_of(crewed, "sample", field="log")
         assert item == {
             "id": "S1",
             "kind": "sample",
@@ -3443,7 +3491,7 @@ class TestPrune:
     def test_read_news_and_expired_returns_and_bundles_go(self, crewless):
         def seed(b):
             b["news"] = [
-                {"id": "D3", "kind": "decision", "title": "read it"},
+                {"id": "N3", "kind": "info", "title": "read it"},
                 {"id": "R1", "kind": "returned", "title": "old", "ts": "2026-11-02T09:00:00Z"},
                 {"id": "R2", "kind": "returned", "title": "fresh", "ts": "2026-11-03T09:00:00Z"},
                 {
@@ -3457,10 +3505,53 @@ class TestPrune:
             ]
 
         board.StateDir(crewless / "board.json", now=NOW).write_board(seed)
-        answered(crewless, "D3", "read", "2026-11-03T09:59:00.000Z")
+        answered(crewless, "N3", "read", "2026-11-03T09:59:00.000Z")
         answered(crewless, "E2", "read", "2026-11-01T09:00:00.000Z")
         go(crewless, "prune")
-        assert [n["id"] for n in board_of(crewless)["news"]] == ["R2", "N5", "E2"]
+        # A returned item goes at once, whatever its age: the asker has it.
+        assert [n["id"] for n in board_of(crewless)["news"]] == ["N5", "E2"]
+        reasons = {q["id"]: q["reason"] for q in jsonl(crewless / "board-questions.jsonl")}
+        assert reasons == {
+            "N3": "read",
+            "R1": "returned",
+            "R2": "returned",
+            "B-2026-11-01": "expired",
+        }
+
+    def test_a_write_moves_decisions_samples_and_lines_without_an_id_into_the_log(self, crewless):
+        """Red arm: the owner's news showed `decision` items and kept the hand-written
+        lines of 04.11. (`text`, `key`, no id), which the pane could not even draw."""
+
+        def seed(b):
+            b["news"] = [
+                {
+                    "ts": "2026-11-04T16:14:52Z",
+                    "key": "—",
+                    "text": "Security stays with its owner",
+                },
+                {"ts": "2026-11-04T11:51:46Z", "key": "PROJ-27", "text": "Finish the build first"},
+                {"ts": "2026-11-03T13:30Z", "kind": "milestone", "title": "infra #1130 merged"},
+                {"id": "N4", "kind": "info", "title": "RC cut"},
+                {"id": "D21", "kind": "decision", "title": "coordinator process PROJ-89: sync"},
+                {"id": "S2", "kind": "sample", "title": "Sample PROJ-15"},
+                "a loose line",
+            ]
+            b["log"] = [{"id": f"D{i}", "kind": "decision", "title": "old"} for i in range(1, 49)]
+
+        board.StateDir(crewless / "board.json", now=NOW).write_board(seed)
+        after = board_of(crewless)
+        assert after["news"] == [{"id": "N4", "kind": "info", "title": "RC cut"}]
+        assert len(after["log"]) == board.LOG_KEEP
+        assert after["log"][-6:] == [
+            {"title": "Security stays with its owner", "ts": "2026-11-04T16:14:52Z"},
+            {"title": "PROJ-27: Finish the build first", "ts": "2026-11-04T11:51:46Z"},
+            {"title": "infra #1130 merged", "ts": "2026-11-03T13:30Z", "kind": "milestone"},
+            {"id": "D21", "kind": "decision", "title": "coordinator process PROJ-89: sync"},
+            {"id": "S2", "kind": "sample", "title": "Sample PROJ-15"},
+            {"title": "a loose line"},
+        ]
+        # The next id counts the log too: D21 is never handed out again.
+        assert board.StateDir(crewless / "board.json").next_id("D", after) == "D49"
 
     def test_a_pruned_id_is_not_handed_out_again(self, crewless):
         board.StateDir(crewless / "board.json").write_board(

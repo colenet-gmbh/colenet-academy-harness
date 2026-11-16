@@ -20,7 +20,7 @@
 import type { BoardAcceptVariant, BoardAnswer, BoardAnswerKind, BoardDeliveredKind, BoardDelivery, BoardDeliveryRole, BoardPromptKind } from '../../types'
 import { answerPrompt } from './board'
 
-const DELIVERED: readonly BoardDeliveredKind[] = ['accept', 'deny', 'discuss', 'info', 'update', 'withdraw']
+const DELIVERED: readonly BoardDeliveredKind[] = ['accept', 'deny', 'discuss', 'info', 'update', 'withdraw', 'rebuild']
 const CLOSING: readonly BoardAnswerKind[] = ['accept', 'deny', 'withdraw']
 
 // How long a pane waits for any ledger row of an answer before it marks the coordinator not running.
@@ -197,7 +197,9 @@ const quoteOf = (line: AnswerLine) => `${questionOf(line)}${line.quote ? `\nThe 
 // reply was read from (`board.py signals`, `via: ticket`), else the pane.
 const WRITTEN = { chat: 'in the chat of', ticket: 'on' } as Record<string, string>
 export const writerNote = (line: AnswerLine) =>
-  ` (answered ${WRITTEN[line.via ?? ''] ?? 'from the board pane in'} ${line.session ?? 'a session without a name'})`
+  line.answer === 'rebuild'
+    ? ` (Refresh pressed on the board pane in ${line.session ?? 'a session without a name'})`
+    : ` (answered ${WRITTEN[line.via ?? ''] ?? 'from the board pane in'} ${line.session ?? 'a session without a name'})`
 
 // The text kind of an answer: an Accept that means "I do it myself" takes its own (`accept`), never
 // "proposal accepted", which a coordinator would read as a go to merge or to do the task.
@@ -250,6 +252,14 @@ export const markerRows = (lines: readonly AnswerLine[], ledger: Ledger, coordin
       rowOf({ line, role: 'coordinator', to: coordinator }, new Date(Date.parse(line.ts) + MARK_AFTER_MS).toISOString(), false, NOT_RUNNING),
     )
 }
+
+// Refresh's request to the coordinator to rebuild the board: one answer line with this id and kind
+// `rebuild`, carried like any answer. A press sends none while the last one is younger than
+// REBUILD_MS and the coordinator's session has not stored it yet (no delivered row).
+export const REBUILD_ID = 'rebuild'
+export const REBUILD_MS = 600_000
+export const rebuildWaits = (last: BoardAnswer | undefined, rows: Record<string, BoardDelivery>, now: number) =>
+  !!last && last.answer === 'rebuild' && now - Date.parse(last.ts) < REBUILD_MS && !rows[keyOf(last.id, last.ts, 'coordinator')]?.delivered
 
 // How long a pressed answer may wait without any delivered row before the pane says so.
 export const STUCK_MS = 300_000

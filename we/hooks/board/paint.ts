@@ -46,7 +46,13 @@ export const paint = (n: Node, width: number): string[] => {
   const gap = num(p.gap)
   let body: string[]
   if (p.flexDirection === 'row') {
-    body = [kids.map(k => paint(k, inner)[0] ?? '').join(' '.repeat(gap))]
+    // Side by side; a child of several lines (a column) keeps its lines, the ones before it padded to their widest.
+    const cols = kids.map(k => paint(k, inner))
+    const widths = cols.map(c => Math.max(0, ...c.map(line => line.length)))
+    const height = Math.max(1, ...cols.map(c => c.length))
+    body = Array.from({ length: height }, (_, r) =>
+      cols.map((c, j) => (j === cols.length - 1 ? (c[r] ?? '') : (c[r] ?? '').padEnd(widths[j] ?? 0))).join(' '.repeat(gap)),
+    )
   } else {
     body = kids.flatMap((k, i) => [...(i && gap ? Array(gap).fill('') : []), ...paint(k, inner)])
   }
