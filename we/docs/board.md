@@ -104,7 +104,6 @@ signals):
 | `body` | optional detail, dimmed and indented under the title; keep it to a few lines |
 | `ts` | optional date or ISO timestamp; shown as its age (`today`, `2 d`) |
 | `kind` | optional: `info` (`•`, the default), `gate` (`⚑`, something blocks), `todo` (`◉`, the owner must act); another kind draws as `info`, except those below |
-| `for` | optional: the role an `escalation` item waits on (§ Escalations) |
 
 The list keeps the file's order, so the orchestrator puts the newest or most urgent first. Each item
 carries **Read** in front; a press appends a `read` line to the answers file (§ Answers) and the item
@@ -113,9 +112,9 @@ an item whose newest line is `read` stays hidden. With every item read the frame
 
 **Not for the owner.** What a session keeps for the record stays out of the frame. Under it,
 **▸ Log (n)** folds the board's `log` (newest first, twenty lines when open, no buttons): a
-`decision` (§ Questions and decisions), a `sample` (§ Acceptance), an `escalation` item whose `for`
-is a role (the holder's signal, § Escalations; one `for: human` stands in the frame), and an older
-`news` item without an `id`. `board.py` writes decisions and samples to `log` itself, and every write
+`decision` (§ Questions and decisions), a `sample` (§ Acceptance), an `escalation` item (the role
+holder's signal, § Escalations; the owner's stage is a `todo`, which stands in the frame), and an
+older `news` item without an `id`. `board.py` writes decisions and samples to `log` itself, and every write
 moves such items, and any `news` item without an `id`, from `news` into `log`, keeping the newest 50
 (`tidy_news`, `LOG_KEEP`). A question the cold reader returned (`returned to <asker>: …`) is its
 asker's: the refusal and the line's `note` carry it, the owner's news never; an older `returned` item
@@ -183,8 +182,11 @@ runs there), with its ledger row, resubmit and refusal. The prompt is the board'
 `answer_prompts.rebuild`, else `Rebuild the board: check the session lines, the open questions and
 the news against the ticketing system, git and the PRs, and correct every stale line (board.py set
 --for, withdraw, prune)`, followed by `(Refresh pressed on the board pane in <session>)`. A press
-writes no line while the last request is younger than ten minutes and the coordinator's session has
-not stored it yet (`rebuildWaits`, `REBUILD_MS` in `deliver.ts`); without a coordinator it writes none.
+writes no line while an earlier request is still owed, newer than the ledger's epoch and without a
+verdict on its coordinator row, so a coordinator that is busy or not running gets one request, not
+one per press; a stored or refused request lets the next press ask again. Before the deliverer's
+first start (no epoch) requests stay ten minutes apart (`rebuildWaits`, `REBUILD_MS` in
+`deliver.ts`). Without a coordinator a press writes none.
 Opening the pane re-reads without asking.
 
 ## Opening it

@@ -46,8 +46,7 @@ const newsOf = (raw: unknown): BoardNewsItem[] => {
     if (!id || !title) continue
     const kind = NEWS_KINDS.includes(n.kind as BoardNewsKind) ? (n.kind as BoardNewsKind) : undefined
     const rawKind = !kind ? str(n.kind) : undefined
-    const forWhom = str(n.for)
-    out.push({ id, title, body: str(n.body), ts: str(n.ts), kind, ...(rawKind ? { rawKind } : {}), ...(forWhom ? { for: forWhom } : {}) })
+    out.push({ id, title, body: str(n.body), ts: str(n.ts), kind, ...(rawKind ? { rawKind } : {}) })
   }
   return out
 }
@@ -71,16 +70,15 @@ const logOf = (log: unknown, news: unknown): BoardLogItem[] => [
   ...(Array.isArray(news) ? news.filter(n => n && typeof n === 'object' && !str((n as Record<string, unknown>).id)) : []),
 ].flatMap(item => logItemOf(item) ?? [])
 
-// Where a news item belongs: `news`, the owner's frame (info, gate, todo, an escalation `for` the
-// human, any kind the coordinator wrote by hand); `log`, folded under it (a decision, a sample, an
-// escalation for a role holder); `none` for a question returned to its asker, whose asker has it.
+// Where a news item belongs: `news`, the owner's frame (info, gate, todo, any kind the coordinator
+// wrote by hand); `log`, folded under it (a decision, a sample, an `escalation` item, which board.py
+// writes only for a role holder: the owner's stage is a `todo`); `none` for a question returned to
+// its asker, whose asker has it.
 export type NewsShelf = 'news' | 'log' | 'none'
-const LOG_KINDS: readonly string[] = ['decision', 'sample']
+const LOG_KINDS: readonly string[] = ['decision', 'sample', 'escalation']
 export const newsShelf = (n: BoardNewsItem): NewsShelf => {
   if (n.rawKind === 'returned') return 'none'
-  if (n.rawKind && LOG_KINDS.includes(n.rawKind)) return 'log'
-  if (n.rawKind === 'escalation') return n.for === 'human' ? 'news' : 'log'
-  return 'news'
+  return n.rawKind && LOG_KINDS.includes(n.rawKind) ? 'log' : 'news'
 }
 
 // The owner's news (unread, in file order) and the log, newest first: the board's `log` with every

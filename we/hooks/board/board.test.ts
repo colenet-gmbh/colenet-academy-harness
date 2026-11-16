@@ -104,7 +104,7 @@ test('news keeps items with an id and a title; an unknown kind is kept raw; an i
   expect(unreadNews(board.news, answers).map(n => n.id)).toEqual(['N2'])
 })
 
-test("the owner's news holds info, gate, todo and an escalation for the human; decisions, samples and role escalations fold into the log; a return shows nowhere", () => {
+test("the owner's news holds info, gate, todo and hand-written kinds; decisions, samples and escalations fold into the log; a return shows nowhere", () => {
   const board = parseBoard(JSON.stringify({
     news: [
       { id: 'N1', title: 'RC cut', ts: '2026-11-16T10:00:00Z' },
@@ -119,13 +119,13 @@ test("the owner's news holds info, gate, todo and an escalation for the human; d
     log: [{ id: 'D20', kind: 'decision', title: 'older decision', ts: '2026-11-16T12:00:00Z' }],
   }))
   expect(board.news.map(n => [n.id, newsShelf(n)])).toEqual([
-    ['N1', 'news'], ['N2', 'news'], ['R57', 'none'], ['D21', 'log'], ['S3', 'log'], ['E1', 'log'], ['E2', 'news'], ['M1', 'news'],
+    ['N1', 'news'], ['N2', 'news'], ['R57', 'none'], ['D21', 'log'], ['S3', 'log'], ['E1', 'log'], ['E2', 'log'], ['M1', 'news'],
   ])
   const read = lastAnswers('{"id":"N2","answer":"read","ts":"2026-11-16T11:00:00Z"}')
   const { news, log } = shelveNews(board, read)
-  expect(news.map(n => n.id)).toEqual(['N1', 'E2', 'M1'])
-  // Newest first, the board's own log and the folded items together.
-  expect(log.map(l => [l.id, l.kind])).toEqual([['D21', 'decision'], ['D20', 'decision'], ['E1', 'escalation'], ['S3', 'sample']])
+  expect(news.map(n => n.id)).toEqual(['N1', 'M1'])
+  // Newest first, the board's own log and the folded items together; equal times keep the later first.
+  expect(log.map(l => [l.id, l.kind])).toEqual([['D21', 'decision'], ['D20', 'decision'], ['E2', 'escalation'], ['E1', 'escalation'], ['S3', 'sample']])
 })
 
 test('wrapTitle breaks at spaces into at most two lines and cuts the second', () => {

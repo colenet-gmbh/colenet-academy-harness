@@ -590,17 +590,16 @@ function refreshAll($: $, file: string) {
 
 // Refresh also asks the coordinator to rebuild the board: one `rebuild` answer line, which the deliverer
 // carries like an answer (by prompt in the coordinator's own session, at once when that is this one).
-// None while the last request is younger than ten minutes and not yet stored (deliver.ts rebuildWaits).
+// None while an earlier request is still owed (deliver.ts rebuildWaits).
 async function askRebuild($: $, file: string) {
   try {
     await loadBoard($, file, true)
-    await loadAnswers($, file, true)
-    await loadDeliveries($, file, true)
-    const coordinator = coordinatorFor((await read($, view))?.board)
+    const v = await read($, view)
     // Without a coordinator the pane already says so in red; nobody would carry the line.
-    if (!coordinator) return
-    const last = (await read($, answers))?.byId[REBUILD_ID]
-    if (rebuildWaits(last, (await read($, deliveries))?.rows ?? {}, await $.clock.now())) return
+    if (!coordinatorFor(v?.board) || !v?.path) return
+    const lines = answerLines((await readText($, answersPathOf(v.path))) ?? '')
+    const ledger = ledgerState((await readText($, deliveriesPathOf(v.path))) ?? '')
+    if (rebuildWaits(lines, ledger, await $.clock.now())) return
     await answerQuestion($, file, REBUILD_ID, 'rebuild')
   } catch (err) {
     $.ui.log(`board: rebuild request: ${err instanceof Error ? err.message : String(err)}`)

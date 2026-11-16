@@ -122,9 +122,8 @@ export type BoardNewsItem = {
   ts?: string
   kind?: BoardNewsKind
   // The item's `kind` as written when it is none of the three (`decision`, `sample`, `escalation`,
-  // `returned`, …), and `for`, the role or `human` an item is meant for: they decide its shelf (board.ts newsShelf).
+  // `returned`, …): it decides the item's shelf (board.ts newsShelf).
   rawKind?: string
-  for?: string
 }
 
 // One line of the folded log under the news (docs/board.md § News): the board's `log`, an older news item

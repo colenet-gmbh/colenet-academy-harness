@@ -784,7 +784,7 @@ test('Refresh in the coordinator session submits the rebuild request there, once
   await ui.unmount()
 })
 
-test('Refresh in another session appends the rebuild line; a second press waits ten minutes while it is not stored', async ($, on) => {
+test('Refresh in another session appends the rebuild line; a second press waits while it is not stored', async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   mock.store(on)
   const h = home($, on, { self: { sessionId: 's-foxy', name: 'foxy' }, ledger: EPOCH })
@@ -804,18 +804,33 @@ test('Refresh in another session appends the rebuild line; a second press waits 
   await clock.advance(600_000)
   await ui.press({ key: 'refresh' })
   await clock.settle()
+  expect(lines()).toHaveLength(1)
+  // The coordinator stored it: the next press asks again.
+  const first = lines()[0]!
+  h.files.set(h.answersPath.replace('-answers', '-deliveries'), `${EPOCH}${JSON.stringify({ id: 'rebuild', answer_ts: first.ts, to: 'coord', role: 'coordinator', click_ts: first.ts, ts: iso(T0 + 700_000), delivered: true })}\n`)
+  await ui.press({ key: 'refresh' })
+  await clock.settle()
   expect(lines()).toHaveLength(2)
   await ui.unmount()
 })
 
-test('rebuildWaits: a request younger than ten minutes waits until its coordinator row is delivered', () => {
-  const last = { id: 'rebuild', answer: 'rebuild' as const, ts: iso(T0) }
-  const row = (delivered: boolean) => ({
-    [keyOf('rebuild', iso(T0), 'coordinator')]: { id: 'rebuild', answer_ts: iso(T0), to: 'coord', role: 'coordinator' as const, click_ts: iso(T0), ts: iso(T0 + 1_000), delivered },
+test('rebuildWaits: any request still owed blocks a new one; a stored or refused one, or one before the epoch, does not', () => {
+  const line = (ms: number) => ({ id: 'rebuild', answer: 'rebuild' as const, ts: iso(ms), session: 'foxy' })
+  const rowOf = (ms: number, delivered: boolean, reason?: string) => ({
+    [keyOf('rebuild', iso(ms), 'coordinator')]: { id: 'rebuild', answer_ts: iso(ms), to: 'coord', role: 'coordinator' as const, click_ts: iso(ms), ts: iso(ms + 1_000), delivered, ...(reason ? { reason } : {}) },
   })
-  expect(rebuildWaits(undefined, {}, T0)).toBe(false)
-  expect(rebuildWaits(last, {}, T0 + 60_000)).toBe(true)
-  expect(rebuildWaits(last, row(false), T0 + 60_000)).toBe(true)
-  expect(rebuildWaits(last, row(true), T0 + 60_000)).toBe(false)
-  expect(rebuildWaits(last, {}, T0 + 600_000)).toBe(false)
+  const epoch = iso(T0 - 3_600_000)
+  expect(rebuildWaits([], { epoch, rows: {} }, T0)).toBe(false)
+  // Red arm (review of #232): a coordinator that stays away got one request per press older than ten minutes.
+  expect(rebuildWaits([line(T0)], { epoch, rows: {} }, T0 + 3_600_000)).toBe(true)
+  expect(rebuildWaits([line(T0)], { epoch, rows: rowOf(T0, false, 'coordinator not running') }, T0 + 3_600_000)).toBe(true)
+  expect(rebuildWaits([line(T0)], { epoch, rows: rowOf(T0, true) }, T0 + 60_000)).toBe(false)
+  expect(rebuildWaits([line(T0)], { epoch, rows: rowOf(T0, false, 'not stored after a resubmit') }, T0 + 60_000)).toBe(false)
+  // An older request still owed blocks even when a newer one was stored.
+  expect(rebuildWaits([line(T0), line(T0 + 1_000)], { epoch, rows: rowOf(T0 + 1_000, true) }, T0 + 60_000)).toBe(true)
+  // A line older than the epoch is never sent and blocks nothing.
+  expect(rebuildWaits([line(T0 - 7_200_000)], { epoch, rows: {} }, T0)).toBe(false)
+  // Before the deliverer's first start: ten minutes apart.
+  expect(rebuildWaits([line(T0)], { rows: {} }, T0 + 60_000)).toBe(true)
+  expect(rebuildWaits([line(T0)], { rows: {} }, T0 + 600_000)).toBe(false)
 })

@@ -254,12 +254,18 @@ export const markerRows = (lines: readonly AnswerLine[], ledger: Ledger, coordin
 }
 
 // Refresh's request to the coordinator to rebuild the board: one answer line with this id and kind
-// `rebuild`, carried like any answer. A press sends none while the last one is younger than
-// REBUILD_MS and the coordinator's session has not stored it yet (no delivered row).
+// `rebuild`, carried like any answer. A press writes none while one is still owed: a request newer
+// than the epoch whose coordinator row holds no verdict (a coordinator that is busy or not running
+// gets one request, not one per press), or, before the deliverer's first start, one younger than
+// REBUILD_MS. A stored request, or a refused one, lets the next press ask again.
 export const REBUILD_ID = 'rebuild'
 export const REBUILD_MS = 600_000
-export const rebuildWaits = (last: BoardAnswer | undefined, rows: Record<string, BoardDelivery>, now: number) =>
-  !!last && last.answer === 'rebuild' && now - Date.parse(last.ts) < REBUILD_MS && !rows[keyOf(last.id, last.ts, 'coordinator')]?.delivered
+export const rebuildWaits = (lines: readonly AnswerLine[], ledger: Ledger, now: number) => {
+  const asked = lines.filter(l => l.id === REBUILD_ID && l.answer === 'rebuild')
+  if (!ledger.epoch) return asked.some(l => now - Date.parse(l.ts) < REBUILD_MS)
+  const epoch = ledger.epoch
+  return asked.some(l => after(l.ts, epoch) && !isFinal(ledger.rows[keyOf(l.id, l.ts, 'coordinator')]))
+}
 
 // How long a pressed answer may wait without any delivered row before the pane says so.
 export const STUCK_MS = 300_000
