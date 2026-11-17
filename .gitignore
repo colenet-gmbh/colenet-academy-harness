@@ -12,3 +12,6 @@ node_modules/
 
 # Legacy council bridge, read by no verb since 7.45.0 (.weside/crew.json replaces it)
 .weside/council.json
+
+# claude plugin eval runs; only the summary evals/results/<date>.md is committed
+evals/results/*/
