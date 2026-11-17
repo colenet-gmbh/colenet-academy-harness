@@ -257,6 +257,8 @@ Then one `we:dev-medium` finisher in `<int>` runs the finish sequence.
 
   - `--squash`/`--rebase` when `.weside/orchestrate.md` names it; gh refuses `--auto` without a
     method outside a terminal.
+  - A code PR with a `plan: waits for <docs PR> and Selected` line (§ Build) is armed only once that
+    docs PR merged and the story is Selected and pulled; no check holds it until then.
   - **Card hit** (and every one-way PR): start a security card worker on the head
     (`<KEY>-card`, through the crew's launcher like any worker, brief per
     `references/worker-dispatch.md` § Card worker); it writes its verdict to a file, you post it
