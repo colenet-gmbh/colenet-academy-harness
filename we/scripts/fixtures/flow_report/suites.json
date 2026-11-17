@@ -1,0 +1,170 @@
+{
+ "a1": [
+  {
+   "status": "COMPLETED",
+   "conclusion": "CANCELLED",
+   "createdAt": "2026-11-02T10:01:00Z",
+   "workflowRun": {
+    "event": "pull_request",
+    "workflow": {
+     "name": "CI"
+    }
+   }
+  },
+  {
+   "status": "COMPLETED",
+   "conclusion": "FAILURE",
+   "createdAt": "2026-11-02T10:01:00Z",
+   "workflowRun": {
+    "event": "pull_request",
+    "workflow": {
+     "name": "Review: Bot"
+    }
+   }
+  }
+ ],
+ "a2": [
+  {
+   "status": "COMPLETED",
+   "conclusion": "SUCCESS",
+   "createdAt": "2026-11-02T11:00:00Z",
+   "workflowRun": {
+    "event": "pull_request",
+    "workflow": {
+     "name": "CI"
+    }
+   }
+  },
+  {
+   "status": "COMPLETED",
+   "conclusion": "SUCCESS",
+   "createdAt": "2026-11-02T11:00:00Z",
+   "workflowRun": {
+    "event": "pull_request",
+    "workflow": {
+     "name": "Review: Bot"
+    }
+   }
+  },
+  {
+   "status": "COMPLETED",
+   "conclusion": "SKIPPED",
+   "createdAt": "2026-11-02T14:00:00Z",
+   "workflowRun": {
+    "event": "pull_request",
+    "workflow": {
+     "name": "CI"
+    }
+   }
+  },
+  {
+   "status": "COMPLETED",
+   "conclusion": "SUCCESS",
+   "createdAt": "2026-11-02T12:00:00Z",
+   "workflowRun": {
+    "event": "pull_request_review",
+    "workflow": {
+     "name": "Review gate rerun"
+    }
+   }
+  }
+ ],
+ "b1": [
+  {
+   "status": "COMPLETED",
+   "conclusion": "SUCCESS",
+   "createdAt": "2026-11-01T09:01:00Z",
+   "workflowRun": {
+    "event": "pull_request",
+    "workflow": {
+     "name": "CI"
+    }
+   }
+  },
+  {
+   "status": "COMPLETED",
+   "conclusion": "SUCCESS",
+   "createdAt": "2026-11-01T09:01:00Z",
+   "workflowRun": {
+    "event": "pull_request",
+    "workflow": {
+     "name": "Review: Bot"
+    }
+   }
+  }
+ ],
+ "c1": [
+  {
+   "status": "COMPLETED",
+   "conclusion": "CANCELLED",
+   "createdAt": "2026-11-03T08:01:00Z",
+   "workflowRun": {
+    "event": "pull_request",
+    "workflow": {
+     "name": "CI"
+    }
+   }
+  }
+ ],
+ "c2": [
+  {
+   "status": "COMPLETED",
+   "conclusion": "SUCCESS",
+   "createdAt": "2026-11-03T09:00:00Z",
+   "workflowRun": {
+    "event": "pull_request",
+    "workflow": {
+     "name": "CI"
+    }
+   }
+  },
+  {
+   "status": "COMPLETED",
+   "conclusion": "SUCCESS",
+   "createdAt": "2026-11-03T09:00:00Z",
+   "workflowRun": {
+    "event": "pull_request",
+    "workflow": {
+     "name": "Review: Bot"
+    }
+   }
+  }
+ ],
+ "d1": [
+  {
+   "status": "IN_PROGRESS",
+   "conclusion": null,
+   "createdAt": "2026-11-09T10:01:00Z",
+   "workflowRun": {
+    "event": "pull_request",
+    "workflow": {
+     "name": "CI"
+    }
+   }
+  }
+ ],
+ "e1": [
+  {
+   "status": "COMPLETED",
+   "conclusion": "SUCCESS",
+   "createdAt": "2026-11-05T10:01:00Z",
+   "workflowRun": {
+    "event": "pull_request",
+    "workflow": {
+     "name": "CI"
+    }
+   }
+  },
+  {
+   "status": "COMPLETED",
+   "conclusion": "SUCCESS",
+   "createdAt": "2026-11-05T10:01:00Z",
+   "workflowRun": {
+    "event": "pull_request",
+    "workflow": {
+     "name": "Review: Bot"
+    }
+   }
+  }
+ ]
+}
