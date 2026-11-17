@@ -8,7 +8,9 @@ For every open entry in `<store>/inbox/` (default `.weside/optimization`; format
 
   applied  a merged PR whose title or body names the entry's key (a whole token, any case) and that
            merged on or after the entry's first-seen date carried it (an older PR cannot have: the
-           entry is a recurrence after an earlier apply): a ledger row `applied` with that PR as `change`, metric `recurrence`, `before` the
+           entry is a recurrence after an earlier apply); a PR that changes a file under
+           `.weside/optimization/` never counts (a retro, an audit or an optimize run lists keys it
+           did not apply, and `/we:optimize` closes its own applies itself): a ledger row `applied` with that PR as `change`, metric `recurrence`, `before` the
            entry's `retro` evidence lines, `after` pending, `review_by` today plus
            `optimization.review_days` (default 30)
   expired  the entry has fewer than two evidence lines and its first-seen date (the file name's) is
@@ -17,7 +19,7 @@ For every open entry in `<store>/inbox/` (default `.weside/optimization`; format
 
 A closed entry's row goes on top of `LEDGER.md`'s table (created with its header when absent) and
 its inbox file is deleted; the caller commits both with the rest of the run. Merged PRs come from
-`gh pr list --state merged --limit 200 --json number,title,body,url,mergedAt` run in the store's repo, or
+`gh pr list --state merged --limit 200 --json number,title,body,url,mergedAt,files` run in the store's repo, or
 from `--prs-json` (the same JSON). Prints one line per closed entry (`applied <key> · <url>`,
 `expired <key> · <n> days, <m> evidence line(s)`) and a final `closed <a> applied, <e> expired,
 <o> open`. Exit 0; 2 when the store, the config or the PR list cannot be read.
@@ -79,7 +81,10 @@ def names_key(key: str, text: str) -> bool:
 
 
 def carried(pr: dict, key: str, seen: datetime.date | None) -> bool:
-    """The PR names the key and did not merge before the entry was first seen."""
+    """The PR names the key, changes no store file and did not merge before the entry was seen."""
+    files = pr.get("files") or []
+    if any(str((f or {}).get("path", "")).startswith(".weside/optimization/") for f in files):
+        return False
     if not names_key(key, f"{pr.get('title') or ''}\n{pr.get('body') or ''}"):
         return False
     merged_at = str(pr.get("mergedAt") or "")[:10]
@@ -104,7 +109,7 @@ def merged_prs(store: Path, prs_json: Path | None) -> list[dict]:
                     "--limit",
                     "200",
                     "--json",
-                    "number,title,body,url,mergedAt",
+                    "number,title,body,url,mergedAt,files",
                 ],
                 cwd=store,
                 capture_output=True,

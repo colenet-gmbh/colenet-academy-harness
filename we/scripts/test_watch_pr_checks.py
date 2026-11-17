@@ -894,14 +894,14 @@ needs_flock = pytest.mark.skipif(not shutil.which("flock"), reason="the lock nee
 
 
 @needs_flock
-def test_a_second_watcher_on_the_same_pr_exits_0_naming_the_holder(tmp_path):
+def test_a_second_watcher_on_the_same_pr_exits_14_naming_the_holder(tmp_path):
     held = _hold(tmp_path, f"pid 4242 head {SHA}")
     try:
         code, out = run(tmp_path, [_green()], "--sha", SHA)
     finally:
         held.close()
     assert (code, out) == (
-        0,
+        14,
         [f"watcher already running on o/r#57: pid 4242 head {SHA} — this one exits"],
     )
     calls = (tmp_path / "calls.log").read_text()

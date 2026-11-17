@@ -94,8 +94,8 @@ The quoted line, why it no longer fits, and the proposed replacement text.
 - **Lifecycle:** `/we:optimize` decides an entry `applied` or `rejected`, writes its ledger row and
   deletes the inbox file in the same commit. Before it decides, `scripts/optimization_close.py`
   closes two kinds by rule (its docstring owns the row it writes): an entry whose key a merged PR's
-  title or body names, merged on or after the entry's first-seen date, is `applied` with that PR as
-  evidence; an entry with fewer than two evidence lines whose first-seen date is
+  title or body names, merged on or after the entry's first-seen date and changing no file under
+  `.weside/optimization/`, is `applied` with that PR as evidence; an entry with fewer than two evidence lines whose first-seen date is
   `optimization.expire_days` or more days old is `expired`. A later finding on a rejected key is a fresh file under
   that key; `/we:optimize` § 3 puts it to the user only when it answers the rejection's reason.
 

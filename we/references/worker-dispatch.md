@@ -107,8 +107,10 @@ Every denial of the worker rights brake is one line in `<state dir>/brakes.jsonl
 `check` names a living session of the same key on stderr: a follow-up goes to it by `SendMessage`.
 After the check `we-worker` refuses a start (exit 3, nothing starts) while the busy workers
 (background sessions and window workers; interactive companions and masters never count) reach
-`workers.max_busy_sessions` or the active account's 5h window is above
-`workers.max_active_5h_percent` (`.weside/config.json`, asked by `/we:setup`; `worker_launch.py
+`workers.max_busy_sessions`, or while no account in the rotation (`cswap list --json`) has room: 7d
+under 95 % and 5h at or under `workers.max_active_5h_percent`; one account with room lets the start
+through, the rotation switches to it. Without the list the active account's 5h decides; without
+`cswap` the check is skipped (`.weside/config.json`, asked by `/we:setup`; `worker_launch.py
 capacity` owns the rule); there is no override flag.
 
 ### Worker rights

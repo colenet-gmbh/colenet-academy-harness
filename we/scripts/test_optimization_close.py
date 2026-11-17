@@ -52,6 +52,14 @@ def store(tmp_path):
             "mergedAt": "2026-11-01T10:00:00Z",
         },
         {
+            "number": 9,
+            "title": "retro: gap--rules-x-md",
+            "body": "",
+            "url": "https://x/pull/9",
+            "mergedAt": "2026-11-16T10:00:00Z",
+            "files": [{"path": ".weside/optimization/inbox/2026-11-15-gap--rules-x-md.md"}],
+        },
+        {
             "number": 8,
             "title": "near miss",
             "body": "gap--agents-md-extra",
@@ -95,7 +103,7 @@ def test_one_applied_by_a_merged_pr_one_expired_the_rest_open(tmp_path):
         sorted(p.name for p in (s / "inbox").iterdir())
         == [
             "2026-10-01-gap--old-md.md",  # old, but two evidence lines
-            "2026-11-15-gap--rules-x-md.md",  # one line, young; the PR naming it merged before it was seen
+            "2026-11-15-gap--rules-x-md.md",  # one line, young; one PR naming it is older, one a store PR
         ]
     )
     rows = (s / "LEDGER.md").read_text().splitlines()

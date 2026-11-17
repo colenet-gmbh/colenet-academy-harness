@@ -41,9 +41,11 @@ Usage:
   worker_launch.py capacity [--repo <dir>] [--prefix <p>]
                                                    exit 0: a worker may start; 3: refused while
                                                    the busy workers (background or window) reach
-                                                   workers.max_busy_sessions (10) or the active
-                                                   account's 5h window (`cswap status --json`) is
-                                                   above workers.max_active_5h_percent (80), both
+                                                   workers.max_busy_sessions (10) or no account in
+                                                   rotation (`cswap list --json`) has 7d under 95 %
+                                                   and 5h at or under
+                                                   workers.max_active_5h_percent (80; unreadable
+                                                   list: the active account's 5h decides), both
                                                    from .weside/config.json, both values named;
                                                    an unreadable value skips its check (stderr;
                                                    silent without cswap on PATH);
@@ -281,14 +283,53 @@ def five_hour_percent() -> float | None:
     return float(pct) if isinstance(pct, (int, float)) and not isinstance(pct, bool) else None
 
 
+SEVEN_DAY_FULL = 95
+
+
+def _pct(window: object) -> float | None:
+    pct = window.get("pct") if isinstance(window, dict) else None
+    return float(pct) if isinstance(pct, (int, float)) and not isinstance(pct, bool) else None
+
+
+def rotation_room(max_pct: float) -> tuple[int, int] | None:
+    """`(with room, in rotation)` over `cswap list --json` `accounts[]`; None when unreadable or
+    without the list. An account is in rotation unless it carries `disabled: true`; it has room
+    when its `usage.sevenDay.pct` is under `SEVEN_DAY_FULL` and its `usage.fiveHour.pct` is at or
+    under `max_pct`. An account without a readable reading has no room. Never reads a name."""
+    try:
+        out = subprocess.run(
+            ["cswap", "list", "--json"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=CSWAP_TIMEOUT_S,
+        )
+        rows = json.loads(out.stdout)["accounts"]
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(rows, list) or not rows:
+        return None
+    in_rotation = [r for r in rows if isinstance(r, dict) and r.get("disabled") is not True]
+    room = 0
+    for row in in_rotation:
+        usage = row.get("usage") if isinstance(row.get("usage"), dict) else {}
+        five, seven = _pct(usage.get("fiveHour")), _pct(usage.get("sevenDay"))
+        if five is not None and seven is not None and seven < SEVEN_DAY_FULL and five <= max_pct:
+            room += 1
+    return room, len(in_rotation)
+
+
 def capacity(repo: Path, prefix: str) -> None:
     """Refuse a new worker (`LaunchError`, exit 3) while the busy background sessions on this
     machine and busy window workers (`claude agents --json`, `status` busy; an interactive row
     counts only when `is_worker` says so: a companion or master is busy whenever it answers its
-    human) reach `workers.max_busy_sessions` or the active
-    account's 5h window is above `workers.max_active_5h_percent`; the refusal names both measured
-    values. A value that cannot be read skips its check with one stderr warning; without `cswap` on
-    PATH (it is optional) the 5h check is skipped silently."""
+    human) reach `workers.max_busy_sessions`, or while no account in rotation has room
+    (`rotation_room`: 7d under 95 %, 5h at or under `workers.max_active_5h_percent`; one with room
+    is enough, the rotation switches to it). When `cswap list --json` is unreadable the active
+    account's 5h window decides as the fallback (`five_hour_percent`, refused above the limit). The
+    refusal names the measured values, never an account. A value that cannot be read skips its
+    check with one stderr warning; without `cswap` on PATH (it is optional) the 5h check is skipped
+    silently."""
     limits = cap_limits(repo)
     max_busy, max_pct = limits["max_busy_sessions"], limits["max_active_5h_percent"]
     try:
@@ -303,20 +344,32 @@ def capacity(repo: Path, prefix: str) -> None:
             f"{prefix}: warning: busy sessions unreadable ({exc}); that check is skipped",
             file=sys.stderr,
         )
-    pct = five_hour_percent() if shutil.which("cswap") else None
-    if pct is None and shutil.which("cswap"):
+    have_cswap = bool(shutil.which("cswap"))
+    room = rotation_room(max_pct) if have_cswap else None
+    pct = five_hour_percent() if have_cswap and room is None else None
+    if have_cswap and room is None and pct is None:
         print(
-            f"{prefix}: warning: the active account's 5h window is unreadable"
-            " (cswap status --json failed); that check is skipped",
+            f"{prefix}: warning: the accounts' 5h windows are unreadable"
+            " (cswap list --json and cswap status --json failed); that check is skipped",
             file=sys.stderr,
         )
-    if (busy is not None and busy >= max_busy) or (pct is not None and pct > max_pct):
+    full = (room is not None and room[0] == 0) or (pct is not None and pct > max_pct)
+    if (busy is not None and busy >= max_busy) or full:
         shown_busy = "?" if busy is None else str(busy)
-        shown_pct = "?" if pct is None else f"{pct:g}"
+        if room is not None:
+            quota = (
+                f"no account in rotation has room (0 of {room[1]} with 7d under"
+                f" {SEVEN_DAY_FULL} % and 5h at or under {max_pct:g} %"
+                if room[0] == 0
+                else f"{room[0]} of {room[1]} accounts in rotation with room (5h limit {max_pct:g} %"
+            )
+        else:
+            shown_pct = "?" if pct is None else f"{pct:g}"
+            quota = f"active account 5h at {shown_pct} % (limit {max_pct:g} %"
         raise LaunchError(
             f"refused, no worker started: {shown_busy} workers busy (limit {max_busy:g},"
-            f" workers.max_busy_sessions), active account 5h at {shown_pct} % (limit {max_pct:g} %,"
-            " workers.max_active_5h_percent); try again later",
+            f" workers.max_busy_sessions), {quota}, workers.max_active_5h_percent);"
+            " try again later",
             3,
         )
 

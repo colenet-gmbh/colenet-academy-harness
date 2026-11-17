@@ -44,6 +44,8 @@
 #       zero steps: the runner never ran it, billing or runner trouble; a rerun cannot fix that;
 #       never when the PR changes a file under .github/workflows/, or its files are unreadable:
 #       a broken `runs-on:` or `if:` fails a job before its first step too, so that stays red)
+#   watcher already running on <repo>#<PR>: <holder> — this one exits      exit 14 (nothing judged:
+#       the holder's notification carries the result)
 # A failed job whose failed-step log names a GitHub/registry 5xx or a network timeout
 # (INFRA_RX) is rerun once (`gh run rerun <id> --failed`, only on its first attempt) with the line
 # `infra: <name> failed on "<match>" — rerun once (run <id>)`, and counts as pending again.
@@ -72,8 +74,9 @@
 # One watcher per PR: the first takes a lock (`flock` on
 # `${WE_STATE_DIR:-~/.claude/we-state}/watch-locks/<owner>-<repo>-<PR>.lock`, holding its pid and
 # head); a second on the same PR prints `watcher already running on <repo>#<PR>: <holder> — this one
-# exits` and exits 0. A second started with `--sha` for another head than the holder's waits for the
-# lock instead (the holder ends with exit 3 on its next read). Without `flock` there is no lock.
+# exits` and exits 14. A second started with `--sha` for another head than the holder's waits for the
+# lock instead, up to the holder's longest gap between two reads (WATCH_MAX_INTERVAL doubled plus an
+# hour of quota sleep): the holder ends with exit 3 on its next read. Without `flock` there is no lock.
 # Quota: before each read (once per interval) it reads `gh api rate_limit`; when core or graphql
 # has fewer than WATCH_QUOTA_FLOOR calls left it prints `quota: <n> left, sleeping until <reset>`
 # and sleeps until that reset instead of polling. The interval never drops under 60 s.
@@ -213,9 +216,9 @@ take_lock() {  # one watcher per PR; a second exits 0 naming the holder (header)
     holder=$(head -n 1 "$LOCK" 2>/dev/null)
     case "$holder" in
       *" head "*) [ -n "$EXPECT" ] && case "${holder##* head }" in "$EXPECT"*) false ;; *) true ;; esac \
-        && flock -w $((INTERVAL * 2 + 60)) 9 ;;
+        && flock -w $((MAX_INTERVAL > INTERVAL ? MAX_INTERVAL * 2 + 3660 : INTERVAL * 2 + 3660)) 9 ;;
       *) false ;;
-    esac || { echo "watcher already running on $REPO#$PR: ${holder:-pid unknown} — this one exits"; exit 0; }
+    esac || { echo "watcher already running on $REPO#$PR: ${holder:-pid unknown} — this one exits"; exit 14; }
   fi
   echo "pid $$" >"$LOCK"
 }

@@ -690,13 +690,37 @@ class TestSettings:
         assert doc["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "timer arm x"
 
 
-# The concurrency cap: busy sessions and the active account's 5h window.
+# The concurrency cap: busy sessions and room in the account rotation.
 
 CSWAP = r"""#!/usr/bin/env python3
 import os, sys
 if os.environ.get("STUB_CSWAP_FAILS"): sys.exit(1)
-print(os.environ["STUB_CSWAP_JSON"])
+if sys.argv[1] == "list":
+    print(os.environ.get("STUB_CSWAP_LIST", "{}"))
+else:
+    print(os.environ["STUB_CSWAP_JSON"])
 """
+
+
+def _account(number, five, seven, active=False, disabled=False):
+    """One `cswap list --json` row in the recorded shape, name fields redacted."""
+    row = {
+        "number": number,
+        "email": "redacted@example.com",
+        "organizationName": "",
+        "organizationUuid": "",
+        "isOrganization": False,
+        "active": active,
+        "usageStatus": "ok",
+        "usage": {"fiveHour": {"pct": five}, "sevenDay": {"pct": seven}},
+    }
+    if disabled:
+        row["disabled"] = True
+    return row
+
+
+def _rotation(*rows):
+    return json.dumps({"schemaVersion": 1, "activeAccountNumber": 1, "accounts": list(rows)})
 
 
 @pytest.fixture
@@ -749,9 +773,62 @@ def test_capacity_skips_the_window_check_without_cswap_and_says_so(cap, monkeypa
     out = cap(1, 99.0)
     assert out.returncode == 0
     assert out.stderr.strip() == (
-        "we-worker: warning: the active account's 5h window is unreadable (cswap status --json"
-        " failed); that check is skipped"
+        "we-worker: warning: the accounts' 5h windows are unreadable (cswap list --json and cswap"
+        " status --json failed); that check is skipped"
     )
+
+
+def test_capacity_starts_while_another_account_in_rotation_has_room(cap, monkeypatch):
+    """The active account is full, another has room: the rotation switches, no refusal."""
+    monkeypatch.setenv(
+        "STUB_CSWAP_LIST",
+        _rotation(_account(1, 91.0, 32.0, active=True), _account(2, 0.0, 77.0)),
+    )
+    out = cap(1, 91.0)
+    assert out.returncode == 0 and out.stderr == ""
+
+
+def test_capacity_refuses_when_no_account_in_rotation_has_room(cap, monkeypatch):
+    monkeypatch.setenv(
+        "STUB_CSWAP_LIST",
+        _rotation(
+            _account(1, 91.0, 32.0, active=True),
+            _account(2, 0.0, 100.0),  # 7d spent
+            _account(3, 0.0, 95.0),  # 7d at the cap
+            _account(4, 0.0, 10.0, disabled=True),  # out of rotation
+            {**_account(5, 0.0, 0.0), "usage": None, "usageStatus": "error"},  # no reading
+        ),
+    )
+    out = cap(1, 2.0)
+    assert out.returncode == 3
+    assert out.stderr.strip() == (
+        "we-worker: refused, no worker started: 1 workers busy (limit 10,"
+        " workers.max_busy_sessions), no account in rotation has room (0 of 4 with 7d under 95 %"
+        " and 5h at or under 80 %, workers.max_active_5h_percent); try again later"
+    )
+    assert "redacted" not in out.stderr
+
+
+def test_capacity_an_account_at_the_5h_limit_has_room(cap, monkeypatch):
+    monkeypatch.setenv("STUB_CSWAP_LIST", _rotation(_account(1, 80.0, 94.0, active=True)))
+    assert cap(1, 99.0).returncode == 0
+
+
+def test_capacity_busy_limit_holds_with_room_in_rotation(cap, monkeypatch):
+    monkeypatch.setenv("STUB_CSWAP_LIST", _rotation(_account(1, 0.0, 0.0, active=True)))
+    out = cap(10, 0.0)
+    assert out.returncode == 3
+    assert (
+        "10 workers busy" in out.stderr and "1 of 1 accounts in rotation with room" in out.stderr
+    )
+
+
+@pytest.mark.parametrize("listing", ["not json", "{}", '{"accounts": []}', '{"accounts": "x"}'])
+def test_capacity_falls_back_to_the_active_account_without_a_list(cap, monkeypatch, listing):
+    monkeypatch.setenv("STUB_CSWAP_LIST", listing)
+    out = cap(1, 81.0)
+    assert out.returncode == 3 and "active account 5h at 81 % (limit 80 %" in out.stderr
+    assert cap(1, 79.0).returncode == 0
 
 
 def test_capacity_refuses_a_limit_that_is_no_number(cap):
