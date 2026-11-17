@@ -24,7 +24,7 @@ Never (every process worker, whatever its key; `never` names the item): secrets 
 destination is the default branch, `main` or `master`, also a bare push from it, `--all`, `--mirror`;
 `ALLOW_COMMIT_TO_MAIN`); guard bypass (a `git push` of a tag, `ALLOW_PUSH_WITHOUT_MAIN`,
 `--no-verify`, `git commit -n`, `core.hooksPath`); the crew's `deny_text` anywhere in the command.
-Merges stay `automerge_gate.py`'s.
+A worker never merges: the worker card says so; no hook judges a merge.
 
 Parse depth: compound commands, `bash|sh -c '…'`, `$( … )`, backticks, `<( … )`, `eval` of a literal
 and heredocs fed to a shell are split into simple commands; inline code of `python -c`, `node -e`,

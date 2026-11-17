@@ -2,9 +2,9 @@
 
 One temp HOME holds two git repos. Crew A sets no `state_dir` (the default folder, as the first
 crew of a host does); crew B sets `state_dir` to a folder of its own. Every step of one crew
-(`board.py set`, `board.py ask`, a pane answer through `hooks/board/answer.py`, `board.py freeze`,
-the SessionStart hook `process_on_start.py`) leaves the other crew's files byte-identical; a freeze
-in A stops a merge in A's repo and not in B's; A resolves exactly the paths of 8.10.0 (AC10).
+(`board.py set`, `board.py ask`, a pane answer through `hooks/board/answer.py`, the SessionStart
+hook `process_on_start.py`) leaves the other crew's files byte-identical; A resolves exactly the
+paths of 8.10.0 (AC10).
 AC11: a session of the other crew, a crewless session, or a pin outside the crew cannot write A's
 board.
 
@@ -32,7 +32,6 @@ FIXTURES = REPO / "we" / "scripts" / "fixtures"
 BOARD_PY = PLUGIN / "scripts" / "board.py"
 ANSWER_PY = PLUGIN / "hooks" / "board" / "answer.py"
 PROCESS_HOOK = PLUGIN / "hooks" / "process_on_start.py"
-GATE_DIR = PLUGIN / "hooks"
 
 CLEAR = {"decides": "whether the page goes live tonight", "on_yes": "it ships", "form": []}
 ASK = [
@@ -59,7 +58,7 @@ if args[:1] == ["-p"]:
     sys.stdin.read(); sys.stdout.write(open(os.environ["FAKE_ANSWER"]).read()); sys.exit(0)
 sys.exit(9)
 """
-FAKE_GH = "#!/bin/sh\nexit 1\n"  # no GitHub here: freeze keeps its local flag and says so
+FAKE_GH = "#!/bin/sh\nexit 1\n"  # no GitHub here
 
 
 def _git(where: Path, *args: str) -> None:
@@ -165,14 +164,6 @@ def steps(w, name):
         )
         assert out.returncode == 0, out.stderr
 
-    def freeze():
-        board(w, repo, "freeze", "--reason", f"crew {name} stops")
-        flag = board_path(w, repo).with_name("freeze.json")
-        assert flag.is_file(), f"crew {name}: no freeze flag at {flag}"
-
-    def unfreeze():
-        board(w, repo, "unfreeze")
-
     def session_start():
         payload = json.dumps({"cwd": str(repo), "session_id": f"s-{name}", "source": "startup"})
         out = subprocess.run(
@@ -187,25 +178,7 @@ def steps(w, name):
         )
         assert out.returncode == 0, out.stderr
 
-    return [set_line, ask, answer, freeze, unfreeze, session_start]
-
-
-def freeze_refusal(w, repo) -> str | None:
-    code = (
-        "import sys, json; sys.path.insert(0, sys.argv[1]); import automerge_gate as g; "
-        "print(json.dumps(g._freeze_refusal(sys.argv[2], sys.argv[3])))"
-    )
-    slug = f"acme/{repo.name}"
-    out = subprocess.run(
-        [sys.executable, "-c", code, str(GATE_DIR), str(repo), slug],
-        env=w["env"],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=60,
-    )
-    assert out.returncode == 0, out.stderr
-    return json.loads(out.stdout.strip().splitlines()[-1])
+    return [set_line, ask, answer, session_start]
 
 
 @pytest.mark.parametrize("actor, other", [("b", "a"), ("a", "b")])
@@ -232,16 +205,6 @@ def test_a_question_of_b_never_reaches_as_queue(world):
     a_questions = world["dir_a"] / "board-questions.jsonl"
     assert not a_questions.exists(), f"crew b's question landed in {a_questions}"
     assert (world["dir_b"] / "board-questions.jsonl").is_file()
-
-
-def test_a_freeze_in_a_stops_a_merge_in_a_and_not_in_b(world):
-    board(world, world["a"], "freeze", "--reason", "release")
-    assert freeze_refusal(world, world["a"]), "no refusal in crew a's own repo"
-    assert freeze_refusal(world, world["b"]) is None
-    board(world, world["a"], "unfreeze")
-    board(world, world["b"], "freeze", "--reason", "release")
-    assert freeze_refusal(world, world["b"])
-    assert freeze_refusal(world, world["a"]) is None
 
 
 def test_crew_a_without_state_dir_keeps_todays_paths(world):

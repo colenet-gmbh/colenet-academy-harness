@@ -90,15 +90,14 @@ caller recorded.
 Carried panel (T2 only): a panel bound to an older head ``old`` stays green on the PR's current
 head ``new`` when every expected lens is green on ``old``, ``old`` is an ancestor of ``new``, and
 the change ``old..new`` touches no file the PR's class hit: the PR is classified on
-``merge-base(<rules ref>, new)..new`` by ``risk_runner`` (the merge hook's own runner, rules and
+``merge-base(<rules ref>, new)..new`` by ``risk_runner`` (the one runner, rules and
 rules ref); class ``T0`` carries, every other class (one-way too) only when the delta's files (``git diff --name-only old
 new``) must miss every hit line's file, and so must the files the default branch changed between
 the PR's bases (``merge-base(<rules ref>, old)..merge-base(<rules ref>, new)``): a merge that keeps
 the branch's side of a hit file leaves it out of ``old..new`` while the PR's diff on it now undoes the
 default branch's change. A class without hit lines carries nothing. A clean merge of the
 default branch therefore carries when it moves no hit file; a delta on a risk path, a head outside the PR's history, a red
-panel, no panel and any git or classifier failure do not. The merge hook carries the PR's last security card
-verdict the same way (``carry``). ``check`` prints ``panel <ID>: carried
+panel, no panel and any git or classifier failure do not. ``check`` prints ``panel <ID>: carried
 from <old> to <new> (<why>)`` in place of the stale line, or the stale line plus ``panel <ID>: not
 carried (<why>)``; ``check_t2`` returns the carried head. ``post`` posts a carried panel on the new head. The carry is
 computed on every ``check``; nothing is written.
@@ -926,8 +925,7 @@ def check_t2(
     root: Path, vid: str, git: risk_runner.Git | None = None, timeout: float | None = None
 ) -> tuple[bool, list[str], str | None]:
     """``check`` plus the head a green T2 panel was carried from (see Carried panel), else None.
-    The merge hook reads it to take the security card from that head too, and passes its own
-    ``git`` and ``timeout`` so the carry stays inside its time budget."""
+    ``git`` and ``timeout`` are the caller's, so a caller can keep the carry inside a time budget."""
     green, lines, _carried, carried_from = _check(root, vid, git, timeout)
     return green, lines, carried_from
 
@@ -1036,8 +1034,7 @@ def carry(  # noqa: PLR0911
     timeout: float = risk_runner.CLASSIFY_TIMEOUT,
 ) -> tuple[bool, str]:
     """(carries, why): whether a green T2 panel on head ``old`` holds for head ``new`` (see
-    Carried panel). Any failure carries nothing. ``git`` and ``timeout`` are the caller's: the
-    merge hook passes its own, cut to its time budget."""
+    Carried panel). Any failure carries nothing. ``git`` and ``timeout`` are the caller's."""
     r = str(root)
     found = risk_runner.rules(r, git)
     if isinstance(found, str):

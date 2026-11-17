@@ -6,9 +6,9 @@ Usage (run as a file, in the repository, on the branch or PR head):
   risk_paths.py <base>
 
 Rules come only from `origin/main:.weside/risk-paths` (`git show`), never from the working tree, so
-a PR that empties or rewrites the rules file is still classified by main's copy. The merge hook
-(`hooks/automerge_gate.py`) runs this script itself, preferring `origin/main`'s blob of it, so a PR
-that changes the classifier does not classify itself either.
+a PR that empties or rewrites the rules file is still classified by main's copy. Callers
+(`risk_runner.py`, a repo's CI) run `origin/main`'s blob of this script where the repo carries one,
+so a PR that changes the classifier does not classify itself either.
 
 Grammar, a subset of the rules file the core classifier reads:
 
@@ -19,12 +19,13 @@ Grammar, a subset of the rules file the core classifier reads:
 `<section>` is one of the one-way classes, in this fixed order of precedence: `brake-change`,
 `money`, `destructive-migration`, `terraform-secrets`; a `review: high` section (two-way):
 `trust-loosening`, `money-path`, `brake-review`, of which the card sections `trust-loosening` and
-`brake-review` also wait in the merge hook for a security card verdict; or `t2` (two-way).
+`brake-review` also call for a security card review (`references/worker-dispatch.md` § Card
+worker); or `t2` (two-way).
 A glob: `**/` matches zero or more whole directories, a bare `**` anything, `*` and `?` stay
 inside one directory, `{a,b}` expands. A `line` or `from` rule, an unknown keyword or section, a
 section without a rule, or a rule before the first section exits 2 naming it. A file without any
 section (empty or comments only) is valid and classifies every diff `T0`: a crew that wants no brake
-says so in a file (the merge hook then says it once per merge); a missing file is not that.
+says so in a file; a missing file is not that.
 
 Diff: `git diff --name-only --no-renames <base>...HEAD`; `<base>` must be an ancestor of
 `origin/main` (a base ahead of main would hide main's own changes), else exit 2.
@@ -53,8 +54,8 @@ ONE_WAY = (
     "destructive-migration",
     "terraform-secrets",
 )
-# Two-way sections that print `review: high`; the card sections among them need the security card
-# verdict (`hooks/automerge_gate.py`).
+# Two-way sections that print `review: high`; the card sections among them call for the security
+# card review (`references/worker-dispatch.md` § Card worker).
 HIGH = ("trust-loosening", "money-path", "brake-review")
 CARD = ("trust-loosening", "brake-review")
 SECTIONS = (*ONE_WAY, *HIGH, "t2")

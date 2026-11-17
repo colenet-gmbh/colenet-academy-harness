@@ -14,7 +14,6 @@ import pytest
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import board  # noqa: E402
-import board_freeze  # noqa: E402
 
 BOARD = {
     "updated_by": "coord",
@@ -155,316 +154,18 @@ class TestAnswer:
         assert sorted({a["session"] for a in got}) == ["one", "two"]
 
 
-FAKE_GH = """#!/usr/bin/env python3
-import json, os, sys
-args = sys.argv[1:]
-with open(os.environ["FAKE_GH_LOG"], "a") as fh:
-    fh.write(json.dumps(args) + "\\n")
-if args[:2] == ["pr", "list"]:
-    repo = args[args.index("-R") + 1]
-    if repo == "o/broken":
-        sys.exit(1)
-    print(json.dumps([
-        {"number": 5, "autoMergeRequest": {"mergeMethod": "SQUASH"}},
-        {"number": 6, "autoMergeRequest": None},
-        {"number": 8, "autoMergeRequest": {"mergeMethod": "MERGE"}},
-    ]))
-elif args[:2] == ["pr", "merge"]:
-    sys.exit(1 if args[2] == "8" else 0)
-elif args[:2] == ["repo", "view"]:
-    print("o/here")
-elif args[:2] == ["issue", "list"]:
-    repo = args[args.index("-R") + 1]
-    if repo == "o/noissue":
-        sys.exit(1)
-    print(json.dumps([{"number": 3}] if repo == "o/frozen" else []))
-elif args[:2] == ["issue", "create"]:
-    repo = args[args.index("-R") + 1]
-    if repo == "o/nocreate":
-        sys.exit(1)
-    print(f"https://github.com/{repo}/issues/41")
-elif args[:2] == ["issue", "close"]:
-    sys.exit(1 if os.environ.get("FAKE_GH_NO_CLOSE") else 0)
-else:
-    sys.exit(3)
-"""
-
-
-@pytest.fixture
-def fake_gh(tmp_path, monkeypatch):
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    gh = bin_dir / "gh"
-    gh.write_text(FAKE_GH)
-    gh.chmod(0o755)
-    log = tmp_path / "gh.log"
-    monkeypatch.setenv("PATH", f"{bin_dir}:{__import__('os').environ['PATH']}")
-    monkeypatch.setenv("FAKE_GH_LOG", str(log))
-    return lambda: [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else []
-
-
-@pytest.fixture
-def watched(state_dir, tmp_path, monkeypatch):
-    """`state_dir/board.json` is the default board the merge hook reads; the cwd has no crew."""
+def test_a_relative_crew_board_file_is_read_beside_the_crew_file(tmp_path, monkeypatch):
     work = tmp_path / "work"
     (work / ".git").mkdir(parents=True)
-    monkeypatch.chdir(work)
-    monkeypatch.setattr(board, "DEFAULT_BOARD", str(state_dir / "board.json"))
-    return state_dir
-
-
-@pytest.mark.usefixtures("fake_gh")
-class TestFreezeTarget:
-    """`freeze`/`unfreeze` write only where the merge hook reads (`board_freeze.watched_board_files`)."""
-
-    def test_freeze_refuses_a_board_the_hook_does_not_read(
-        self, state_dir, tmp_path, monkeypatch, capsys
-    ):
-        work = tmp_path / "work"
-        (work / ".git").mkdir(parents=True)
-        monkeypatch.chdir(work)
-        assert run(state_dir, "freeze", "--reason", "r", "--repo", "o/r") == 1
-        err = capsys.readouterr().err
-        assert f"the merge hook reads no freeze beside {state_dir / 'board.json'}" in err
-        assert not (state_dir / "freeze.json").exists()
-
-    def test_unfreeze_refuses_a_board_the_hook_does_not_read(
-        self, state_dir, tmp_path, monkeypatch, capsys
-    ):
-        work = tmp_path / "work"
-        (work / ".git").mkdir(parents=True)
-        monkeypatch.chdir(work)
-        (state_dir / "freeze.json").write_text(json.dumps({"reason": "x"}))
-        assert run(state_dir, "unfreeze") == 1
-        assert "the merge hook reads no freeze beside" in capsys.readouterr().err
-        assert (state_dir / "freeze.json").exists()
-
-    def test_a_relative_crew_board_file_is_read_beside_the_crew_file(self, tmp_path, monkeypatch):
-        work = tmp_path / "work"
-        (work / ".git").mkdir(parents=True)
-        (work / ".weside" / "state").mkdir(parents=True)
-        (work / ".weside" / "crew.json").write_text(
-            json.dumps(
-                {"version": 2, "roles": {}, "members": {}, "board": {"file": "state/board.json"}}
-            )
+    (work / ".weside" / "state").mkdir(parents=True)
+    (work / ".weside" / "crew.json").write_text(
+        json.dumps(
+            {"version": 2, "roles": {}, "members": {}, "board": {"file": "state/board.json"}}
         )
-        (work / "sub").mkdir()
-        monkeypatch.chdir(work / "sub")
-        target = work / ".weside" / "state" / "board.json"
-        assert (
-            board.main(["--board", str(target), "freeze", "--reason", "r", "--repo", "o/r"]) == 0
-        )
-        flag_file = work / ".weside" / "state" / "freeze.json"
-        assert json.loads(flag_file.read_text())["reason"] == "r"
-        assert board_freeze.watched_board_files(work / "sub", board.DEFAULT_BOARD) == [target]
-
-
-@pytest.mark.usefixtures("fake_gh", "watched")
-class TestFreezeVerbs:
-    """Cases that need the fake `gh` only on PATH."""
-
-    def test_a_failed_listing_still_freezes(self, state_dir):
-        assert run(state_dir, "freeze", "--reason", "r", "--repo", "o/broken") == 0
-        flag = json.loads((state_dir / "freeze.json").read_text())
-        assert flag["not_disarmed"] == [{"repo": "o/broken", "why": "listing the open PRs failed"}]
-
-    def test_without_repo_the_freeze_covers_every_repo_and_disarms_the_current(
-        self, state_dir, monkeypatch
-    ):
-        """owner 06.11.2026: a freeze without --repo, run from the workspace checkout,
-        must still stop a merge in core; it disarms the current repo's armed PRs."""
-        monkeypatch.setattr(board, "_crew_repos", lambda *_a, **_k: ["o/here"])
-        assert run(state_dir, "freeze", "--reason", "r") == 0
-        flag = json.loads((state_dir / "freeze.json").read_text())
-        assert flag["repos"] == ["*"]
-        assert {"repo": "o/here", "number": 5} in flag["disarmed"]
-        assert board_freeze.covers(flag, "acme/core")
-
-    def test_a_repo_that_names_no_repo_is_refused(self, state_dir, capsys):
-        assert run(state_dir, "freeze", "--reason", "r", "--repo", "core") == 1
-        assert "--repo takes OWNER/REPO or '*'" in capsys.readouterr().err
-        assert not (state_dir / "freeze.json").exists()
-
-    def test_a_url_repo_is_stored_as_its_slug(self, state_dir):
-        assert (
-            run(state_dir, "freeze", "--reason", "r", "--repo", "https://github.com/O/R.git") == 0
-        )
-        assert json.loads((state_dir / "freeze.json").read_text())["repos"] == ["o/r"]
-
-    def test_an_explicit_repo_narrows_the_freeze(self, state_dir):
-        assert run(state_dir, "freeze", "--reason", "r", "--repo", "acme/workspace") == 0
-        flag = json.loads((state_dir / "freeze.json").read_text())
-        assert flag["repos"] == ["acme/workspace"] and flag["scoped"] is True
-        assert not board_freeze.covers(flag, "acme/core")
-        assert board_freeze.covers(flag, "acme/workspace")
-
-    def test_a_blank_reason_is_refused(self, state_dir, capsys):
-        assert run(state_dir, "freeze", "--reason", " ", "--repo", "o/r") == 1
-        assert "a freeze needs a reason" in capsys.readouterr().err
-        assert not (state_dir / "freeze.json").exists()
-
-    def test_the_hook_reads_what_freeze_writes(self, state_dir):
-        run(state_dir, "freeze", "--reason", "incident", "--repo", "o/r")
-        flag = board_freeze.read_flag(board_freeze.flag_path(state_dir / "board.json"))
-        assert flag["reason"] == "incident"
-
-
-@pytest.mark.usefixtures("watched")
-class TestFreeze:
-    def test_freeze_writes_the_flag_and_disarms_armed_prs(self, state_dir, fake_gh, capsys):
-        assert run(state_dir, "freeze", "--reason", "incident", "--repo", "o/r", "--by", "k") == 0
-        flag = json.loads((state_dir / "freeze.json").read_text())
-        assert flag["reason"] == "incident" and flag["by"] == "k" and flag["since"]
-        assert flag["disarmed"] == [{"repo": "o/r", "number": 5}]
-        assert flag["not_disarmed"] == [
-            {"repo": "o/r", "number": 8, "why": "--disable-auto failed"}
-        ]
-        merges = [c for c in fake_gh() if c[:2] == ["pr", "merge"]]
-        assert merges == [
-            ["pr", "merge", "5", "-R", "o/r", "--disable-auto"],
-            ["pr", "merge", "8", "-R", "o/r", "--disable-auto"],
-        ]
-        assert json.loads(capsys.readouterr().out)["disarmed"] == flag["disarmed"]
-        assert flag["issues"] == [{"repo": "o/r", "number": 41}]
-        labels = [c for c in fake_gh() if c[:2] == ["label", "create"]]
-        assert labels == [
-            ["label", "create", "merge-freeze", "-R", "o/r", "--color", "b60205", "--force"]
-        ]
-        create = [c for c in fake_gh() if c[:2] == ["issue", "create"]]
-        assert len(create) == 1 and create[0][create[0].index("--label") + 1] == "merge-freeze"
-        assert create[0][create[0].index("--title") + 1] == "Merge freeze: incident"
-
-    def test_unfreeze_removes_the_flag_and_rearms_nothing(self, state_dir, fake_gh, capsys):
-        run(state_dir, "freeze", "--reason", "incident", "--repo", "o/r")
-        capsys.readouterr()
-        before = len(fake_gh())
-        assert run(state_dir, "unfreeze") == 0
-        out = capsys.readouterr().out
-        assert "re-arm through the hook: o/r#5" in out
-        assert not (state_dir / "freeze.json").exists()
-        after = fake_gh()[before:]
-        assert after == [
-            ["issue", "close", "41", "-R", "o/r", "--comment", "Unfrozen: incident"]
-        ]  # closes its own freeze issue, re-arms no PR
-
-    def test_unfreeze_without_a_flag(self, state_dir, capsys):
-        assert run(state_dir, "unfreeze") == 1
-        assert "no freeze stands" in capsys.readouterr().err
-
-    def test_unfreeze_lifts_a_torn_flag(self, state_dir):
-        (state_dir / "freeze.json").write_text("{torn")
-        assert run(state_dir, "unfreeze") == 0
-        assert not (state_dir / "freeze.json").exists()
-
-    @pytest.mark.usefixtures("fake_gh")
-    def test_a_second_freeze_keeps_the_first_ones_disarmed(self, state_dir, capsys):
-        run(state_dir, "freeze", "--reason", "one", "--repo", "o/r")
-        flag = json.loads((state_dir / "freeze.json").read_text())
-        flag["disarmed"].append({"repo": "o/old", "number": 1})
-        (state_dir / "freeze.json").write_text(json.dumps(flag))
-        run(state_dir, "freeze", "--reason", "two", "--repo", "o/r")
-        again = json.loads((state_dir / "freeze.json").read_text())
-        assert again["reason"] == "two" and again["since"] == flag["since"]
-        assert {"repo": "o/old", "number": 1} in again["disarmed"]
-        assert again["disarmed"].count({"repo": "o/r", "number": 5}) == 1
-        capsys.readouterr()
-        run(state_dir, "unfreeze")
-        assert "o/r#5 o/old#1" in capsys.readouterr().out
-
-
-@pytest.mark.usefixtures("fake_gh")
-class TestFreezeIssue:
-    """The freeze reaches GitHub as an open `merge-freeze` issue, which a repo's self-merge judge
-    reads (`fixtures/brake-self-merge/judge.json`)."""
-
-    def test_label_is_the_judges(self):
-        judge = json.loads(
-            (
-                Path(board.__file__).parent / "fixtures" / "brake-self-merge" / "judge.json"
-            ).read_text()
-        )
-        assert judge["freeze_label"] == board_freeze.FREEZE_LABEL
-
-    def test_an_open_freeze_issue_is_not_opened_twice(self, watched, fake_gh):
-        """Red arm: a repo with someone's freeze issue gets none of ours, and unfreeze leaves it."""
-        assert run(watched, "freeze", "--reason", "r", "--repo", "o/frozen") == 0
-        flag = json.loads((watched / "freeze.json").read_text())
-        assert flag["issues"] == []
-        assert not [c for c in fake_gh() if c[:2] == ["issue", "create"]]
-        assert run(watched, "unfreeze") == 0
-        assert not [c for c in fake_gh() if c[:2] == ["issue", "close"]]
-
-    def test_a_failed_issue_write_is_recorded_and_the_flag_stands(self, watched, capsys):
-        """Red arm: an issue that did not open exits 1 naming the repo; the flag stands."""
-        assert run(watched, "freeze", "--reason", "r", "--repo", "o/nocreate") == 1
-        assert "GitHub is not frozen in o/nocreate" in capsys.readouterr().err
-        flag = json.loads((watched / "freeze.json").read_text())
-        assert {"repo": "o/nocreate", "why": "opening the `merge-freeze` issue failed"} in flag[
-            "not_disarmed"
-        ]
-        assert run(watched, "freeze", "--reason", "r", "--repo", "o/noissue") == 1
-        flag = json.loads((watched / "freeze.json").read_text())
-        assert {"repo": "o/noissue", "why": "listing the `merge-freeze` issues failed"} in flag[
-            "not_disarmed"
-        ]
-
-    def test_a_failed_close_says_github_stays_frozen(self, watched, monkeypatch, capsys):
-        run(watched, "freeze", "--reason", "r", "--repo", "o/r")
-        monkeypatch.setenv("FAKE_GH_NO_CLOSE", "1")
-        assert run(watched, "unfreeze") == 1
-        assert "GitHub stays frozen: o/r#41" in capsys.readouterr().err
-        assert not (watched / "freeze.json").exists()
-
-    def test_a_star_freeze_opens_the_issue_in_every_crew_repo(self, watched, monkeypatch):
-        monkeypatch.setattr(board, "_crew_repos", lambda *_a, **_k: ["o/a", "o/b"])
-        assert run(watched, "freeze", "--reason", "r") == 0
-        flag = json.loads((watched / "freeze.json").read_text())
-        assert flag["repos"] == ["*"]
-        assert flag["issues"] == [{"repo": "o/a", "number": 41}, {"repo": "o/b", "number": 41}]
-
-
-class TestFreezePerCrew:
-    """A crew's freeze sits beside its own board, named after the board's stem."""
-
-    def test_flag_names_follow_the_board_stem(self, tmp_path):
-        assert board_freeze.flag_path(tmp_path / "board.json") == tmp_path / "freeze.json"
-        assert (
-            board_freeze.flag_path(tmp_path / "acme-board.json")
-            == tmp_path / "acme-board-freeze.json"
-        )
-
-    @pytest.mark.usefixtures("fake_gh")
-    def test_a_freeze_in_crew_a_does_not_brake_crew_b(self, tmp_path, monkeypatch):
-        """Red arm: crew A (`acme-board.json`) and crew B (`board.json`) keep their boards in one
-        folder; A's freeze stands for A's merge hook and never for B's."""
-        shared = tmp_path / "we-state"
-        shared.mkdir()
-        a, b = tmp_path / "a", tmp_path / "b"
-        boards = ((a, shared / "acme-board.json"), (b, shared / "board.json"))
-        for root, crew_board in ((r, {"file": str(f)}) for r, f in boards):
-            (root / ".git").mkdir(parents=True)
-            (root / ".weside").mkdir()
-            doc = {"version": 2, "roles": {}, "members": {}}
-            if crew_board:
-                doc["board"] = crew_board
-            (root / ".weside" / "crew.json").write_text(json.dumps(doc))
-        default = str(shared / "board.json")
-        monkeypatch.setattr(board, "DEFAULT_BOARD", default)
-        monkeypatch.setattr(board, "_current_repo", lambda: None)
-        monkeypatch.setattr(board, "_crew_repos", lambda *_a, **_k: [])
-        monkeypatch.chdir(a)
-        assert board.main(["freeze", "--reason", "incident in a", "--repo", "o/r"]) == 0
-
-        def standing(root):
-            files = board_freeze.watched_board_files(root, default)
-            return [
-                board_freeze.read_flag(board_freeze.flag_path(f))
-                for f in files
-                if board_freeze.read_flag(board_freeze.flag_path(f)) is not None
-            ]
-
-        assert [f["reason"] for f in standing(a)] == ["incident in a"]
-        assert standing(b) == []
+    )
+    (work / "sub").mkdir()
+    monkeypatch.chdir(work / "sub")
+    assert board.default_board(work / "sub") == work / ".weside" / "state" / "board.json"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -962,25 +663,6 @@ class TestCrewGuard:
         (own / "crew.id").write_text("acme/second-crew\n")
         pin(monkeypatch, "smu")
         assert board.main(argv, now=NOW) == 0
-
-    def test_freeze_passes_without_a_crew(self, crewless, monkeypatch):
-        monkeypatch.setattr(board, "DEFAULT_BOARD", str(crewless / "board.json"))
-        monkeypatch.setattr(board, "_current_repo", lambda: None)
-        monkeypatch.setattr(board, "_crew_repos", lambda *_a, **_k: [])
-        args = board.parser().parse_args(["freeze", "--reason", "stop"])
-        assert board.crew_guard(args, env={}, cwd=crewless / "work") == (None, None)
-
-    def test_unfreeze_passes_the_crewless_rule_but_not_another_crews_stamp(
-        self, crewless, monkeypatch
-    ):
-        # the default board is the test's own, never the host's (a crew may have stamped that one)
-        monkeypatch.setattr(board, "DEFAULT_BOARD", str(crewless / "board.json"))
-        args = board.parser().parse_args(["unfreeze"])
-        assert board.crew_guard(args, env={}, cwd=crewless / "work")[0] is None
-        (crewless / "crew.id").write_text("acme/second-crew\n")
-        args = board.parser().parse_args(["--board", str(crewless / "board.json"), "unfreeze"])
-        refusal, _ = board.crew_guard(args, env={}, cwd=crewless / "work")
-        assert refusal and "acme/second-crew" in refusal
 
     def test_a_crewless_session_may_name_an_unstamped_board(self, crewless):
         assert go(crewless, "set", "state=build") == 0
@@ -3340,17 +3022,6 @@ class TestWaitsLog:
         assert waits(crewless) == []
 
 
-def test_a_star_freeze_without_a_repo_here_records_what_it_could_not_disarm(tmp_path):
-    flag = board_freeze.freeze(
-        tmp_path / "freeze.json", "r", ["*"], "k", gh=lambda _args: None, disarm=[]
-    )
-    assert flag["repos"] == ["*"]
-    assert flag["not_disarmed"] == [
-        {"repo": "*", "why": "no repo here for a `merge-freeze` issue"},
-        {"repo": "*", "why": "no repo here to disarm; armed PRs elsewhere still auto-merge"},
-    ]
-
-
 def answered(state_dir, qid, kind, ts, session="coord"):
     with open(state_dir / "board-answers.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps({"id": qid, "answer": kind, "ts": ts, "session": session}) + "\n")
@@ -3756,7 +3427,7 @@ def test_distinct_lets_another_question_on_the_same_key_and_cause_through(crewle
 
 
 def test_docs_name_every_flag_of_every_verb():
-    """`ask --replace`, `ask --distinct`, `freeze --by` and the answer kind `withdraw`
+    """`ask --replace`, `ask --distinct` and the answer kind `withdraw`
     existed only in the code. Red arm: a flag or answer kind docs/board.md does not name."""
     import argparse  # noqa: PLC0415
 

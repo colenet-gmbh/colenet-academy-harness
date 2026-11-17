@@ -208,7 +208,7 @@ undrawn below that until you widen the terminal or run `/board`.
 **One folder per crew.** A crew's state directory (`crew.py state-dir`) is `WE_STATE_DIR` when set,
 else the crew's `state_dir` (a `~` path or one relative to the crew file in the repo's main worktree, so every worktree shares it), else `~/.claude/we-state`.
 In a repo with a crew the board is the crew's `board.file` when it names one (relative to the crew
-file), else `<state dir>/board.json`; the board's logs, its freeze flag, its crew stamp and
+file), else `<state dir>/board.json`; the board's logs, its crew stamp and
 `l0-served.jsonl` sit in that folder. A second crew on the same machine sets `state_dir` to a folder of
 its own and moves an older shared board there once with `scripts/state_move.py` (dry run, then
 `--apply` while none of its sessions runs; the sources stay as `<name>.migrated-<date>`). A session
@@ -223,16 +223,14 @@ writing `board.py` verb refuses (exit 3, naming both crews and `--board`) when t
 not the board's: a session without a crew (no crew file, an unreadable one, or a pin
 `WESIDE_COMPANION` that is no member of the cwd's crew) on the default board, or any session on a
 board stamped for another crew. `path`, `check`, `escalation list` and `escalation count` only read
-and pass; `freeze` passes, since a brake must stop merges without a crew, and `unfreeze` passes the
-crewless rule (never another crew's stamp). An explicit `--board` on an
+and pass. An explicit `--board` on an
 unstamped file passes. The role hook names a state directory another crew holds (one line, with the
 fix) and a plugin older than the user install that a project-scope install keeps in place.
 
 **Logs per board.** Every JSONL file beside the board carries the board file's stem: `board.json`
 keeps `board-answers.jsonl`, `board-questions.jsonl` and the rest; `acme-board.json` writes
 `acme-board-answers.jsonl` and so on, and counts its `Q`/`D`/`E` ids on its own. Below, the
-names are those of the default board. The freeze flag follows the same stem (`freeze.json`,
-`acme-board-freeze.json`), so a freeze in one crew does not brake another.
+names are those of the default board.
 
 ```json
 {
@@ -270,7 +268,7 @@ names are those of the default board. The freeze flag follows the same stem (`fr
 | `owner_queue[].session`, `.key`, `.ask`, `.recommendation` | who asks, the ticket, the question, the asker's recommendation; **Accept** shows only with a recommendation, **Deny** always |
 | `owner_queue[].to`, `.to_name`, `.label` | optional: a question `board.py ask --to` sent to a human on another machine, that human's name and the ticket label it carries (§ Several humans); its answer comes from the ticket, so the card shows `waiting on <to_name> (label <label>)` and only **Withdraw** |
 | `owner_queue[].key_title`, `.cause`, `.ts` | the ticket's title, why the owner is asked (`merge-go`, `plan`, `prod`, `cut-fence`, `access-click`, `window-go`, `info`; a `window-go` is a go the owner must type in the asking session's own window, its `ask` naming that window and the exact sentence) and when it was posted (ISO UTC); `board.py ask` writes all three |
-| `owner_queue[].pr_url`, `.one_way` | the open PR a `merge-go` question is about and its one-way class (`board.py ask --pr`, `--one-way`); with both, the card shows `approve or merge (<class>): <url>` and names **Accept** **Yes, I'll do it** (it writes `accept`: the owner approves where the merge hook's one-way refusal names the approve as the go, else merges by hand; the refusal stands, and the deliverer sends `accept_hand`, § Answers), and `board.py close-merged` drops the question once the PR is merged or closed |
+| `owner_queue[].pr_url`, `.one_way` | the open PR a `merge-go` question is about and its one-way class (`board.py ask --pr`, `--one-way`); with both, the card shows `approve or merge (<class>): <url>` and names **Accept** **Yes, I'll do it** (it writes `accept`: the owner approves where the repo's one-way gate takes an approve as the go, else merges by hand, and the deliverer sends `accept_hand`, § Answers), and `board.py close-merged` drops the question once the PR is merged or closed |
 | `owner_queue[].kind`, `.source`, `.owner` | `task` (`board.py ask --kind task`: the card offers **Taken** in place of **Accept** and stamps `taken`; the deliverer sends `accept_task`, § Answers); where the ask's fact comes from (`--source`, shown dimmed under the ask); the member who owns the subject (`--owner`, or `--component` resolved through the crew's `members.*.components`): the deliverer sends that session a copy of every answer (§ Answers) |
 | `owner_queue[].urgent`, `.obsolete` | `true` for a question asked `--urgent` (listed first in the bundle); the reason a question became moot (`board.py blocked --clear`, § Blocked workers) |
 | `sessions[].name` | the session's name as `claude agents` lists it; the live column matches on it |
@@ -388,31 +386,6 @@ no answer line, so nothing is carried again, one `duplicate-answer` line in `boa
 and exit 0 with `<id> is closed by <kind>; recorded as a duplicate, nothing runs again`. `--board FILE` names another board file. Without that line
 the question stays open on the pane.
 
-## The freeze flag
-
-`board.py freeze --reason "<why>" [--repo OWNER/REPO ...] [--by <who>]` stops merges (`by`
-defaults to `$WESIDE_COMPANION`, else `$USER`, else `unknown`): it writes
-`freeze.json` beside the board file (`<stem>-freeze.json` for a board not named `board.json`;
-`since`, `by`, `reason`, `repos`, `disarmed`, `not_disarmed`, `issues`), opens an issue labelled
-`merge-freeze` in each named repo (for `*`: the crew file's repo, each member's extra repo present
-here and the current directory's repo) unless one is open there, then disarms every open PR with
-auto-merge armed in the named repos and records each one. The issue is what a repo's one-way
-gate reads (`scripts/fixtures/brake-self-merge/judge.json`); one that fails to open lands in `not_disarmed` and the flag
-stands anyway. Without `--repo` the flag names `*` (every repo) and disarms the current directory's repo:
-a freeze from the wrong checkout must not miss the repo it is for. The hook reads the flag only
-beside the crew's board (§ The file: its `board.file`, else `board.json` in its state directory), so `freeze` and `unfreeze` refuse any other
-`--board`, naming the path. `*` means every repo of the crews reading that board, not every crew:
-a crew with a `board.file` of its own does not see a freeze on the default board. While the file
-stands, the merge hook (`hooks/automerge_gate.py`) refuses every merge and arm in the repos it
-names, naming the reason; a file that does not parse, a flag without `repos` or without
-`scoped: true` and a merge whose repo the hook cannot name count
-as frozen for every repo. `board.py unfreeze` removes it, closes the `merge-freeze` issues it
-opened (one someone else opened, such as the owner's from the phone, stays open; a failed close
-exits 1 naming it) and prints the disarmed PRs to re-arm by hand through the hook; it re-arms none
-itself, so no PR comes back unchecked. The
-flag is a brake against slips, not a boundary: any session can delete it
-(`scripts/board_freeze.py`).
-
 ## Questions and decisions
 
 `board.py` (in the plugin's `scripts/`) writes `board.json` only through one locked writer: an
@@ -442,7 +415,7 @@ crew's `naming.key` or a cause outside the six is refused, one line each, before
 A `merge-go` question also needs `--pr <ref>` (a URL, `<owner>/<repo>#<n>` or a number) on a PR
 `gh pr view` reads as `OPEN`; a merged or closed one is refused before the reader, so no question
 asks about a merge that already happened. `--one-way <class>` (merge-go only) marks a one-way PR:
-the owner approves it where the merge hook's refusal names the approve as the go, else merges it
+the owner approves it where the repo's one-way gate takes an approve as the go, else merges it
 by hand, so the card offers the link and no **Accept**. `board.py close-merged`
 (also run by `bundle` and `/we:merged`) removes every open merge question whose PR
 merged or closed and logs one `closed` line each in `board-questions.jsonl`.

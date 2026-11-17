@@ -143,7 +143,7 @@ When only CI holds the plan's docs PR, the build may start once the Ready panel 
 blob, before the pull: `board.py select` needs the plan on the default branch (with a crew
 `risk.command` its tier fails until then), and In Progress needs Selected. The code PR carries the
 line `plan: waits for <docs PR> and Selected`; once the docs PR merged, run `board.py select`, pull
-the story, then arm (L0 §Units; no gate checks this yet). Otherwise pull the story first: move its ticket Selected → In Progress per `${CLAUDE_PLUGIN_ROOT}/references/ticketing.md`
+the story, then arm (L0 §Units; no gate checks this). Otherwise pull the story first: move its ticket Selected → In Progress per `${CLAUDE_PLUGIN_ROOT}/references/ticketing.md`
 (L0 §Lifecycle; `board.py move`), check the brief's premises (`worker-dispatch.md`
 § Premise check) and decide its code-graph line (§ Code graph in the brief). Choose the effort per
 `${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md` § Choosing the worker. The plan's
@@ -214,7 +214,7 @@ Then one `we:dev-medium` finisher in `<int>` runs the finish sequence.
    `/we:pr` step 4. The `receipt …` line comes only from that script (`/we:pr` step 3). Link the PR to the ticket and move
    no status: In Review is "PR merged and linked" (L0 §Lifecycle) and `/we:merged` sets it.
 4. Run `${CLAUDE_PLUGIN_ROOT}/scripts/watch-pr-checks.sh <PR> --sha <pushed sha>` as a background command,
-   with `--until-merged` once auto-merge is armed (`--human-merge` on a one-way PR, never armed), and next to it one
+   with `--until-merged` once auto-merge is armed (`--human-merge` on a one-way PR the human merges), and next to it one
    `${CLAUDE_PLUGIN_ROOT}/scripts/watch-pr-conflicts.sh <PR>…` over the run's open PRs. The headers list
    the exit codes. One checks watcher per PR: a worker running `/we:ci-review` on it watches until green
    (L0 §Sessions), then you arm it `--until-merged`. Meanwhile refine or prepare the next story.
@@ -243,31 +243,29 @@ Then one `we:dev-medium` finisher in `<int>` runs the finish sequence.
 ## Close the run
 
 - **Who merges what** (the one table; `/we:pr`, the master card and the epic template point here, L0 states the one-way class in brief). Line 1 of the
-  crew's `risk.command` on the diff gives the class; `automerge_gate.py` refuses every merge or arm
-  that breaks a row, every merge from a worker, all of them during a freeze (`board.py freeze`), and
-  an arm while the PR body says `receipt red` (`verification.pre_merge_receipt`).
+  crew's `risk.command` on the diff gives the class; without one, run
+  `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/risk_paths.py origin/<default>` in the PR branch's worktree
+  before the arm. Every PR that is not one-way you arm right after `gh pr create`: a review that must
+  block the merge is a required check of the repo, and GitHub waits for it. No hook checks the arm;
+  this table is an instruction, backed by the human's permission prompts and the repo's ruleset.
 
   | Class | Who arms or merges | Condition |
   |---|---|---|
-  | `T0` | you: `gh pr merge <PR> --auto --merge` | the Codex check has a verdict on the head (below) |
-  | `T2` | you, the same arm | as `T0` |
-  | `T2` with a card hit (`trust-loosening:`, `brake-review:` hit line) | you, the same arm | as `T2`, plus the security card worker's `Overall: PASS` comment on the head (carried over a push that touches no hit file); never the human |
-  | `T2 one-way <class>` | only the human | their approve on the head, then their merge, from a board item |
+  | `T0`, `T2` | you: `gh pr merge <PR> --auto --merge`, right after `gh pr create` | the repo's required checks (GitHub waits) |
+  | `T2` with a card hit (`trust-loosening:`, `brake-review:` hit line) | you, the same arm | as `T2`; the security card verdict is a PR comment for the human and the security owner |
+  | `T2 one-way <class>` | only the human; you never arm it, in any repo | their approve on the head, then their merge, from a board item |
 
-  - **Codex:** whether Codex reviews is the repo's setting (`review.codex_check`, default `Codex
-    Review`, a workflow job). Where the base branch requires that check, arm right after `gh pr
-    create` (GitHub waits); else arm once `/we:ci-review` ends green with every Codex finding read.
-    `--squash`/`--rebase` when `.weside/orchestrate.md` names it; gh refuses `--auto` without a
+  - `--squash`/`--rebase` when `.weside/orchestrate.md` names it; gh refuses `--auto` without a
     method outside a terminal.
   - **Card hit** (and every one-way PR): start a security card worker on the head
     (`<KEY>-card`, through the crew's launcher like any worker, brief per
     `references/worker-dispatch.md` § Card worker); it writes its verdict to a file, you post it
-    unchanged; a push needs a new verdict.
-  - **One-way:** post the T2 panel and the card verdict. For the human's merge write one board item
-    with the PR link, the class and both verdicts (`board.py ask --cause merge-go --pr <url> --one-way <class>`); the
-    closing message says `user merge: one-way (<class>)`. Where the gate's one-way refusal names the
-    human's approve as the go (the repo runs an approve gate), the GitHub approve on the head is that
-    go: ask "please approve", not "please merge", and do nothing after it.
+    unchanged. It is input for the people who read the PR, not a condition of the arm.
+  - **One-way:** post the T2 panel and the card verdict, then write one board item with the PR link,
+    the class and both verdicts (`board.py ask --cause merge-go --pr <url> --one-way <class>`): it
+    waits for the human's merge. The closing message says `user merge: one-way (<class>)`. Ask
+    "please approve" where the gate takes the approve as the go, else "please merge", and do nothing
+    after it.
   - A draft reason (a follow-up still on the branch, an unmerged dependency) keeps the PR a draft per
     `/we:pr` step 4; it is no merge brake. Non-destructive migrations auto-merge serially (owner
     03.10.2026): the second PR arms only after the first landed, merging `origin/<default>`,

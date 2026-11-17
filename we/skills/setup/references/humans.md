@@ -23,7 +23,7 @@ what where.
 - **No** → `human`: the name and `decides` (the decisions only that human takes) as one line to
   correct. Nothing else in this file applies; a one-human crew stays as it is.
 - **Yes** → steps 2 to 5. Keep `human` beside `humans`, set to the deciding human's name and
-  `decides`: the merge hook's refusals and the compact notice still name `human.name`. A re-run on a
+  `decides`: the one-way merge questions and the compact notice still name `human.name`. A re-run on a
   crew with `humans` starts at step 2 with the file's values as the proposal.
 
 ## 2. The humans: one block to correct

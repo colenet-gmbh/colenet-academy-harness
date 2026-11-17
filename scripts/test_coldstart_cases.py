@@ -137,15 +137,15 @@ def top_prompt(case: Path) -> str:
         ("security-twoway-panel-enough", [], ["security", "human"]),
         (
             "security-card-hit-card-worker-signs",
-            ["worker"],
+            [],
             ["human", "product", "acceptance", "security"],
         ),
     ],
 )
 def test_the_security_master_cases_name_who_waits_in_order(name, waits, not_waits):
     """A two-way auth diff with a green panel waits on nobody (the panel is enough); a
-    ``trust-loosening`` hit (a card hit, T2 two-way) waits on the signature of a fresh worker with
-    the security card (the holder decides only a case without precedent), then auto-merges."""
+    ``trust-loosening`` hit (a card hit, T2 two-way) starts a fresh worker with the security card,
+    whose verdict is a PR comment, and auto-merges without waiting on it."""
     case = REPO / "tests" / "coldstart" / "master" / f"{name}.yaml"
     top = {k: v.strip() for k, v in TOP.findall(case.read_text(encoding="utf-8"))}
     assert top["role"] == "master" and top["crew"] == SECURITY_FIXTURE
@@ -163,8 +163,9 @@ def test_the_unbound_t2_oneway_case_keeps_waiting_on_the_human_alone():
 
 GENERIC_FIXTURE = "we/scripts/fixtures/crew-v2-generic.json"
 ORDER_LINE = (
-    "- On a card hit (`trust-loosening`, `brake-review`): a fresh worker with Bo's card signs on "
-    "the head, then auto-merge; on a one-way PR its verdict goes to Hal with the T2 panel."
+    "- On a card hit (`trust-loosening`, `brake-review`): a fresh worker with Bo's card reviews the "
+    "head, its verdict a PR comment; auto-merge does not wait on it; on a one-way PR it goes to Hal "
+    "with the T2 panel."
 )
 # L0's one security line: the holder runs on call; a worker with its card signs the card hits
 SECURITY_LINE = "  - Bo owns its label, runs on call; a worker with its card signs card hits."

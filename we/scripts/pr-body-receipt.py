@@ -28,8 +28,7 @@ stdout contract and exit code map as follows:
   * any other exit, a timeout, a command not found
                                         → `receipt red (not run: <reason>)`
 
-The path sits in a code span. `automerge_gate.py` refuses `gh pr merge --auto` while a line
-starting `receipt red` stands in the PR body. A red receipt is a result, not a script error: the
+The path sits in a code span; the line is for the human who reads the PR. A red receipt is a result, not a script error: the
 exit code stays the splice's. Without the key, the body is the splice alone.
 """
 

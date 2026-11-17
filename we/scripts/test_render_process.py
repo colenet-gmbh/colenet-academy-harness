@@ -572,7 +572,8 @@ BOUND_SECURITY_LINE = (
 )
 TRUST_LINE = (
     "- On a card hit (`trust-loosening`, `brake-review`): a fresh worker with {security}'s card "
-    "signs on the head, then auto-merge; on a one-way PR its verdict goes to {human} with the T2 panel."
+    "reviews the head, its verdict a PR comment; auto-merge does not wait on it; on a one-way PR it "
+    "goes to {human} with the T2 panel."
 )
 
 
@@ -640,7 +641,7 @@ def test_the_master_card_carries_the_trust_loosening_order_only_when_bound():
     with_owner = rp.render_card(bound(), "master")
     assert (
         "- On a card hit (`trust-loosening`, `brake-review`): a fresh worker with Bo's card "
-        "signs on the head, then auto-merge;" in with_owner
+        "reviews the head, its verdict a PR comment; auto-merge does not wait on it;" in with_owner
     )
     assert "trust-loosening" not in rp.render_card(generic(), "master")
 

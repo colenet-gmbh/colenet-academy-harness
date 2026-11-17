@@ -26,7 +26,7 @@ removed with the worktree): `we-brief.md` (the brief under a first `Lead:` line)
 (the marker: name, key, lead, agent, launched_at, and the worker's `session_id` from `claude agents --json`). The hooks treat a session
 as a process worker only when the marker's `session_id` is its own (`worker_marker`), so the Lead
 working in the same worktree is never one (`hooks/worker_report_gate.py`,
-`hooks/automerge_gate.py`); `scripts/watch-worker.sh` reads the marker by name. `stop` removes both
+`hooks/worker_rights_gate.py`); `scripts/watch-worker.sh` reads the marker by name. `stop` removes both
 files, also for a session that already ended.
 
 Usage:
@@ -544,7 +544,7 @@ def launch(worktree: Path, name: str, brief_file: Path, agent: str | None = None
     if not marker["session_id"]:
         print(
             f"worker_launch: {name} not listed by claude agents --json within {SESSION_WAIT_S} s; "
-            "its report and merge gates stay off",
+            "its worker gates stay off",
             file=sys.stderr,
         )
     _timing("WorkerLaunch", name=name, agent_type=agent, cwd=str(worktree))

@@ -51,7 +51,7 @@ def test_the_line_inside_fenced_code_does_not_count():
 
 
 def test_other_diffs_need_no_line():
-    files = ["docs/README.md", "we/hooks/automerge_gate.py", "we/scripts/board.py"]
+    files = ["docs/README.md", "we/hooks/verification_gate.py", "we/scripts/board.py"]
     assert ccl.check("", files) is None
 
 

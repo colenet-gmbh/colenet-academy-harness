@@ -71,6 +71,9 @@ def test_every_retired_term_is_caught(tmp_path):
         "apo-hierarchy.md",
         "council-architect",
         "council-ux-researcher",
+        "automerge_gate",
+        "board_freeze",
+        "freeze",
     ]
     root = tree(tmp_path, {"we/notes.md": "\n".join(terms) + "\n"})
     done = run(root, "retired")
@@ -86,7 +89,7 @@ def test_successor_names_and_history_pass(tmp_path):
         tmp_path,
         {
             "we/notes.md": "/we:master, /we:plan-story, council-member, epic-plan.md, "
-            "a storyboard, we:master\n",
+            "a storyboard, we:master; it freezes an interface; the `merge-freeze` label\n",
             "docs/plans/old-story.md": "Built by `/we:orchestrate` with `/we:refine`.\n",
         },
     )

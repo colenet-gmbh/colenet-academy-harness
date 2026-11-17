@@ -16,8 +16,8 @@ prints the merge state once, and a worker or peer session idles while its PR con
     ready, CLEAN (mergeable, required checks green) and without auto-merge blocks once, until the
     sweep sees it armed again. A crew's board showed such PRs green and unarmed after a conflict
     merge, a retargeted stacked PR and fix pushes, until someone happened to look. A PR never seen
-    armed is left alone: a master arms late on purpose (`/we:master` § Close the run). Not in a worker (`WE_ROLE=worker`): it may not
-    arm (`automerge_gate.py`); its starter's own sweep names the PR.
+    armed is left alone. Not in a worker (`WE_ROLE=worker`): it does not
+    arm (worker card); its starter's own sweep names the PR.
   * At most one `gh` sweep per THROTTLE_S per session, at most MAX_PRS PRs (the newest), at most
     SWEEP_BUDGET_S seconds of `gh` per sweep.
   * Fail-open on every error: a `gh` or parse failure lets the stop through.

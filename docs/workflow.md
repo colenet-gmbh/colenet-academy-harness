@@ -42,7 +42,7 @@ flowchart TD
 
     %% ---------- GitHub ----------
     subgraph GH["GitHub — /we:ci-review, one watcher per PR, max 3 rounds"]
-        G1("CI: required checks<br/>+ Claude Review (gate)<br/>+ Codex Review where the repo runs it<br/>(the arm waits for its verdict)")
+        G1("CI: required checks<br/>+ Claude Review (gate)<br/>+ Codex Review where the repo runs it<br/>(holds the merge where required)")
         G2("collect: red checks, review<br/>findings, bot threads")
         G3("fix · validate locally<br/>commit once · resolve threads")
         G4("merge origin/main<br/>after-merge checks · push once")
@@ -180,4 +180,4 @@ worker or you moved the story. Its buttons start the verb the state calls for (`
 
 ## Deliver
 
-Claude arms auto-merge once the checks and the Codex verdict are in; the computed one-way class merges on your approve or by your hand (`/we:master` § Close the run). Plan first: a code PR of a story whose plan `docs/plans/<KEY>-story.md` is not on `origin/main` yet, or whose story is still On Hold or Backlog on the board, is never merged or armed (the merge hook; every story key the branch and title name counts), and a one-way refusal names it too, for your hand merge. `/we:merged` closes out: worktrees, branches, processes, each landed story to In Review once its PR is linked; Done follows acceptance.
+Claude arms auto-merge right after it opens the PR; the repo's required checks hold the merge. The computed one-way class merges on your approve or by your hand (`/we:master` § Close the run). Plan first: a code PR of a story whose plan `docs/plans/<KEY>-story.md` is not on `origin/main` yet waits for it; no hook enforces that. `/we:merged` closes out: worktrees, branches, processes, each landed story to In Review once its PR is linked; Done follows acceptance.

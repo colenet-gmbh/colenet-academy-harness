@@ -18,8 +18,8 @@ TODO: gate baselines a builder must not touch (coverage, size ratchets), and who
 
 ## Risk-class files
 
-The merge hook classifies every PR from `.weside/risk-paths` (or the crew's `risk.command`) on the
-default branch. A repo with a crew and neither refuses every merge. TODO: name who owns the rules.
+The classifier reads every PR's class from `.weside/risk-paths` (or the crew's `risk.command`) on the
+default branch. A repo with a crew and neither gets no class. TODO: name who owns the rules.
 
 ## Ticket states
 

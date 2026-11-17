@@ -1,5 +1,5 @@
 """lens_verdict.py § Carried panel (Q480): a green T2 panel on an older head holds for a new head
-whose delta touches no file the PR's class hit, classified by the merge hook's own runner
+whose delta touches no file the PR's class hit, classified by the one runner
 (risk_runner.py) on a real git history with an origin."""
 
 from __future__ import annotations

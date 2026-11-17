@@ -6,10 +6,9 @@ Usage:
 
 The source is the crew's ``board.file`` (``--board FILE`` names it once the crew file no longer
 does); the target folder is the crew's ``state_dir`` (``crew.state_dir``). The board family is the
-board file, its lock (``<name>.lock``), every ``<stem>-*.jsonl`` beside it, its freeze flag
-(``board_freeze.flag_path``) and its crew stamp (``crew.stamp_path``); each target takes the stem
-``board`` (``acme-board-answers.jsonl`` → ``board-answers.jsonl``, ``acme-board-freeze.json`` →
-``freeze.json``).
+board file, its lock (``<name>.lock``), every ``<stem>-*.jsonl`` beside it and its crew stamp
+(``crew.stamp_path``); each target takes the stem ``board`` (``acme-board-answers.jsonl`` →
+``board-answers.jsonl``).
 
 Without ``--apply`` it prints one line ``<source> -> <target>`` per file and changes nothing.
 With ``--apply`` it takes the board lock, copies each file, checks the copy by sha256, then renames
@@ -38,7 +37,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import board_freeze
 import crew as crewlib
 
 
@@ -51,7 +49,7 @@ def family(board: Path) -> list[Path]:
     stem = board.stem
     found = [board, board.with_name(board.name + ".lock")]
     found += sorted(board.parent.glob(f"{stem}-*.jsonl"))
-    found += [board_freeze.flag_path(board), crewlib.stamp_path(board)]
+    found.append(crewlib.stamp_path(board))
     seen: list[Path] = []
     for path in found:
         if path.is_file() and path not in seen:
@@ -65,8 +63,6 @@ def target_name(source: Path, board: Path) -> str:
         return crewlib.BOARD_NAME
     if source == board.with_name(board.name + ".lock"):
         return crewlib.BOARD_NAME + ".lock"
-    if source == board_freeze.flag_path(board):
-        return board_freeze.FLAG_NAME
     if source == crewlib.stamp_path(board):
         return crewlib.CREW_ID_NAME
     return "board" + source.name[len(board.stem) :]
