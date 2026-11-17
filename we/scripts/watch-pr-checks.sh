@@ -69,12 +69,21 @@
 # removing the worktree it was started in does not break it and a per-directory gh account holds.
 # Run it as a background command.
 # Needs only `gh` (its built-in --jq).
-# Env: WATCH_INTERVAL (s, default 30), WATCH_QUIET (s, default 60), WATCH_REGISTER_TIMEOUT (s,
+# One watcher per PR: the first takes a lock (`flock` on
+# `${WE_STATE_DIR:-~/.claude/we-state}/watch-locks/<owner>-<repo>-<PR>.lock`, holding its pid and
+# head); a second on the same PR prints `watcher already running on <repo>#<PR>: <holder> — this one
+# exits` and exits 0. A second started with `--sha` for another head than the holder's waits for the
+# lock instead (the holder ends with exit 3 on its next read). Without `flock` there is no lock.
+# Quota: before each read (once per interval) it reads `gh api rate_limit`; when core or graphql
+# has fewer than WATCH_QUOTA_FLOOR calls left it prints `quota: <n> left, sleeping until <reset>`
+# and sleeps until that reset instead of polling. The interval never drops under 60 s.
+# Env: WATCH_INTERVAL (s, default 60, floor 60), WATCH_QUIET (s, default 60), WATCH_REGISTER_TIMEOUT (s,
 # default 900), WATCH_HEAD_TIMEOUT (s, default 300), WATCH_MAX_ERRORS (default 10),
 # WATCH_MAX_INTERVAL (s, the --until-merged backoff's cap, default 300),
 # WATCH_CODEX_CHECK (default `Codex Review`), WATCH_CODEX_READS (comment reads per head after that
 # check completed, default 10), WATCH_MAX_LIFETIME (s, overrides --max-hours), WATCH_REVIEW_RX
-# (extended regex, case-insensitive, of the check names that count as a review, default `review`).
+# (extended regex, case-insensitive, of the check names that count as a review, default `review`),
+# WATCH_QUOTA_FLOOR (default 500), WATCH_MIN_INTERVAL (the floor, default 60; tests only).
 set -uo pipefail
 
 USAGE="usage: watch-pr-checks.sh <PR> [--fail-fast] [--sha <expected>] [--until-merged | --human-merge] [--max-hours <h>] [-R <owner/repo>]"
@@ -99,7 +108,10 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -n "$PR" ] || { echo "$USAGE" >&2; exit 2; }
-INTERVAL=${WATCH_INTERVAL:-30}
+MIN_INTERVAL=${WATCH_MIN_INTERVAL:-60}
+INTERVAL=${WATCH_INTERVAL:-60}
+[ "$INTERVAL" -ge "$MIN_INTERVAL" ] 2>/dev/null || INTERVAL=$MIN_INTERVAL
+QUOTA_FLOOR=${WATCH_QUOTA_FLOOR:-500}
 QUIET=${WATCH_QUIET:-60}
 REGISTER_TIMEOUT=${WATCH_REGISTER_TIMEOUT:-900}
 HEAD_TIMEOUT=${WATCH_HEAD_TIMEOUT:-300}
@@ -152,16 +164,30 @@ gh_try() {  # gh_try <var> <gh args...>: stores stdout in <var>; exits 2 after M
   fi
   return 1
 }
-tick() {  # sleep one interval, or exit 9 once the lifetime cap is reached
+RATE='[.resources.core, .resources.graphql] | map(select(. != null)) | min_by(.remaining) | "\(.remaining) \(.reset)"'
+quota_wait() {  # one rate_limit read per interval; under QUOTA_FLOOR left, sleep until the reset
+  local line left reset now
+  line=$(gh api rate_limit --jq "$RATE" 2>/dev/null) || return 0
+  read -r left reset <<<"$line"
+  [ "${left:-x}" -ge 0 ] 2>/dev/null && [ "${reset:-x}" -ge 0 ] 2>/dev/null || return 0
+  [ "$left" -lt "$QUOTA_FLOOR" ] || return 0
+  now=$(date +%s)
+  [ "$reset" -gt "$now" ] || return 0
+  echo "quota: $left left, sleeping until $(date -d "@$reset" +%H:%M:%S 2>/dev/null || date -r "$reset" +%H:%M:%S 2>/dev/null || echo "$reset")"
+  sleep $((reset - now + 1)) 9>&-
+}
+tick() {  # sleep one interval, or exit 9 once the lifetime cap is reached; then the quota read
   if [ $(($(date +%s) - BORN)) -ge "$LIFETIME" ]; then
     echo "gave up after ${LIFETIME}s on ${SHA:-$PR}"; exit 9
   fi
-  sleep "$INTERVAL"
+  sleep "$INTERVAL" 9>&-
+  quota_wait
 }
 backoff() {  # --until-merged, waiting for the merge: the interval doubles up to MAX_INTERVAL
   INTERVAL=$((INTERVAL * 2))
   [ "$INTERVAL" -ge 1 ] 2>/dev/null || INTERVAL=1
   [ "$INTERVAL" -le "$MAX_INTERVAL" ] || INTERVAL=$MAX_INTERVAL
+  [ "$INTERVAL" -ge "$MIN_INTERVAL" ] || INTERVAL=$MIN_INTERVAL
 }
 can_merge() {  # armed and GitHub would merge it past a red non-required check
   [ "$(field 4)" = on ] && case "$(field 1)" in CLEAN|UNSTABLE|HAS_HOOKS) true ;; *) false ;; esac
@@ -174,6 +200,28 @@ until [ -n "$REPO" ] || gh_try REPO repo view --json nameWithOwner --jq .nameWit
   git rev-parse --git-dir >/dev/null 2>&1 || { echo "not inside a git repo: pass -R <owner/repo>" >&2; exit 2; }
   tick
 done
+
+LOCK=""
+take_lock() {  # one watcher per PR; a second exits 0 naming the holder (header)
+  local dir holder
+  command -v flock >/dev/null 2>&1 || return 0
+  dir="${WE_STATE_DIR:-$HOME/.claude/we-state}/watch-locks"
+  mkdir -p "$dir" 2>/dev/null || return 0
+  LOCK="$dir/${REPO//\//-}-${PR//[^A-Za-z0-9]/-}.lock"
+  exec 9>>"$LOCK" || { LOCK=""; return 0; }
+  if ! flock -n 9; then
+    holder=$(head -n 1 "$LOCK" 2>/dev/null)
+    case "$holder" in
+      *" head "*) [ -n "$EXPECT" ] && case "${holder##* head }" in "$EXPECT"*) false ;; *) true ;; esac \
+        && flock -w $((INTERVAL * 2 + 60)) 9 ;;
+      *) false ;;
+    esac || { echo "watcher already running on $REPO#$PR: ${holder:-pid unknown} — this one exits"; exit 0; }
+  fi
+  echo "pid $$" >"$LOCK"
+}
+lock_head() {  # the holder line names the head it watches
+  [ -n "$LOCK" ] && echo "pid $$ head $1" >"$LOCK"
+}
 
 view() {
   gh_try OUT pr view "$PR" -R "$REPO" \
@@ -319,6 +367,8 @@ codex_exit() {  # exit 6 when the Codex comment for this head carries WARNING or
   esac
 }
 
+take_lock
+quota_wait
 SHA=""
 until view; do tick; done
 SHA=$(head -n 1 <<<"$OUT")
@@ -334,6 +384,7 @@ if [ -n "$EXPECT" ]; then
     view && SHA=$(head -n 1 <<<"$OUT")
   done
 fi
+lock_head "$SHA"
 START=$(date +%s)
 SEEN=""
 LAST=""

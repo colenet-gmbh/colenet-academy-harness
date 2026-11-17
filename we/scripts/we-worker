@@ -44,12 +44,9 @@
 # A flag before the claude args that neither we-worker nor `claude --help` knows refuses (a typo like
 # `--cwd` would otherwise reach claude as a prompt): run `cd <tree> && we-worker …` instead.
 # A start refuses (exit 2, before any claude call) a name that does not start with the story key (crew
-# `naming.key`, `<key>-<chunk>`). A brief, the last argument, that lacks one of the four fields
-# (`worker_launch.py check`: Ziel/Goal, Ausgabe/Output, Werkzeuge und Quellen/Tools and sources, Grenzen
-# und wann stoppen/Limits and when to stop) gets a warning with the template while the check only warns
-# (worker_launch.BRIEF_ENFORCED), a refusal once it is enforced; a last argument starting with `-`, or
-# none, is an empty brief; a last argument that is blank (`"$(cat <brief>)"` of an empty or unwritten
-# file) refuses (exit 2), nothing starts. A --resume/--continue start checks the name only. Without the plugin's worker_launch.py no worker
+# `naming.key`, `<key>-<chunk>`; `worker_launch.py check`). The brief is the last argument; one
+# starting with `-`, or none, is an empty brief; a last argument that is blank (`"$(cat <brief>)"` of an empty or unwritten
+# file) refuses (exit 2), nothing starts. Without the plugin's worker_launch.py no worker
 # starts. Every worker starts with `--settings <state dir>/<name>.settings.json` (`worker_launch.py
 # settings`: its rights in this repo, the never-list, WE_ROLE and WE_STORY_KEY) and WE_STORY_KEY=<key>.
 # The crew (`.weside/crew.json`, scripts/crew.py) adds, when set:
@@ -448,7 +445,7 @@ if [[ -n "$known_flags" && $# -gt 0 ]]; then
     fi
   done
 fi
-# The story key in the name and the four fields of the brief: refused before anything starts.
+# The story key in the name: refused before anything starts.
 wl=$(plugin_script scripts/worker_launch.py 2>/dev/null)
 if [[ -z "$wl" || ! -f "$wl" ]]; then
   echo "we-worker: plugin we not installed (no worker_launch.py); no worker started" >&2
@@ -466,11 +463,7 @@ if [[ $resuming -eq 0 && $# -gt 0 && -z "${brief//[[:space:]]/}" && "${!#}" != -
   echo "we-worker: the brief is empty (the last argument holds no text); write the brief first, then start $name; no worker started" >&2
   exit 2
 fi
-if [[ $resuming -eq 1 ]]; then
-  key=$(python3 "$wl" check --name "$name" --no-brief --prefix we-worker) || exit 2
-else
-  key=$(printf '%s' "$brief" | python3 "$wl" check --name "$name" --brief-file - --prefix we-worker) || exit 2
-fi
+key=$(python3 "$wl" check --name "$name" --prefix we-worker) || exit 2
 # The concurrency cap: busy sessions and the active account's 5h window (.weside/config.json
 # `workers`); a refusal names both values and exits 3, nothing starts.
 python3 "$wl" capacity --repo "$PWD" --prefix we-worker || exit $?

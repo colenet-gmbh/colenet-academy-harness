@@ -92,13 +92,18 @@ template in force; the master's boot check and `/we:accept` read it there.
 ### Name and brief
 
 `we-worker` and `worker_launch.py launch` refuse a start (exit 2, before any file or session) whose
-name does not start with the story key (crew `naming.key`, `<KEY>-<chunk>`). They warn, and once the
-check is enforced refuse, a brief that lacks one of four Markdown headings with a body: `Ziel`/`Goal`, `Ausgabe`/`Output`, `Werkzeuge und
-Quellen`/`Tools and sources`, `Grenzen und wann stoppen`/`Limits and when to stop` (a heading counts
-when its text starts with the name). The grammar, the refusal template and `worker_launch.py check`
-are owned by `scripts/worker_launch.py` (its docstring). A `--resume` start checks the name only.
-Every start and every denial of the worker rights brake is one line in `<state dir>/brakes.jsonl`
-(`worker_rights.brake_log`): the count of false alarms and of passing briefs.
+name does not start with the story key (crew `naming.key`, `<KEY>-<chunk>`; `worker_launch.py check`,
+its docstring owns the grammar). The brief's shape is not checked. A brief carries four Markdown
+headings, each with a body: `Ziel`/`Goal`, `Ausgabe`/`Output`, `Werkzeuge und Quellen`/`Tools and
+sources`, `Grenzen und wann stoppen`/`Limits and when to stop`.
+
+- Bad: `we-worker AB-12-fix --bg "fix the login bug"`: the worker guesses the tree, the end and whom to tell.
+- Good: `## Goal` the login refuses an expired token, plan `docs/plans/AB-12-story.md` · `## Output` one
+  commit on `feat/ab-12`, report to the Lead by `SendMessage` · `## Tools and sources` this worktree,
+  `pytest tests/auth` · `## Limits and when to stop` no push, no migration; stop after the commit.
+
+Every denial of the worker rights brake is one line in `<state dir>/brakes.jsonl`
+(`worker_rights.brake_log`): the count of false alarms.
 `check` names a living session of the same key on stderr: a follow-up goes to it by `SendMessage`.
 After the check `we-worker` refuses a start (exit 3, nothing starts) while the busy workers
 (background sessions and window workers; interactive companions and masters never count) reach
@@ -172,7 +177,7 @@ refuses its merge as for a subagent.
   says a quota end is near: then it commits its phase and pushes it to `wip/<KEY>-<slug>`. Every push
   is preceded by the conflict check of `/we:ci-review` § 3 (merge `origin/<default-branch>` only on a conflict).
 - No wait loops and no `sleep` in the foreground: the auto mode holds them as a permission prompt. Wait on
-  CI with `watch-pr-checks.sh` or `gh pr checks --watch` in the background, or for the notification;
+  CI with `watch-pr-checks.sh` in the background (the one wait: quota, lock and interval floor), or for the notification;
   never poll a task file with `tail`/`cat` (a process worker's card says the same: `roles/worker.md`).
 - The worker reads and searches with the Read, Grep and Glob tools on absolute paths, never with
   `cd <dir> && grep …` or `cat`/`rg` through Bash: a compound `cd` asks for permission and leaves the

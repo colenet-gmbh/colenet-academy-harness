@@ -4,11 +4,14 @@ The fixture is a real `gh pr view --json headRefOid,statusCheckRollup` answer (P
 """
 
 import copy
+import fcntl
 import json
 import os
 import shutil
 import stat
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -74,7 +77,7 @@ def run(
         'if [ "$1 $2" = "run view" ]; then printf "%s\\n" "${GH_LOG_FAILED:-}"; exit 0; fi\n'
         'if [ "$1 $2" = "run rerun" ]; then exit 0; fi\n'
         'if [ "$1 $2" = "pr view" ] && [[ " $* " == *" files "* ]]; then [ -n "$GH_FILES_FAIL" ] && exit 1; printf "%s\\n" ${GH_PR_FILES:-we/x.py}; exit 0; fi\n'
-        'if [ "$1" = api ]; then f=$(mktemp); case "$2" in *annotations*) printf "%s" "${GH_ANNOTATIONS:-[]}" > "$f" ;; *compare*) printf "%s" "${GH_COMPARE:-{\\"ahead_by\\":0,\\"commits\\":[]\\}}" > "$f" ;; *) echo \'{"default_branch":"main"}\' > "$f" ;; esac; '
+        'if [ "$1" = api ]; then f=$(mktemp); case "$2" in rate_limit) n=$(cat "$GH_RATE_DIR/count" 2>/dev/null || echo 0); echo $((n+1)) > "$GH_RATE_DIR/count"; r="$GH_RATE_DIR/$n.json"; [ -f "$r" ] || r="$GH_RATE_DIR/last.json"; cp "$r" "$f" 2>/dev/null || echo "{}" > "$f" ;; *annotations*) printf "%s" "${GH_ANNOTATIONS:-[]}" > "$f" ;; *compare*) printf "%s" "${GH_COMPARE:-{\\"ahead_by\\":0,\\"commits\\":[]\\}}" > "$f" ;; *) echo \'{"default_branch":"main"}\' > "$f" ;; esac; '
         'while [ $# -gt 0 ]; do [ "$1" = --jq ] && q=$2; shift; done; jq -r "$q" "$f"; exit 0; fi\n'
         'if [ "$1 $2" = "run list" ]; then '
         + _queue(tmp_path, "runs", list(runs))
@@ -96,6 +99,9 @@ def run(
         "WATCH_REGISTER_TIMEOUT": timeout_s,
         "WATCH_MAX_ERRORS": max_errors,
         "WATCH_MAX_INTERVAL": "0",
+        "WATCH_MIN_INTERVAL": "0",
+        "WE_STATE_DIR": str(tmp_path / "state"),
+        "GH_RATE_DIR": str(tmp_path / "rate"),
         **(env_extra or {}),
     }
     env.pop("WATCH_REPO", None)
@@ -292,7 +298,10 @@ def test_outside_a_repo_every_gh_call_names_the_repo_and_runs_from_the_callers_d
     # No git repo: the repo comes from `gh repo view`; every call stays in the caller's directory.
     assert calls[0] == f"{tmp_path} | repo view ", calls[0]
     rest = calls[1:]
-    assert rest and all(c.startswith(f"{tmp_path} | ") and " -R o/r " in c for c in rest), rest
+    # The quota read is the account's, not the repo's: it carries no -R, but stays in the same dir.
+    assert all(c.startswith(f"{tmp_path} | ") for c in rest), rest
+    rest = [c for c in rest if " api rate_limit " not in c]
+    assert rest and all(" -R o/r " in c for c in rest), rest
 
 
 def make_worktree(tmp_path, remote):
@@ -315,7 +324,8 @@ def test_from_a_worktree_gh_runs_in_the_main_checkout(tmp_path):
     assert code == 0, out
     calls = (tmp_path / "calls.log").read_text().splitlines()
     assert calls[0] == f"{main} | repo view ", calls
-    assert all(c.startswith(f"{main} | ") and " -R o/r " in c for c in calls[1:]), calls
+    assert all(c.startswith(f"{main} | ") for c in calls[1:]), calls
+    assert all(" -R o/r " in c for c in calls[1:] if " api rate_limit " not in c), calls
 
 
 @pytest.mark.parametrize(
@@ -331,7 +341,7 @@ def test_a_failing_repo_view_falls_back_to_a_github_origin(tmp_path, remote):
     code, out = run(tmp_path, [_green()], cwd=wt, env_extra={"GH_REPO_VIEW_FAIL": "1"})
     assert code == 0, out
     calls = (tmp_path / "calls.log").read_text().splitlines()
-    assert all(" -R acme/app " in c for c in calls[1:]), calls
+    assert all(" -R acme/app " in c for c in calls[1:] if " api rate_limit " not in c), calls
 
 
 def test_a_non_github_origin_is_no_fallback(tmp_path):
@@ -815,3 +825,110 @@ def test_a_cancelled_run_replaced_by_a_newer_run_counts_for_nothing(tmp_path):
     only_old = {**d, "statusCheckRollup": [old_repo, old_sum]}
     code, out = run(tmp_path / "c", [only_old], runs=[[cancelled, queued]], timeout_s="0")
     assert code == 4, out
+
+
+# --- quota, one watcher per PR, interval floor ------------------------------------------------
+
+
+def _sleep_stub(tmp_path):
+    """A `sleep` beside the stub gh that only logs its argument into calls.log."""
+    stub = tmp_path / "sleep"
+    stub.write_text(
+        f'#!/usr/bin/env bash\necho "$(pwd) | sleep $*" >> "{tmp_path / "calls.log"}"\n'
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+
+
+def _rate(tmp_path, *answers):
+    d = tmp_path / "rate"
+    d.mkdir(exist_ok=True)
+    for i, a in enumerate(answers):
+        (d / f"{i}.json").write_text(json.dumps(a))
+    (d / "last.json").write_text(json.dumps(answers[-1]))
+
+
+def _limits(core, graphql, reset):
+    return {
+        "resources": {
+            "core": {"remaining": core, "reset": reset},
+            "graphql": {"remaining": graphql, "reset": reset},
+        }
+    }
+
+
+def test_quota_under_the_floor_sleeps_until_the_reset_before_any_poll(tmp_path):
+    reset = int(time.time()) + 120
+    _rate(tmp_path, _limits(4000, 10, reset), _limits(5000, 5000, reset + 3600))
+    _sleep_stub(tmp_path)
+    code, out = run(tmp_path, [_green()])
+    assert code == 0, out
+    assert out[0].startswith("quota: 10 left, sleeping until "), out
+    calls = [c.split(" | ", 1)[1] for c in (tmp_path / "calls.log").read_text().splitlines()]
+    first_view = next(i for i, c in enumerate(calls) if c.startswith("pr view"))
+    slept = [c for c in calls[:first_view] if c.startswith("sleep ")]
+    assert slept and int(slept[0].split()[1]) >= 115, calls
+    assert calls.index(slept[0]) > calls.index(
+        next(c for c in calls if c.startswith("api rate_limit"))
+    )
+
+
+def test_quota_above_the_floor_polls_at_once(tmp_path):
+    _rate(tmp_path, _limits(600, 600, int(time.time()) + 600))
+    _sleep_stub(tmp_path)
+    code, out = run(tmp_path, [_green()])
+    assert (code, out) == (0, [f"final {SHA}: green · {MERGE}"])
+
+
+def _hold(tmp_path, line):
+    d = tmp_path / "state" / "watch-locks"
+    d.mkdir(parents=True)
+    f = (d / "o-r-57.lock").open("a+")
+    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    f.truncate(0)
+    f.write(line + "\n")
+    f.flush()
+    return f
+
+
+needs_flock = pytest.mark.skipif(not shutil.which("flock"), reason="the lock needs flock(1)")
+
+
+@needs_flock
+def test_a_second_watcher_on_the_same_pr_exits_0_naming_the_holder(tmp_path):
+    held = _hold(tmp_path, f"pid 4242 head {SHA}")
+    try:
+        code, out = run(tmp_path, [_green()], "--sha", SHA)
+    finally:
+        held.close()
+    assert (code, out) == (
+        0,
+        [f"watcher already running on o/r#57: pid 4242 head {SHA} — this one exits"],
+    )
+    calls = (tmp_path / "calls.log").read_text()
+    assert "pr view" not in calls and "run list" not in calls, calls
+
+
+@needs_flock
+def test_a_watcher_for_a_new_head_waits_for_the_old_one_to_end(tmp_path):
+    held = _hold(tmp_path, "pid 4242 head " + "b" * 40)
+    threading.Timer(1.0, held.close).start()
+    code, out = run(tmp_path, [_green()], "--sha", SHA)
+    assert (code, out) == (0, [f"final {SHA}: green · {MERGE}"])
+    lock = (tmp_path / "state" / "watch-locks" / "o-r-57.lock").read_text()
+    assert lock.startswith("pid ") and lock.strip().endswith(f"head {SHA}"), lock
+
+
+def test_the_interval_never_drops_under_60_seconds(tmp_path):
+    _sleep_stub(tmp_path)
+    code, out = run(
+        tmp_path,
+        [_pending(_green()), _green()],
+        env_extra={"WATCH_INTERVAL": "5", "WATCH_MIN_INTERVAL": ""},
+    )
+    assert code == 0, out
+    slept = [
+        int(c.rsplit(" ", 1)[1])
+        for c in (tmp_path / "calls.log").read_text().splitlines()
+        if " | sleep " in c
+    ]
+    assert slept and min(slept) == 60, slept

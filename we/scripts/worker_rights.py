@@ -739,8 +739,7 @@ def brake_log(cwd: str | Path | None, record: dict) -> Path | None:
       `deny`  (the worker rights gate): `gate`, `item` (the never-list item or the failed right),
               `name`, `key`, `session_id`, `argv0` (the first word of the command; never the
               command itself, which may carry a secret value)
-      `brief` (every worker start): `name`, `key`, `ok`, `missing` (the fields the brief lacks).
-    One line per event, so a brake's false alarms and the brief check's pass rate can be counted.
+    One line per event, so a brake's false alarms can be counted.
 
     `WE_STATE_FORBIDDEN` (directories, `os.pathsep`-separated; the test run's `conftest.py` sets
     it to the live state directories) refuses a write there: the line goes to the file named by

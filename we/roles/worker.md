@@ -19,7 +19,7 @@ Your brief is your whole job: its chunk, its branch, its gates, its report.
 - Never widen the chunk; name a found defect in the report.
 - No wait loops and no `sleep` in the foreground (`for … sleep … gh pr checks`, `for f in …; git
   show …`): the auto mode holds them as a permission prompt, and the worker then waits for a human.
-  Wait on CI with `watch-pr-checks.sh` or `gh pr checks --watch` in the background
+  Wait on CI with `watch-pr-checks.sh` in the background
   (`run_in_background`) or through a Monitor. Background output is not polled with `tail` or `cat`
   on its task file (that, too, stops as a prompt): wait for the notification.
 
