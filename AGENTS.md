@@ -57,7 +57,8 @@ we/                               plugin root
     launch                        wclaude, we-worker, install_launcher.py, worker_launch.py, worker_rights.py, pin.sh, identity_cache.py,
                                   wake_poller.py, gh_anchor.sh
     watch                         watch-pr-checks.sh (CI to the merge), watch-pr-conflicts.sh, watch-worker.sh
-    flow                          flow_log.py (the flow log's one owner), sampler_age.py
+    flow                          flow_log.py (the flow log's one owner), sampler_age.py, flow_report.py (the
+                                  loop's numbers from gh and the board logs)
     PR and plan                   pr-body-receipt.py, test-delta.py, session_tokens.py, retro_claim.sh, retro_write.py,
                                   optimization_close.py
     statusline                    statusline.js, install_statusline.py

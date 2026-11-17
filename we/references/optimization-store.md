@@ -25,6 +25,7 @@ Plugin checkout and workspace.
 | `sources.md` | optional repo-specific source URLs, one Markdown list item each | the user |
 | `sources.lock` | hashes of the fetched sources and the last audit's context | `/we:instruction-audit` |
 | `measure/README.md` | the repo's measurement adapter | the user |
+| `reports/flow-<YYYY-MM-DD>.md` | the flow report's table (UTC date) | `scripts/flow_report.py --md` |
 | `feedback-sources.md` | optional: other repos that run the plugin, one local path per Markdown list item; `/we:optimize` reads only their plugin findings | the user |
 
 A store exists only where a human created it (`/we:setup` asks). A verb that finds no
