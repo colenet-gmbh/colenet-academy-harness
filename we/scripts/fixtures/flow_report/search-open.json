@@ -1,0 +1,44 @@
+{
+ "data": {
+  "search": {
+   "issueCount": 1,
+   "pageInfo": {
+    "hasNextPage": false,
+    "endCursor": null
+   },
+   "nodes": [
+    {
+     "number": 4,
+     "title": "feat(PROJ-3): the report",
+     "headRefName": "feat/PROJ-3-report",
+     "state": "OPEN",
+     "isDraft": false,
+     "createdAt": "2026-11-09T10:00:00Z",
+     "mergedAt": null,
+     "labels": {
+      "nodes": []
+     },
+     "files": {
+      "totalCount": 1,
+      "nodes": [
+       {
+        "path": "app/report.py"
+       }
+      ]
+     },
+     "timelineItems": {
+      "nodes": [
+       {
+        "__typename": "PullRequestCommit",
+        "commit": {
+         "id": "C_d1",
+         "oid": "d1"
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ }
+}

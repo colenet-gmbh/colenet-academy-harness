@@ -1,0 +1,1046 @@
+#!/usr/bin/env python3
+"""The flow report: the loop's numbers in one table, each row with n, median, p90 and its source.
+
+Usage:
+  flow_report.py [--since 10d] [--until UTC] [--repo OWNER/NAME] [--json|--md] [--board FILE]
+                 [--gh-cache DIR] [--review-match REGEX]
+
+``--since`` takes ``<n>d``, ``<n>h`` or a UTC date ``YYYY-MM-DD``; the window ends now. ``--repo``
+defaults to the ``origin`` remote of the current directory. Plain output is an aligned table;
+``--json`` prints the rows as one JSON object; ``--md`` prints a Markdown table and writes it to
+``reports/flow-<UTC date>.md`` in the repo's optimization store (``.weside/optimization/``,
+``references/optimization-store.md``); without a store it writes nothing and says so on stderr.
+``--gh-cache DIR`` keeps every ``gh`` answer in DIR and reuses it on the next run with the same
+window (pin it with ``--until``), so a second run costs no API quota. ``--review-match`` names
+the review workflows (regex, default ``review``).
+
+Sources (read only; the script holds no credential):
+
+- GitHub through ``gh api graphql`` (the session's login): PRs merged in the window and every open
+  PR, their files, labels, commits and force pushes, and per commit the GitHub Actions check
+  suites. A head is a commit or force-pushed SHA with a ``pull_request`` or
+  ``pull_request_target`` suite; heads are ordered by their first suite. A PR is docs-only when
+  every changed path is under ``docs/`` or ends in ``.md``; every other PR is a code PR.
+- The transitions log ``<board stem>-transitions.jsonl`` beside the board file
+  (``board_freeze.watched_board_files``; ``--board`` names another). Without a crew file and
+  without ``--board`` the board rows print ``n/a``: the default board belongs to no repo.
+- The question log ``<board stem>-questions.jsonl`` joined with ``<stem>-answers.jsonl`` by ``id``
+  (``docs/board.md`` § Asking), and ``brakes.jsonl`` in the crew's state directory.
+- ``lens_verdict.rounds`` for the Ready rounds of every key in the repo's severity log.
+
+A row whose source is missing prints ``n/a (<source> not found)``, never a zero. Exit 0 whenever a
+table is printed, 2 on a usage error.
+
+After the table, ``Writers per transition`` lists per transition kind (``from→to``) which
+sessions (the row's ``by``) wrote it in the window: a transition the report trusts has one writer.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import re
+import statistics
+import subprocess
+import sys
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Callable
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import board_freeze  # noqa: E402
+import crew as crew_mod  # noqa: E402
+import lens_verdict  # noqa: E402
+
+ACTIONS_APP_ID = 15368  # the GitHub Actions app: its check suites are workflow runs
+RED = {"FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"}
+HEAD_EVENTS = {"pull_request", "pull_request_target"}  # a push to the PR's branch; reviews are not
+DONE_LIKE = {"in_review", "in_test", "done"}
+SHARE_STATES = ("selected", "in_progress", "in_review", "in_test")
+COMMIT_BATCH = 100
+DEFAULT_KEY = crew_mod.DEFAULTS["naming"]["key"]
+
+PR_QUERY = """
+query($q: String!, $after: String) {
+  search(query: $q, type: ISSUE, first: 50, after: $after) {
+    issueCount
+    pageInfo { hasNextPage endCursor }
+    nodes { ... on PullRequest {
+      number title headRefName state isDraft createdAt mergedAt
+      labels(first: 30) { nodes { name } }
+      files(first: 100) { totalCount nodes { path } }
+      timelineItems(first: 100, itemTypes: [PULL_REQUEST_COMMIT, HEAD_REF_FORCE_PUSHED_EVENT]) {
+        nodes { __typename
+          ... on PullRequestCommit { commit { id oid } }
+          ... on HeadRefForcePushedEvent { beforeCommit { id oid } afterCommit { id oid } }
+        }
+      }
+    } }
+  }
+}
+"""
+
+SUITE_QUERY = """
+query($ids: [ID!]!) {
+  nodes(ids: $ids) { ... on Commit { oid
+    checkSuites(first: 20, filterBy: {appId: APP_ID}) { nodes {
+      status conclusion createdAt workflowRun { event workflow { name } }
+    } }
+  } }
+}
+""".replace("APP_ID", str(ACTIONS_APP_ID))
+
+
+class SourceMissingError(Exception):
+    """A source the report cannot read; its message is the `n/a (...)` text."""
+
+
+# --- small helpers ------------------------------------------------------------------------------
+
+
+def parse_ts(value: Any) -> datetime | None:
+    """A UTC datetime from the logs' ISO forms (`Z`, milliseconds, minutes only), else None."""
+    if not isinstance(value, str) or not value:
+        return None
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        ts = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
+
+def parse_since(text: str, now: datetime) -> datetime:
+    found = re.fullmatch(r"(\d+)([dh])", text.strip())
+    if found:
+        n = int(found.group(1))
+        return now - (timedelta(days=n) if found.group(2) == "d" else timedelta(hours=n))
+    try:
+        return datetime.strptime(text.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"--since {text!r}: expected <n>d, <n>h or YYYY-MM-DD"
+        ) from None
+
+
+def p90(values: list) -> float | None:
+    """Nearest-rank 90th percentile."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(0.9 * len(ordered)) - 1)]
+
+
+def med(values: list) -> float | None:
+    return statistics.median(values) if values else None
+
+
+def hours(a: datetime, b: datetime) -> float:
+    return (b - a).total_seconds() / 3600
+
+
+def pct(part: float, whole: float) -> str:
+    return f"{100 * part / whole:.0f} %" if whole else "-"
+
+
+def read_jsonl(path: Path) -> list:
+    out = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            try:
+                item = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(item, dict):
+                out.append(item)
+    return out
+
+
+def row(name, n=None, median=None, p90_=None, value="", source="", unit=""):
+    return {
+        "row": name,
+        "n": n,
+        "median": median,
+        "p90": p90_,
+        "unit": unit,
+        "value": value,
+        "source": source,
+    }
+
+
+def na(name: str, why: str) -> dict:
+    return row(name, value=f"n/a ({why})", source="")
+
+
+# --- GitHub -------------------------------------------------------------------------------------
+
+
+Runner = Callable[[dict], dict]
+
+
+def gh_runner(cache: Path | None) -> Runner:
+    """`body -> response` through `gh api graphql --input -`; with `cache`, answers are kept there
+    by a hash of the body and read back instead of asked again."""
+
+    def run(body: dict) -> dict:
+        text = json.dumps(body, sort_keys=True)
+        hit = None
+        if cache is not None:
+            hit = cache / (hashlib.sha256(text.encode()).hexdigest()[:20] + ".json")
+            if hit.is_file():
+                return json.loads(hit.read_text(encoding="utf-8"))
+        try:
+            out = subprocess.run(
+                ["gh", "api", "graphql", "--input", "-"],
+                input=text,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except FileNotFoundError:
+            raise SourceMissingError("gh not found") from None
+        except subprocess.SubprocessError as exc:
+            raise SourceMissingError(f"gh: {exc}") from None
+        if out.returncode != 0:
+            first = (out.stderr or out.stdout).strip().splitlines()[:1]
+            raise SourceMissingError(f"gh: {first[0] if first else 'exit ' + str(out.returncode)}")
+        data = json.loads(out.stdout)
+        if data.get("errors"):
+            raise SourceMissingError(f"gh: {data['errors'][0].get('message', 'error')}")
+        if hit is not None:
+            hit.parent.mkdir(parents=True, exist_ok=True)
+            hit.write_text(out.stdout, encoding="utf-8")
+        return data
+
+    return run
+
+
+def _day_chunks(since: datetime, until: datetime):
+    start = since
+    while start < until:
+        end = min(start + timedelta(days=1), until)
+        yield start, end
+        start = end
+
+
+def _iso(ts: datetime) -> str:
+    return ts.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+
+def _search(run: Runner, q: str) -> list:
+    nodes, after = [], None
+    while True:
+        data = run({"query": PR_QUERY, "variables": {"q": q, "after": after}})
+        found = data["data"]["search"]
+        nodes += [n for n in found["nodes"] if n]
+        if not found["pageInfo"]["hasNextPage"]:
+            return nodes
+        after = found["pageInfo"]["endCursor"]
+
+
+def fetch_prs(run: Runner, repo: str, since: datetime, until: datetime) -> list:
+    """Every PR merged in the window (searched one day at a time: search stops at 1,000) and
+    every open PR, each with `heads` and `suites` from its commits' Actions suites."""
+    by_number: dict = {}
+    for a, b in _day_chunks(since, until):
+        for pr in _search(run, f"repo:{repo} is:pr is:merged merged:{_iso(a)}..{_iso(b)}"):
+            by_number[pr["number"]] = pr
+    for pr in _search(run, f"repo:{repo} is:pr is:open"):
+        by_number[pr["number"]] = pr
+    prs = [by_number[k] for k in sorted(by_number)]
+    ids = []
+    for pr in prs:
+        for item in pr["timelineItems"]["nodes"]:
+            for field in ("commit", "beforeCommit", "afterCommit"):
+                if (item.get(field) or {}).get("id"):
+                    ids.append(item[field]["id"])
+    suites: dict = {}
+    unique = list(dict.fromkeys(ids))
+    for i in range(0, len(unique), COMMIT_BATCH):
+        data = run({"query": SUITE_QUERY, "variables": {"ids": unique[i : i + COMMIT_BATCH]}})
+        for node in data["data"]["nodes"]:
+            if node and node.get("oid"):
+                suites[node["oid"]] = node["checkSuites"]["nodes"]
+    return [shape_pr(pr, suites) for pr in prs]
+
+
+def shape_pr(pr: dict, suites: dict) -> dict:
+    """The fields the rows read: times, docs-only, labels and the heads with their runs."""
+    files = pr.get("files") or {}
+    paths = [f["path"] for f in files.get("nodes") or []]
+    docs_only = bool(paths) and len(paths) >= (files.get("totalCount") or 0)
+    docs_only = docs_only and all(p.startswith("docs/") or p.endswith(".md") for p in paths)
+    oids = []
+    for item in pr["timelineItems"]["nodes"]:
+        for field in ("commit", "beforeCommit", "afterCommit"):
+            oid = (item.get(field) or {}).get("oid")
+            if oid and oid not in oids:
+                oids.append(oid)
+    heads = []
+    for oid in oids:
+        runs = [
+            s
+            for s in suites.get(oid) or []
+            if (s.get("workflowRun") or {}).get("event") in HEAD_EVENTS
+        ]
+        if runs:
+            first = min(
+                parse_ts(s.get("createdAt")) or datetime.max.replace(tzinfo=timezone.utc)
+                for s in runs
+            )
+            heads.append({"oid": oid, "first": first, "runs": runs})
+    heads.sort(key=lambda h: h["first"])
+    return {
+        "number": pr["number"],
+        "title": pr.get("title") or "",
+        "branch": pr.get("headRefName") or "",
+        "state": pr.get("state"),
+        "created": parse_ts(pr.get("createdAt")),
+        "merged": parse_ts(pr.get("mergedAt")),
+        "labels": [n["name"] for n in (pr.get("labels") or {}).get("nodes") or []],
+        "docs_only": docs_only,
+        "heads": heads,
+    }
+
+
+def story_key(pr: dict, pattern: str) -> str | None:
+    """The ticket key in the title, else in the branch (any case, returned upper case)."""
+    found = re.search(pattern, pr["title"])
+    if found:
+        return found.group(0)
+    found = re.search(pattern, pr["branch"]) or re.search(pattern, pr["branch"], re.IGNORECASE)
+    return found.group(0).upper() if found else None
+
+
+def risk_class(labels: list) -> str | None:
+    for name in labels:
+        if (
+            re.fullmatch(r"T[0-3]", name)
+            or "one-way" in name.lower()
+            or name.lower().startswith("risk")
+        ):
+            return name
+    return None
+
+
+# --- GitHub rows --------------------------------------------------------------------------------
+
+
+def github_rows(prs: list, since: datetime, review_match: str, src: str) -> list:
+    in_window = [
+        p
+        for p in prs
+        if (p["merged"] and p["merged"] >= since) or (p["created"] and p["created"] >= since)
+    ]
+    merged_code = [p for p in in_window if p["merged"] and not p["docs_only"]]
+    rows = []
+
+    open_merge = [hours(p["created"], p["merged"]) for p in merged_code if p["created"]]
+    rows.append(
+        row(
+            "PR open → merge",
+            len(open_merge),
+            med(open_merge),
+            p90(open_merge),
+            unit="h",
+            source=f"{src}: code PRs merged in the window",
+        )
+    )
+
+    heads = [len(p["heads"]) for p in merged_code if p["heads"]]
+    one = sum(1 for h in heads if h == 1)
+    rows.append(
+        row(
+            "Heads per code PR",
+            len(heads),
+            med(heads),
+            p90(heads),
+            value=f"one head {pct(one, len(heads))}",
+            source=f"{src}: SHAs with a pull_request run, merged code PRs",
+        )
+    )
+
+    docs = sum(1 for p in in_window if p["docs_only"])
+    rows.append(
+        row(
+            "Docs-PR share",
+            len(in_window),
+            value=f"{docs} docs-only, {pct(docs, len(in_window))}",
+            source=f"{src}: merged in the window + open opened in it",
+        )
+    )
+
+    reviews: dict = defaultdict(list)
+    for p in in_window:
+        names = defaultdict(int)
+        for h in p["heads"]:
+            for s in h["runs"]:
+                name = ((s.get("workflowRun") or {}).get("workflow") or {}).get("name") or ""
+                if re.search(review_match, name, re.IGNORECASE):
+                    names[name] += 1 if s.get("conclusion") in RED else 0
+        for name, red in names.items():
+            reviews[name].append(red)
+    if not reviews:
+        rows.append(
+            row("Review red per PR", 0, value=f"no workflow matching /{review_match}/", source=src)
+        )
+    for name in sorted(reviews):
+        reds = reviews[name]
+        hit = sum(1 for r in reds if r)
+        rows.append(
+            row(
+                f"Review red per PR: {name}",
+                len(reds),
+                med(reds),
+                p90(reds),
+                value=f"red on {pct(hit, len(reds))} of PRs",
+                source=f"{src}: red runs per PR",
+            )
+        )
+
+    runs = cancelled = newer = 0
+    for p in in_window:
+        last = p["heads"][-1]["oid"] if p["heads"] else None
+        for h in p["heads"]:
+            for s in h["runs"]:
+                if s.get("status") != "COMPLETED" or s.get("conclusion") == "SKIPPED":
+                    continue
+                runs += 1
+                if s.get("conclusion") == "CANCELLED":
+                    cancelled += 1
+                    newer += 1 if h["oid"] != last else 0
+    rows.append(
+        row(
+            "CI cancelled share",
+            runs,
+            value=f"{cancelled} cancelled ({pct(cancelled, runs)}), newer push {pct(newer, cancelled)} of them",
+            source=f"{src}: completed non-skipped runs; newer push = a later head exists",
+        )
+    )
+
+    classes = Counter(risk_class(p["labels"]) for p in merged_code)
+    labelled = sum(v for k, v in classes.items() if k)
+    rows.append(
+        row(
+            "Code PRs by risk class",
+            labelled,
+            value=", ".join(
+                f"{k} {v}" for k, v in sorted((k, v) for k, v in classes.items() if k) if k
+            )
+            or "no class label",
+            source=f"{src}: labels T0-T3, one-way, risk*",
+        )
+    )
+    return rows
+
+
+def prs_per_story(prs: list, since: datetime, pattern: str, src: str) -> dict:
+    code, every = defaultdict(int), defaultdict(int)
+    for p in prs:
+        if not (p["merged"] and p["merged"] >= since):
+            continue
+        key = story_key(p, pattern)
+        if not key:
+            continue
+        every[key] += 1
+        if not p["docs_only"]:
+            code[key] += 1
+    counts = list(code.values())
+    mean_all = sum(every.values()) / len(every) if every else 0
+    return row(
+        "PRs per story",
+        len(counts),
+        med(counts),
+        p90(counts),
+        value=f"code PRs per key; mean with docs PRs {mean_all:.2f}",
+        source=f"{src}: key /{pattern}/ in title or branch, merged PRs",
+    )
+
+
+# --- board rows ---------------------------------------------------------------------------------
+
+
+def story_spans(rows: list, since: datetime, until: datetime) -> list:
+    """Per story done in the window: `(key, start, done, segments)` from its last entry into
+    Selected before the done; `segments` are `(state, from, to)` in log order."""
+    by_key: dict = defaultdict(list)
+    for r in rows:
+        ts = parse_ts(r.get("ts"))
+        if isinstance(r.get("key"), str) and ts and isinstance(r.get("to"), str):
+            by_key[r["key"]].append((ts, r["to"]))
+    out = []
+    for key, items in by_key.items():
+        items.sort(key=lambda x: x[0])
+        for i, (ts, to) in enumerate(items):
+            if to != "done" or not (since <= ts <= until):
+                continue
+            start = None
+            for j in range(i - 1, -1, -1):
+                if items[j][1] == "done":
+                    break
+                if items[j][1] == "selected":
+                    start = j
+            if start is None:
+                continue
+            segs = [(items[k][1], items[k][0], items[k + 1][0]) for k in range(start, i)]
+            out.append((key, items[start][0], ts, segs))
+    return out
+
+
+def board_rows(
+    transitions: list,
+    prs: list | None,
+    pattern: str,
+    since: datetime,
+    until: datetime,
+    src: str,
+    gh_why: str | None,
+) -> list:
+    spans = story_spans(transitions, since, until)
+    lead = [hours(s, d) for _, s, d, _ in spans]
+    rows = [
+        row(
+            "Lead time Selected → Done",
+            len(lead),
+            med(lead),
+            p90(lead),
+            unit="h",
+            source=f"{src}: last Selected before each Done in the window",
+        )
+    ]
+
+    rows += share_rows(spans, prs, pattern, src, gh_why)
+    stock, last = stock_row(transitions, until, src)
+    rows.append(stock)
+    return rows + mismatch_rows(last, prs, pattern, since, src, gh_why)
+
+
+def share_rows(spans: list, prs: list | None, pattern: str, src: str, gh_why: str | None) -> list:
+    """Per state its share of each story's lead time; In Progress split at the key's first code
+    PR when GitHub answered."""
+    rows = []
+    first_pr: dict = {}
+    for p in prs or []:
+        key = story_key(p, pattern)
+        if key and p["created"] and not p["docs_only"]:
+            first_pr[key] = min(first_pr.get(key, p["created"]), p["created"])
+    names = {"selected": "Selected", "in_review": "In Review", "in_test": "In Test"}
+    shares: dict = defaultdict(list)
+    totals: dict = defaultdict(float)
+    for key, start, done, segs in spans:
+        total = hours(start, done)
+        if total <= 0:
+            continue
+        per: dict = defaultdict(float)
+        for state, a, b in segs:
+            if state == "in_progress" and prs is not None:
+                cut = min(max(first_pr.get(key, b), a), b)
+                per["in_progress_no_pr"] += hours(a, cut)
+                per["in_progress_pr"] += hours(cut, b)
+            elif state == "in_progress":
+                per["in_progress_no_pr"] += hours(a, b)
+            else:
+                per[state] += hours(a, b)
+        for state in ("selected", "in_progress_no_pr", "in_progress_pr", "in_review", "in_test"):
+            shares[state].append(100 * per[state] / total)
+            totals[state] += per[state]
+    whole = sum(totals.values())
+    labels = {
+        "in_progress_no_pr": "In Progress (no PR)" if prs is not None else "In Progress",
+        "in_progress_pr": "In Progress (PR open)",
+        **names,
+    }
+    for state in ("selected", "in_progress_no_pr", "in_progress_pr", "in_review", "in_test"):
+        name = f"Share of lead time: {labels[state]}"
+        if state == "in_progress_pr" and prs is None:
+            rows.append(na(name, gh_why or "gh not found"))
+            continue
+        if state == "in_test" and not totals[state]:
+            continue
+        vals = shares[state]
+        rows.append(
+            row(
+                name,
+                len(vals),
+                med(vals),
+                p90(vals),
+                unit="%",
+                value=f"of all lead time {pct(totals[state], whole)}",
+                source=f"{src}" + (" + first code PR per key" if "pr" in state and prs else ""),
+            )
+        )
+    return rows
+
+
+def stock_row(transitions: list, until: datetime, src: str) -> tuple:
+    """The stock per state from each key's last row, and that last row per key."""
+    last = {}
+    for r in transitions:
+        if isinstance(r.get("key"), str) and isinstance(r.get("to"), str):
+            last[r["key"]] = r
+    stock = Counter(r["to"] for r in last.values())
+    ages = [
+        (until - parse_ts(r.get("ts"))).total_seconds() / 86400
+        for r in last.values()
+        if r["to"] == "in_review" and parse_ts(r.get("ts"))
+    ]
+    order = [s for s in crew_mod.STATES if stock.get(s)] + sorted(
+        set(stock) - set(crew_mod.STATES)
+    )
+    stock_line = row(
+        "Stock now (age of In Review)",
+        sum(v for k, v in stock.items() if k != "done"),
+        med(ages),
+        p90(ages),
+        unit="d",
+        value=" · ".join(f"{s} {stock[s]}" for s in order),
+        source=f"{src}: last row per key",
+    )
+    return stock_line, last
+
+
+def mismatch_rows(
+    last: dict, prs: list | None, pattern: str, since: datetime, src: str, gh_why: str | None
+) -> list:
+    """A merged code PR whose story is not In Review or later; a story In Progress without an
+    open code PR in this repo."""
+    if prs is None:
+        return [
+            na("Mismatch: merged PR, story before In Review", gh_why or "gh not found"),
+            na("Mismatch: In Progress without open PR", gh_why or "gh not found"),
+        ]
+    rows = []
+    wrong, absent = [], set()
+    for p in prs:
+        if not (p["merged"] and p["merged"] >= since) or p["docs_only"]:
+            continue
+        key = story_key(p, pattern)
+        if not key:
+            continue
+        if key not in last:
+            absent.add(key)
+        elif last[key]["to"] not in DONE_LIKE:
+            wrong.append(f"{key} #{p['number']} ({last[key]['to']})")
+    rows.append(
+        row(
+            "Mismatch: merged PR, story before In Review",
+            len(wrong),
+            value=", ".join(wrong[:5])
+            + (" …" if len(wrong) > 5 else "")
+            + (f"; {len(absent)} keys not in the log" if absent else ""),
+            source=f"{src} + merged code PRs",
+        )
+    )
+    open_keys = {story_key(p, pattern) for p in prs if p["state"] == "OPEN" and not p["docs_only"]}
+    idle = sorted(k for k, r in last.items() if r["to"] == "in_progress" and k not in open_keys)
+    rows.append(
+        row(
+            "Mismatch: In Progress without open PR",
+            len(idle),
+            value=", ".join(idle[:5]) + (" …" if len(idle) > 5 else ""),
+            source=f"{src} + open code PRs of this repo only",
+        )
+    )
+    return rows
+
+
+def writers(transitions: list, since: datetime) -> dict:
+    out: dict = defaultdict(Counter)
+    for r in transitions:
+        ts = parse_ts(r.get("ts"))
+        if ts and ts >= since and isinstance(r.get("to"), str):
+            out[f"{r.get('from') or '-'}→{r['to']}"][r.get("by") or "(no by)"] += 1
+    return {k: dict(v.most_common()) for k, v in sorted(out.items())}
+
+
+def per_day(items: list, since: datetime, until: datetime, kind: Callable) -> tuple:
+    days = max(1, math.ceil((until - since).total_seconds() / 86400))
+    daily = Counter()
+    kinds = Counter()
+    for item in items:
+        daily[((item[0] - since).total_seconds() // 86400)] += 1
+        kinds[kind(item[1])] += 1
+    counts = [daily.get(i, 0) for i in range(days)]
+    text = " · ".join(f"{k} {v / days:.1f}/d" for k, v in kinds.most_common())
+    return counts, text
+
+
+def question_rows(
+    questions: list, answers: list, since: datetime, until: datetime, src: str
+) -> list:
+    posted = [
+        (parse_ts(q.get("ts")), q)
+        for q in questions
+        if q.get("outcome") == "posted"
+        and parse_ts(q.get("ts"))
+        and parse_ts(q.get("ts")) >= since
+    ]
+    counts, text = per_day(posted, since, until, lambda q: q.get("cause") or "(none)")
+    rows = [
+        row(
+            "Questions to the human per day",
+            len(posted),
+            med(counts),
+            p90(counts),
+            value=text,
+            source=f"{src}: posted lines by cause",
+        )
+    ]
+    first: dict = {}
+    for a in answers:
+        ts = parse_ts(a.get("ts"))
+        if ts and isinstance(a.get("id"), str) and a.get("answer") != "read":
+            first[a["id"]] = min(first.get(a["id"], ts), ts)
+    waits = [
+        hours(ts, first[q["id"]])
+        for ts, q in posted
+        if q.get("id") in first and first[q["id"]] >= ts
+    ]
+    rows.append(
+        row(
+            "Question answer time",
+            len(waits),
+            med(waits),
+            p90(waits),
+            unit="h",
+            value=f"{len(posted) - len(waits)} unanswered",
+            source=f"{src} + answers log: first answer that is not `read`",
+        )
+    )
+    return rows
+
+
+def brake_rows(brakes: list, since: datetime, until: datetime, src: str) -> list:
+    items = [
+        (parse_ts(b.get("ts")), b)
+        for b in brakes
+        if parse_ts(b.get("ts")) and parse_ts(b.get("ts")) >= since
+    ]
+    counts, text = per_day(
+        items,
+        since,
+        until,
+        lambda b: (
+            f"{b.get('type')}"
+            + (f" {b['gate']}" if b.get("type") == "deny" and b.get("gate") else "")
+        ),
+    )
+    return [
+        row(
+            "Brakes per day",
+            len(items),
+            med(counts),
+            p90(counts),
+            value=text,
+            source=f"{src}: lines by type",
+        )
+    ]
+
+
+def ready_rows(root: Path | None, since: datetime, src_missing: str | None) -> list:
+    name = "Ready rounds"
+    if root is None:
+        return [na(name, src_missing or "git repo not found")]
+    try:
+        vdir = lens_verdict.verdict_dir(root)
+    except Exception:
+        return [na(name, "lens verdict directory not found")]
+    log = vdir / "samples.jsonl"
+    if not log.is_file():
+        return [na(name, "lens severity log not found")]
+    keys = sorted(
+        {
+            str(x["id"])[len("ready-") :]
+            for x in read_jsonl(log)
+            if x.get("kind") == lens_verdict.SEVERITY_KIND
+            and str(x.get("id", "")).startswith("ready-")
+        }
+    )
+    per_key, red, warn_only = [], 0, 0
+    for key in keys:
+        try:
+            rounds = lens_verdict.rounds(root, key)
+        except Exception:
+            continue
+        recent = [
+            r
+            for r in rounds
+            if any(
+                (parse_ts(x.get("ran_at")) or datetime.min.replace(tzinfo=timezone.utc)) >= since
+                for x in r["lenses"].values()
+            )
+        ]
+        if not recent:
+            continue
+        per_key.append(max(r["round"] for r in recent))
+        for r in recent:
+            for x in r["lenses"].values():
+                if x.get("verdict") == "red":
+                    red += 1
+                    if not x.get("blocking") and x.get("warning") and not x.get("failure"):
+                        warn_only += 1
+    return [
+        row(
+            name,
+            len(per_key),
+            med(per_key),
+            p90(per_key),
+            value=f"red on WARNING only: {warn_only} of {red} red lens verdicts ({pct(warn_only, red)})",
+            source="lens_verdict.rounds over the severity log",
+        )
+    ]
+
+
+# --- assembly -----------------------------------------------------------------------------------
+
+
+def git(cwd: Path, *args: str) -> str | None:
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=10, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
+def build(args, now: datetime, cwd: Path, run: Runner | None = None) -> dict:
+    since = args.since if isinstance(args.since, datetime) else parse_since(args.since, now)
+    root_text = git(cwd, "rev-parse", "--show-toplevel")
+    root = Path(root_text) if root_text else None
+    repo = args.repo or board_freeze.norm_slug(git(cwd, "remote", "get-url", "origin"))
+    try:
+        crew_path, crew = crew_mod.find_and_load(cwd)
+    except crew_mod.CrewError:
+        crew_path, crew = None, None
+    pattern = ((crew or {}).get("naming") or {}).get("key") or DEFAULT_KEY
+
+    prs, gh_why = fetch_github(args, repo, since, now, run)
+    src = f"gh {repo}"
+    board, state = locate_board(args, cwd, crew_path, crew)
+
+    rows: list = []
+    transitions = None
+    if board is None:
+        board_why = "board log not found: no crew file"
+    else:
+        tpath = board.with_name(f"{board.stem}-transitions.jsonl")
+        if tpath.is_file():
+            transitions = read_jsonl(tpath)
+            board_why = None
+        else:
+            board_why = f"{tpath.name} not found"
+    if transitions is not None:
+        rows += board_rows(transitions, prs, pattern, since, now, tpath.name, gh_why)
+    else:
+        for name in (
+            "Lead time Selected → Done",
+            "Share of lead time",
+            "Stock now (age of In Review)",
+            "Mismatch: merged PR, story before In Review",
+            "Mismatch: In Progress without open PR",
+        ):
+            rows.append(na(name, board_why))
+
+    if prs is not None:
+        rows += github_rows(prs, since, args.review_match, src)
+        rows.append(prs_per_story(prs, since, pattern, src))
+    else:
+        for name in (
+            "PR open → merge",
+            "Heads per code PR",
+            "Docs-PR share",
+            "Review red per PR",
+            "CI cancelled share",
+            "Code PRs by risk class",
+            "PRs per story",
+        ):
+            rows.append(na(name, gh_why))
+
+    rows += ready_rows(root, since, None)
+    rows += log_rows(board, state, board_why, since, now)
+    return {
+        "repo": repo,
+        "since": since.strftime("%Y-%m-%dT%H:%MZ"),
+        "until": now.strftime("%Y-%m-%dT%H:%MZ"),
+        "rows": rows,
+        "writers": writers(transitions, since) if transitions is not None else None,
+    }
+
+
+def fetch_github(args, repo: str | None, since: datetime, now: datetime, run: Runner | None):
+    """`(prs, None)`, or `(None, why)` when GitHub cannot answer."""
+    if not repo:
+        return None, "GitHub repo not found"
+    try:
+        return fetch_prs(run or gh_runner(args.gh_cache), repo, since, now), None
+    except SourceMissingError as exc:
+        return None, str(exc)
+    except (KeyError, TypeError, ValueError) as exc:
+        return None, f"gh: unexpected answer ({exc})"
+
+
+def locate_board(args, cwd: Path, crew_path: Path | None, crew: dict | None) -> tuple:
+    """`(board file, state dir)`: `--board` and its folder, else the crew's board
+    (`board_freeze.watched_board_files`) and state dir, else `(None, None)`: without a crew the
+    default board belongs to no repo."""
+    if args.board:
+        board = Path(args.board).expanduser()
+        return board, board.parent
+    if crew_path is None:
+        return None, None
+    return board_freeze.watched_board_files(cwd)[0], crew_mod.state_dir(crew_path, crew)
+
+
+def log_rows(board: Path | None, state: Path | None, board_why, since, now) -> list:
+    """The question and brake rows from the logs beside the board and in the state dir."""
+    rows = []
+    if board is not None and board.with_name(f"{board.stem}-questions.jsonl").is_file():
+        qpath = board.with_name(f"{board.stem}-questions.jsonl")
+        apath = board.with_name(f"{board.stem}-answers.jsonl")
+        rows += question_rows(
+            read_jsonl(qpath), read_jsonl(apath) if apath.is_file() else [], since, now, qpath.name
+        )
+    else:
+        why = board_why if board is None else "questions log not found"
+        rows += [na("Questions to the human per day", why), na("Question answer time", why)]
+
+    brakes = state / "brakes.jsonl" if state is not None else None
+    if brakes is not None and brakes.is_file():
+        rows += brake_rows(read_jsonl(brakes), since, now, "brakes.jsonl")
+    else:
+        rows.append(na("Brakes per day", "brakes.jsonl not found" if state else "no crew file"))
+    return rows
+
+
+def _num(value: Any) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, float) and not value.is_integer():
+        return f"{value:.1f}"
+    return f"{value:g}" if isinstance(value, float) else str(value)
+
+
+def cells(r: dict) -> list:
+    if r["value"].startswith("n/a"):
+        return [r["row"], "", "", "", r["value"], r["source"]]
+    unit = f" {r['unit']}" if r["unit"] and r["median"] is not None else ""
+    return [
+        r["row"],
+        _num(r["n"]),
+        _num(r["median"]) + unit,
+        _num(r["p90"]) + unit,
+        r["value"],
+        r["source"],
+    ]
+
+
+HEAD = ["Row", "n", "median", "p90", "value", "source"]
+
+
+def render_text(report: dict) -> str:
+    table = [HEAD] + [cells(r) for r in report["rows"]]
+    widths = [max(len(line[i]) for line in table) for i in range(len(HEAD) - 1)]
+    out = [
+        f"flow report {report['repo'] or '(no repo)'} · {report['since']} → {report['until']}",
+        "",
+    ]
+    for line in table:
+        out.append("  ".join(c.ljust(w) for c, w in zip(line, widths)) + "  " + line[-1])
+    out += _writer_lines(report, "")
+    return "\n".join(line.rstrip() for line in out) + "\n"
+
+
+def render_md(report: dict) -> str:
+    esc = lambda s: s.replace("|", "\\|")  # noqa: E731
+    out = [
+        f"# Flow report {report['repo'] or '(no repo)'}",
+        "",
+        f"Window {report['since']} → {report['until']} (UTC).",
+        "",
+        "| " + " | ".join(HEAD) + " |",
+        "|" + "---|" * len(HEAD),
+    ]
+    out += ["| " + " | ".join(esc(c) for c in cells(r)) + " |" for r in report["rows"]]
+    out += _writer_lines(report, "- ")
+    return "\n".join(out) + "\n"
+
+
+def _writer_lines(report: dict, bullet: str) -> list:
+    if report["writers"] is None:
+        return []
+    out = [
+        "",
+        "Writers per transition (window):" if not bullet else "## Writers per transition",
+        "",
+    ]
+    for kind, by in report["writers"].items():
+        flag = "" if len(by) == 1 else f"  ({len(by)} writers)"
+        out.append(
+            f"{bullet or '  '}{kind}: " + ", ".join(f"{k} {v}" for k, v in by.items()) + flag
+        )
+    return out
+
+
+def main(
+    argv: list | None = None,
+    now: datetime | None = None,
+    cwd: Path | None = None,
+    run: Runner | None = None,
+) -> int:
+    parser = argparse.ArgumentParser(prog="flow_report.py", description=__doc__.split("\n")[0])
+    parser.add_argument("--since", default="10d")
+    parser.add_argument("--repo")
+    fmt = parser.add_mutually_exclusive_group()
+    fmt.add_argument("--json", action="store_true")
+    fmt.add_argument("--md", action="store_true")
+    parser.add_argument("--board", help="board file whose logs to read (default: the crew's)")
+    parser.add_argument(
+        "--gh-cache", type=Path, help="keep and reuse gh answers in this directory"
+    )
+    parser.add_argument(
+        "--review-match", default="review", help="regex for the review workflows (default: review)"
+    )
+    parser.add_argument("--until", help="the window's end, UTC YYYY-MM-DDTHH:MM (default: now)")
+    args = parser.parse_args(argv)
+    if args.until:
+        now = parse_ts(args.until if args.until.endswith("Z") else args.until + "Z")
+        if now is None:
+            parser.error(f"--until {args.until!r}: expected YYYY-MM-DDTHH:MM")
+    now = now or datetime.now(timezone.utc).replace(microsecond=0)
+    cwd = cwd or Path.cwd()
+    try:
+        args.since = parse_since(args.since, now)
+    except argparse.ArgumentTypeError as exc:
+        parser.error(str(exc))
+    report = build(args, now, cwd, run)
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+        return 0
+    if not args.md:
+        sys.stdout.write(render_text(report))
+        return 0
+    text = render_md(report)
+    sys.stdout.write(text)
+    top = git(cwd, "rev-parse", "--show-toplevel")
+    store = Path(top) / ".weside" / "optimization" if top else None
+    if store is None or not store.is_dir():
+        print(
+            "flow_report: no optimization store (.weside/optimization/); nothing written",
+            file=sys.stderr,
+        )
+        return 0
+    target = store / "reports" / f"flow-{now.strftime('%Y-%m-%d')}.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    print(f"flow_report: wrote {target}", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
