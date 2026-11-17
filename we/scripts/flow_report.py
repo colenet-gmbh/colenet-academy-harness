@@ -182,15 +182,18 @@ def na(name: str, why: str) -> dict:
 Runner = Callable[[dict], dict]
 
 
-def gh_runner(cache: Path | None) -> Runner:
+def gh_runner(cache: Path | None, window: str = "") -> Runner:
     """`body -> response` through `gh api graphql --input -`; with `cache`, answers are kept there
-    by a hash of the body and read back instead of asked again."""
+    by a hash of the body and the `window` (`<since>..<until>`) and read back instead of asked
+    again: the open-PR search and the suites carry no window of their own, so another window
+    asks GitHub afresh."""
 
     def run(body: dict) -> dict:
         text = json.dumps(body, sort_keys=True)
         hit = None
         if cache is not None:
-            hit = cache / (hashlib.sha256(text.encode()).hexdigest()[:20] + ".json")
+            digest = hashlib.sha256((window + "\n" + text).encode()).hexdigest()[:20]
+            hit = cache / (digest + ".json")
             if hit.is_file():
                 return json.loads(hit.read_text(encoding="utf-8"))
         try:
@@ -466,8 +469,8 @@ def prs_per_story(prs: list, since: datetime, pattern: str, src: str) -> dict:
 
 
 def story_spans(rows: list, since: datetime, until: datetime) -> list:
-    """Per story done in the window: `(key, start, done, segments)` from its last entry into
-    Selected before the done; `segments` are `(state, from, to)` in log order."""
+    """Per story done in the window: `(key, start, done, segments)` from its first entry into
+    Selected since the key's previous done (a step back to Selected restarts no clock); `segments` are `(state, from, to)` in log order."""
     by_key: dict = defaultdict(list)
     for r in rows:
         ts = parse_ts(r.get("ts"))
@@ -510,7 +513,7 @@ def board_rows(
             med(lead),
             p90(lead),
             unit="h",
-            source=f"{src}: last Selected before each Done in the window",
+            source=f"{src}: first Selected since the previous Done, per Done in the window",
         )
     ]
 
@@ -878,7 +881,9 @@ def fetch_github(args, repo: str | None, since: datetime, now: datetime, run: Ru
     if not repo:
         return None, "GitHub repo not found"
     try:
-        return fetch_prs(run or gh_runner(args.gh_cache), repo, since, now), None
+        return fetch_prs(
+            run or gh_runner(args.gh_cache, f"{_iso(since)}..{_iso(now)}"), repo, since, now
+        ), None
     except SourceMissingError as exc:
         return None, str(exc)
     except (KeyError, TypeError, ValueError) as exc:

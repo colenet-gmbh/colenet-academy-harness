@@ -86,16 +86,23 @@ TRANSITIONS = [
     {
         "key": "PROJ-1",
         "from": "in_progress",
-        "to": "in_review",
-        "ts": "2026-11-02T16:00:00Z",
+        "to": "selected",
+        "ts": "2026-11-01T11:00:00Z",
         "by": "master-1",
     },
     {
         "key": "PROJ-1",
-        "from": "in_review",
-        "to": "done",
-        "ts": "2026-11-03T08:00:00Z",
-        "by": "tess",
+        "from": "selected",
+        "to": "in_progress",
+        "ts": "2026-11-01T12:00:00Z",
+        "by": "master-1",
+    },
+    {
+        "key": "PROJ-1",
+        "from": "in_progress",
+        "to": "in_review",
+        "ts": "2026-11-02T16:00:00Z",
+        "by": "master-1",
     },
     {"key": "PROJ-2", "from": None, "to": "selected", "ts": "2026-11-03T07:00:00Z", "by": "pia"},
     {
@@ -105,19 +112,26 @@ TRANSITIONS = [
         "ts": "2026-11-03T07:30:00Z",
         "by": "worker-x",
     },
-    {"key": "PROJ-3", "from": None, "to": "selected", "ts": "2026-11-09T08:00:00Z", "by": "pia"},
     {
-        "key": "PROJ-3",
-        "from": "selected",
-        "to": "in_progress",
-        "ts": "2026-11-09T09:00Z",
-        "by": "master-1",
+        "key": "PROJ-1",
+        "from": "in_review",
+        "to": "done",
+        "ts": "2026-11-03T08:00:00Z",
+        "by": "tess",
     },
     {
         "key": "PROJ-4",
         "from": "in_progress",
         "to": "in_review",
         "ts": "2026-11-08T12:00:00Z",
+        "by": "master-1",
+    },
+    {"key": "PROJ-3", "from": None, "to": "selected", "ts": "2026-11-09T08:00:00Z", "by": "pia"},
+    {
+        "key": "PROJ-3",
+        "from": "selected",
+        "to": "in_progress",
+        "ts": "2026-11-09T09:00Z",
         "by": "master-1",
     },
 ]
@@ -218,9 +232,9 @@ def test_board_rows_from_the_logs(tmp_path):
     rows, out = report(repo(tmp_path))
     r = rows["Lead time Selected → Done"]
     assert (r["n"], r["median"]) == (1, 48.0)  # PROJ-0 is done before the window
-    assert rows["Share of lead time: Selected"]["median"] == pytest.approx(100 * 2 / 48)
+    assert rows["Share of lead time: Selected"]["median"] == pytest.approx(100 * 3 / 48)
     assert rows["Share of lead time: In Progress (no PR)"]["median"] == pytest.approx(
-        100 * 24 / 48
+        100 * 23 / 48
     )
     assert rows["Share of lead time: In Progress (PR open)"]["median"] == pytest.approx(
         100 * 6 / 48
@@ -233,7 +247,7 @@ def test_board_rows_from_the_logs(tmp_path):
     assert (r["n"], r["value"]) == (1, "PROJ-2 #3 (in_progress)")
     r = rows["Mismatch: In Progress without open PR"]
     assert (r["n"], r["value"]) == (1, "PROJ-2")
-    assert out["writers"]["selected→in_progress"] == {"master-1": 2, "worker-x": 1}
+    assert out["writers"]["selected→in_progress"] == {"master-1": 3, "worker-x": 1}
     assert out["writers"]["in_review→done"] == {"tess": 1}
 
 
@@ -314,12 +328,14 @@ def test_the_gh_cache_answers_a_second_run(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     root = repo(tmp_path)
     cache = tmp_path / "cache"
-    report(root, "gh_cache", cache, run=fr.gh_runner(cache))
+    report(root, run=fr.gh_runner(cache, "w1"))
     first = len(calls.read_text().splitlines())
     assert first == 11  # ten day chunks and the open PRs, no commits to ask about
-    rows, _ = report(root, run=fr.gh_runner(cache))
+    rows, _ = report(root, run=fr.gh_runner(cache, "w1"))
     assert len(calls.read_text().splitlines()) == first
     assert rows["Docs-PR share"]["n"] == 0
+    report(root, run=fr.gh_runner(cache, "w2"))  # another window asks again, open PRs too
+    assert len(calls.read_text().splitlines()) == 2 * first
 
 
 def test_md_writes_into_the_store_or_says_why_not(tmp_path, capsys):
