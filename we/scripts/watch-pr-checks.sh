@@ -205,7 +205,7 @@ until [ -n "$REPO" ] || gh_try REPO repo view --json nameWithOwner --jq .nameWit
 done
 
 LOCK=""
-take_lock() {  # one watcher per PR; a second exits 0 naming the holder (header)
+take_lock() {  # one watcher per PR; a second exits 14 naming the holder (header)
   local dir holder
   command -v flock >/dev/null 2>&1 || return 0
   dir="${WE_STATE_DIR:-$HOME/.claude/we-state}/watch-locks"
