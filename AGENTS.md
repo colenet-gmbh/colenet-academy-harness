@@ -93,7 +93,7 @@ claude plugin validate we && claude plugin test we   # the /flow and /board hook
 A full local test run goes through `scripts/full_test_run.py`: on a host shared by several sessions it
 waits for the test slot (`$WESIDE_TESTS_LOCK`, default `/tmp/weside-tests.lock`) and ends with its
 peak process count and RSS; a single suite runs with plain `pytest <file>`. The root `conftest.py`
-gives every test its own `WE_STATE_DIR`; a test that still writes the live brake log fails the run.
+turns the run red when a test writes the live brake log; such a test takes the `own_state_dir` fixture.
 
 `claude plugin test` runs the `*.test.ts` files under `we/hooks/` against Claude Code's own
 engine; CI runs it (job Hooks Module, a pinned CLI), and a change to the hooks module runs it
