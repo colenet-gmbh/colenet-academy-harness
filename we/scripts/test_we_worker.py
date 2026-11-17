@@ -81,7 +81,11 @@ def setup(tmp_path, rows=(), crew=CREW):
     if crew is not None:
         (project / ".weside").mkdir(exist_ok=True)
         (project / ".weside" / "crew.json").write_text(json.dumps(crew))
-    env = {k: v for k, v in os.environ.items() if k not in ("TMUX", "WE_WORKER_TIMER")}
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("TMUX", "WE_WORKER_TIMER", "WE_WORKER_ALLOW_BYPASS")
+    }
     env.update(
         PATH=f"{bindir}{os.pathsep}{os.environ['PATH']}",
         HOME=str(tmp_path / "home"),

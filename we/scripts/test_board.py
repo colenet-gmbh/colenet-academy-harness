@@ -3753,3 +3753,29 @@ def test_distinct_lets_another_question_on_the_same_key_and_cause_through(crewle
     out = capsys.readouterr()
     assert f"warning: {first} on PROJ-12 is still open" in out.err
     assert [q.get("key") for q in board_of(crewless)["owner_queue"]].count("PROJ-12") == 2
+
+
+def test_docs_name_every_flag_of_every_verb():
+    """`ask --replace`, `ask --distinct`, `freeze --by` and the answer kind `withdraw`
+    existed only in the code. Red arm: a flag or answer kind docs/board.md does not name."""
+    import argparse  # noqa: PLC0415
+
+    docs = (Path(__file__).resolve().parent.parent / "docs" / "board.md").read_text()
+    missing = []
+
+    def walk(p, path):
+        for act in p._actions:
+            if isinstance(act, argparse._SubParsersAction):
+                for name, sub in act.choices.items():
+                    walk(sub, (*path, name))
+            elif path and any(o.startswith("--") for o in act.option_strings):
+                flag = next(o for o in act.option_strings if o.startswith("--"))
+                if flag != "--help" and flag not in docs:
+                    missing.append(f"{' '.join(path)} {flag}")
+
+    walk(board.parser(), ())
+    answer = board.parser()._subparsers._group_actions[0].choices["answer"]
+    kinds = next(a for a in answer._actions if a.dest == "kind").choices
+    chat = docs.split("### Answers given in a chat", 1)[1].split("\n## ", 1)[0]
+    missing += [f"answer {k}" for k in kinds if f"`{k}`" not in chat]
+    assert not missing, f"docs/board.md names none of: {missing}"
