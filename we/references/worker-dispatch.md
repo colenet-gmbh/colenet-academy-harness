@@ -109,7 +109,11 @@ capacity` owns the rule); there is no override flag.
 ### Worker rights
 
 Every `we-worker` start passes `--settings` (`worker_launch.py settings`: the repo's granted rights
-as `permissions.allow`, the never-list as `permissions.deny`, `WE_ROLE` and `WE_STORY_KEY` as `env`).
+as `permissions.allow`, the never-list as `permissions.deny`, the worker's variables as `env`,
+`worker_rights.worker_env`). A `claude --bg` session takes the daemon's environment, not the
+launcher's, so a plain `claude --bg` template gets an env-only `--settings` too
+(`we-worker.settings.json` in the worktree's git dir). Every `claude` call of `worker_launch.py`
+drops `CLAUDE_CONFIG_DIR`, so a pinned master sees the global login's sessions.
 The brake is the PreToolUse hook `hooks/worker_rights_gate.py`, which holds under `bypassPermissions`:
 in a repo the crew's `worker_rights.repos` names, a worker on its own keyed branch runs `gh pr ready`,
 `gh pr comment` on its own PR and the crew's `branch_rc` without asking; every worker is denied the
