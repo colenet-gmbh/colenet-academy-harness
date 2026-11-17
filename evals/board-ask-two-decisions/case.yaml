@@ -21,7 +21,7 @@ execution:
 graders:
   - name: two-asks
     type: regex
-    pattern: "board\\.py[^\\n]*\\bask\\b"
+    pattern: "board\\.py[\\s\\S]{0,80}?\\bask\\b"
     match: "count:2"
   - name: no-two-in-one-ask
     type: regex

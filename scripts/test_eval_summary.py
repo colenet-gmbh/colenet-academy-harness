@@ -72,3 +72,10 @@ def test_a_missing_value_prints_na_not_zero():
         line for line in eval_summary.render(result).splitlines() if line.startswith("| worker")
     )
     assert "| 1.00 | n/a | n/a |" in row
+
+
+def test_a_run_error_counts_by_class_never_by_its_text():
+    run = {"error": "spawn failed in /tmp/claude-eval-x/home/cwd", "graders": []}
+    result = dict(RESULT, cases=[dict(RESULT["cases"][0], arms={"with": [run], "without": []})])
+    text = eval_summary.render(result)
+    assert "run error x1" in text and "/tmp/" not in text

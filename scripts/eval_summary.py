@@ -55,9 +55,8 @@ def _failed(runs) -> str:
     """`grader xn` for every grader that failed in a run of this arm."""
     counts: dict[str, int] = {}
     for run in runs or []:
-        if run.get("error"):
-            key = "error: " + str(run["error"])[:60]
-            counts[key] = counts.get(key, 0) + 1
+        if run.get("error"):  # the class only: the CLI's error text may name a temp dir or path
+            counts["run error"] = counts.get("run error", 0) + 1
         for grader in run.get("graders") or []:
             if grader.get("scored", True) and not grader.get("passed"):
                 counts[grader["name"]] = counts.get(grader["name"], 0) + 1
