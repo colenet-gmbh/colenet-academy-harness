@@ -20,7 +20,8 @@ import json, os, sys
 state = os.environ["STUB_STATE"]
 rows = json.load(open(state))
 with open(os.environ["STUB_LOG"], "a") as fh:
-    fh.write(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd()}) + "\n")
+    fh.write(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd(),
+                         "config_dir": os.environ.get("CLAUDE_CONFIG_DIR")}) + "\n")
 args = sys.argv[1:]
 if args[:2] == ["agents", "--json"]:
     print(json.dumps(rows)); sys.exit(0)
@@ -188,6 +189,8 @@ def test_launch_writes_brief_and_marker_and_runs_in_the_worktree(env):
     assert marker["session_id"] == "s-KEY-1-w1"
     launch = _launch_call(env)
     assert launch["argv"] == [
+        "--settings",
+        str(gd / wl.SETTINGS),
         "--bg",
         "-n",
         "KEY-1-w1",
@@ -201,6 +204,51 @@ def test_launch_writes_brief_and_marker_and_runs_in_the_worktree(env):
     assert json.loads(timing[0].read_text().splitlines()[0])["event"] == "WorkerLaunch"
 
 
+def test_a_claude_bg_template_states_the_worker_env_as_settings(env, monkeypatch):
+    """`claude --bg` takes the daemon's environment (measured: WE_ROLE=worker and
+    another story's key), so the launcher's variables never arrive; the worker's own go in as
+    `--settings`. Red arm: without them the worker runs as the daemon's story."""
+    env["configure"]("claude --bg -n {name} {brief}")
+    monkeypatch.setenv("WE_HUMAN", "ana")
+    wl.launch(env["wt"], "KEY-1-w1", env["brief"])
+    argv = _launch_call(env)["argv"]
+    assert "--settings" in argv, f"claude --bg started without --settings: {argv}"
+    doc = json.loads(Path(argv[argv.index("--settings") + 1]).read_text())
+    assert doc == {
+        "env": {
+            "WE_ROLE": "worker",
+            "WE_STORY_KEY": "KEY-1",
+            "WESIDE_COMPANION": "",
+            "WE_ROLE_ID": "",
+            "WE_HUMAN": "ana",
+        }
+    }
+    assert not any(k.startswith("ANTHROPIC") for k in doc["env"])  # never a credential on disk
+    wl.clear_marker(env["wt"])
+    assert not (wl.git_dir(env["wt"]) / wl.SETTINGS).exists()
+
+
+def test_a_launcher_template_brings_its_own_settings(env, tmp_path):
+    """`we-worker` writes the worker's settings itself; the launch adds none."""
+    stub = tmp_path / "bin" / "we-worker"
+    stub.write_text((tmp_path / "bin" / "claude").read_text())
+    stub.chmod(0o755)
+    env["configure"]("we-worker --bg -n {name} {brief}")
+    wl.launch(env["wt"], "KEY-1-w1", env["brief"])
+    assert "--settings" not in _launch_call(env)["argv"]
+
+
+def test_a_pinned_lead_reads_and_starts_on_the_global_supervisor(env, monkeypatch):
+    """a pinned master carries CLAUDE_CONFIG_DIR; `claude agents` under it asks
+    another supervisor (too few busy workers, a marker without session_id). Red arm: the
+    variable reaches the stub."""
+    env["configure"]("claude --bg -n {name} {brief}")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/pinned/profile")
+    wl.launch(env["wt"], "KEY-1-w1", env["brief"])
+    leaked = [c["argv"][:2] for c in _calls(env) if c["config_dir"]]
+    assert not leaked, f"CLAUDE_CONFIG_DIR reached claude in {leaked}"
+
+
 def test_agent_placeholder_needs_an_agent(env):
     env["configure"](TEMPLATE)
     with pytest.raises(wl.LaunchError, match="pass --agent") as exc:
@@ -208,7 +256,7 @@ def test_agent_placeholder_needs_an_agent(env):
     assert exc.value.code == 2 and wl.read_marker(env["wt"]) is None
     env["configure"]("claude --bg -n {name} {brief}")
     wl.launch(env["wt"], "KEY-1-w2", env["brief"])
-    assert _launch_call(env)["argv"][:3] == ["--bg", "-n", "KEY-1-w2"]
+    assert _launch_call(env)["argv"][2:5] == ["--bg", "-n", "KEY-1-w2"]
 
 
 def test_lead_in_the_worker_tree_is_no_worker(env):
@@ -376,7 +424,9 @@ def test_a_broken_crew_leaves_the_config_in_charge(env, capsys):
     assert "crew unreadable" in capsys.readouterr().err
 
 
-def test_stop_falls_back_to_claude_stop_when_we_worker_is_not_on_path(env):
+def test_stop_falls_back_to_claude_stop_when_we_worker_is_not_on_path(env, monkeypatch):
+    path = [d for d in os.environ["PATH"].split(os.pathsep) if not Path(d, "we-worker").exists()]
+    monkeypatch.setenv("PATH", os.pathsep.join(path))
     env["configure"](TEMPLATE)
     wl.launch(env["wt"], "KEY-1-w1", env["brief"], "we:dev-medium")
     _crew(env, {"worker": "we-worker {name} --bg --agent {agent} {brief}"})
@@ -629,12 +679,14 @@ class TestCheckBrief:
             " it by SendMessage, not to a new worker KEY-1-planfix"
         ]
 
+    @pytest.mark.usefixtures("own_state_dir")
     def test_an_enforced_check_refuses(self, monkeypatch):
         monkeypatch.setattr(wl, "BRIEF_ENFORCED", True)
         with pytest.raises(wl.LaunchError, match="the brief lacks") as exc:
             wl.check("AB-1-x", (BRIEFS / "missing-goal.md").read_text())
         assert exc.value.code == 2
 
+    @pytest.mark.usefixtures("own_state_dir")
     def test_check_reads_stdin(self):
         out = subprocess.run(
             [sys.executable, str(SCRIPT), "check", "--name", "AB-1-x", "--brief-file", "-"],
@@ -680,7 +732,12 @@ class TestSettings:
         doc = json.loads(out_file.read_text())
         assert doc["permissions"]["allow"] == []  # no crew, no rights
         assert "Bash(*gh secret *)" in doc["permissions"]["deny"]
-        assert doc["env"] == {"WE_ROLE": "worker", "WE_STORY_KEY": "KEY-1"}
+        assert doc["env"] == {
+            "WE_ROLE": "worker",
+            "WE_STORY_KEY": "KEY-1",
+            "WESIDE_COMPANION": "",
+            "WE_ROLE_ID": "",
+        }
         assert doc["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "timer arm x"
 
 

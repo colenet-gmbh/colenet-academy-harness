@@ -2,7 +2,7 @@
 """The board's verbs for a session (docs/board.md § The file, § Answers, § Questions and decisions, § Escalations, § The freeze flag).
 
 Usage:
-  board.py [--board FILE] answer <id> <accept|deny|discuss|info|update> --session NAME --via chat
+  board.py [--board FILE] answer <id> <accept|deny|discuss|info|update|withdraw> --session NAME --via chat
            [--quote "<the owner's words>"]
   board.py [--board FILE] freeze --reason "<why>" [--repo OWNER/REPO ...] [--by NAME]
   board.py [--board FILE] unfreeze

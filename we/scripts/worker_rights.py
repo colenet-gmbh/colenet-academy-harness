@@ -42,6 +42,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 INLINE = {"python": "-c", "python3": "-c", "node": "-e", "perl": "-e", "ruby": "-e"}
@@ -739,7 +740,11 @@ def brake_log(cwd: str | Path | None, record: dict) -> Path | None:
               `name`, `key`, `session_id`, `argv0` (the first word of the command; never the
               command itself, which may carry a secret value)
       `brief` (every worker start): `name`, `key`, `ok`, `missing` (the fields the brief lacks).
-    One line per event, so a brake's false alarms and the brief check's pass rate can be counted."""
+    One line per event, so a brake's false alarms and the brief check's pass rate can be counted.
+
+    `WE_STATE_FORBIDDEN` (directories, `os.pathsep`-separated; the test run's `conftest.py` sets
+    it to the live state directories) refuses a write there: the line goes to the file named by
+    `WE_STATE_LEAKS` instead, and the test run turns red on it."""
     import contextlib  # noqa: PLC0415
     import datetime as dt  # noqa: PLC0415
 
@@ -752,6 +757,17 @@ def brake_log(cwd: str | Path | None, record: dict) -> Path | None:
             path, crew = None, None
         out = crew_mod.state_dir(path, crew) / BRAKE_LOG
         line = {"ts": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), **record}
+        forbidden = {
+            os.path.realpath(os.path.expanduser(d))
+            for d in os.environ.get("WE_STATE_FORBIDDEN", "").split(os.pathsep)
+            if d.strip()
+        }
+        if os.path.realpath(str(out.parent)) in forbidden:
+            leaks = os.environ.get("WE_STATE_LEAKS", "").strip()
+            if leaks:
+                with open(leaks, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"path": str(out), **line}, ensure_ascii=False) + "\n")
+            return None
         out.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(out), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
         try:
@@ -849,8 +865,18 @@ def settings(repo: str | Path, key: str) -> dict:
             deny.append(f"Bash(*{text}*)")
             if text.startswith("/"):
                 deny.append(f"Read(/{text}**)")
-    # `env` too: a `claude --bg` session runs in the daemon's environment, not the launcher's
-    return {
-        "permissions": {"allow": allow, "deny": deny},
-        "env": {"WE_ROLE": "worker", "WE_STORY_KEY": key},
-    }
+    return {"permissions": {"allow": allow, "deny": deny}, "env": worker_env(key)}
+
+
+def worker_env(key: str, environ: Any = None) -> dict:
+    """The `env` block of a worker's `--settings`: what `we-worker` sets and clears at its start.
+
+    A `claude --bg` session runs in the daemon's environment, not the launcher's (the daemon may
+    carry `WE_ROLE=worker` and another story's key, or a pin), so every variable the start decides
+    is stated here; a cleared one is "", which every reader takes as unset. `WE_HUMAN` passes on
+    when the launcher has it. Never a credential: this block is written to a file."""
+    env = os.environ if environ is None else environ
+    doc = {"WE_ROLE": "worker", "WE_STORY_KEY": key, "WESIDE_COMPANION": "", "WE_ROLE_ID": ""}
+    if env.get("WE_HUMAN"):
+        doc["WE_HUMAN"] = env["WE_HUMAN"]
+    return doc
