@@ -199,7 +199,8 @@ when it moved; every minute it re-reads the file and the live column whatever ha
 The option `boardAutoOpen` (`/plugin` → we → Configure) opens it at session start: `off` (default),
 `on` (every session), `orchestrator` (only the session whose companion pin holds `roles.coordinator`
 in the repo's crew, checked by `scripts/crew.py is-role coordinator`; crew file:
-`references/companion-session.md` § Crew). Opened unasked, the pane needs 144 terminal columns and waits
+`references/companion-session.md` § Crew); a session `wclaude --start` started (`WE_START=1`) opens
+it whatever the option. Opened unasked, the pane needs 144 terminal columns and waits
 undrawn below that until you widen the terminal or run `/board`.
 
 ## The file
@@ -380,7 +381,8 @@ python3 <plugin>/scripts/board.py answer Q1 accept --session lead --via chat --q
 ```
 
 It refuses, writing nothing, an id in neither `owner_queue` nor `news` and a kind outside `accept`,
-`deny`, `discuss`, `info`, `update`; it opens `board.json` read-only and prints the line it wrote. A
+`deny`, `discuss`, `info`, `update`, `withdraw` (the human's take-back of an `ask --to` question,
+which closes it like Accept or Deny); it opens `board.json` read-only and prints the line it wrote. A
 second answer on an id an Accept or Deny already closed (the owner answered twice) is a duplicate:
 no answer line, so nothing is carried again, one `duplicate-answer` line in `board-questions.jsonl`,
 and exit 0 with `<id> is closed by <kind>; recorded as a duplicate, nothing runs again`. `--board FILE` names another board file. Without that line
@@ -388,7 +390,8 @@ the question stays open on the pane.
 
 ## The freeze flag
 
-`board.py freeze --reason "<why>" [--repo OWNER/REPO ...]` stops merges: it writes
+`board.py freeze --reason "<why>" [--repo OWNER/REPO ...] [--by <who>]` stops merges (`by`
+defaults to `$WESIDE_COMPANION`, else `$USER`, else `unknown`): it writes
 `freeze.json` beside the board file (`<stem>-freeze.json` for a board not named `board.json`;
 `since`, `by`, `reason`, `repos`, `disarmed`, `not_disarmed`, `issues`), opens an issue labelled
 `merge-freeze` in each named repo (for `*`: the crew file's repo, each member's extra repo present
@@ -457,9 +460,18 @@ with `returned to` is never overwritten, and the refusal and the `returned` line
 `board-questions.jsonl` alone carry the return. A reader that cannot run (no `claude`, 90 s, no parseable
 answer) posts nothing and exits 1 with `reader-error: <cause>`.
 
+**One open question per key and cause.** An `ask` on a key that already has an open question
+with the same cause, PR and `--to` human is refused as a `duplicate` (a line in
+`board-questions.jsonl`, naming the open id); `--distinct` posts it anyway when it is another
+question. Another open question on the key draws one stderr warning. `--replace <Q>` replaces the
+asker's open question `<Q>` on the same `--key`: once the new one is posted, `<Q>` leaves
+`owner_queue` and gets a `replaced` line with `by` the new id; an id that is not open, or open on
+another key, is refused. An asker who takes a question back without a new one runs
+`board.py withdraw <Q>` (§ Several humans).
+
 Every `ask` past the field check appends one line to `board-questions.jsonl`:
 `{id?, ts, session, key, key_title, ask, recommendation, cause, outcome, reason?, reader?}`, with
-`outcome` `posted` (only then `id`), `returned`, `reader-error`, `closed` (`close-merged`) or `pruned` (§ Pruning), and `reader` the reader's raw
+`outcome` `posted` (only then `id`), `returned`, `reader-error`, `duplicate` (with `of`), `replaced` (with `by`), `closed` (`close-merged`) or `pruned` (§ Pruning), and `reader` the reader's raw
 `decides`, `on_yes`, `form`. A duplicate answer adds a `duplicate-answer` line (§ Answers given in a
 chat). The line keeps the question's text after it leaves `owner_queue` (§ Pruning, `close-merged`), so
 questions per day and answer times come from this log joined with `board-answers.jsonl` by `id`.
@@ -551,7 +563,9 @@ writes, `bundle` runs `escalation route`; each open record at stage `bundle` add
 
 `board.py escalation` holds the decision story between two role holders (skill `/we:decide`). It
 appends events to `board-escalations.jsonl` beside the board (`O_APPEND`, only grows); a record is
-the fold of its events by `id` in log order (`fold_escalations`).
+the fold of its events by `id` in log order (`fold_escalations`). A party opens one with
+`escalation open --key <KEY> --parties <role>,<role> --question "<q>" --a "<option>" --a-cost "<cost>"
+--b "<option>" --b-cost "<cost>" --reversible <yes|no> [--touches <topic>]`.
 
 | Event | Who | Fields |
 |---|---|---|

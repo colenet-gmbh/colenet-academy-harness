@@ -425,6 +425,7 @@ def test_a_marker_worker_names_its_lead(world):
     assert hook(world, "gh secret set X", session="s-lead", WE_ROLE=None) == (None, "")
 
 
+@pytest.mark.usefixtures("own_state_dir")
 def test_an_error_while_judging_fails_closed(world, monkeypatch, capsys):
     sys.path.insert(0, str(HOOK.parent))
     import worker_rights_gate as gate  # noqa: PLC0415
@@ -491,6 +492,11 @@ def test_settings_grant_exactly_the_repos_rights_and_deny_the_never_list(world):
         "Read(//dev/shm/vault-**)",
     ):
         assert rule in deny
-    assert doc["env"] == {"WE_ROLE": "worker", "WE_STORY_KEY": KEY}
+    assert doc["env"] == {
+        "WE_ROLE": "worker",
+        "WE_STORY_KEY": KEY,
+        "WESIDE_COMPANION": "",
+        "WE_ROLE_ID": "",
+    }
     plain = make_repo(world["tmp"], name="plain", rights=None)
     assert wr.settings(plain, KEY)["permissions"]["allow"] == []

@@ -91,6 +91,7 @@ REQUIRED = ("name", "brief")
 SUBAGENT = "subagent"
 MARKER = "we-worker.json"
 BRIEF = "we-brief.md"
+SETTINGS = "we-worker.settings.json"
 STOP_WAIT_S = 30
 SESSION_WAIT_S = 10
 
@@ -150,7 +151,7 @@ def worker_marker(payload: dict) -> dict | None:
 
 def clear_marker(worktree: Path | None) -> None:
     gd = git_dir(worktree) if worktree else None
-    for path in (gd / MARKER, gd / BRIEF) if gd else ():
+    for path in (gd / MARKER, gd / BRIEF, gd / SETTINGS) if gd else ():
         with contextlib.suppress(OSError):
             path.unlink()
 
@@ -325,6 +326,13 @@ def capacity(repo: Path, prefix: str) -> None:
         )
 
 
+def claude_env() -> dict:
+    """The environment of every `claude` call here, without `CLAUDE_CONFIG_DIR`: a pinned master
+    runs on its own config dir, whose supervisor knows none of the workers on the global login
+    (the same as `we-worker`'s `env -u CLAUDE_CONFIG_DIR`)."""
+    return {k: v for k, v in os.environ.items() if k != "CLAUDE_CONFIG_DIR"}
+
+
 def sessions() -> list[dict]:
     """`claude agents --json`: interactive and background sessions on this machine."""
     try:
@@ -334,6 +342,7 @@ def sessions() -> list[dict]:
             text=True,
             check=False,
             timeout=AGENTS_TIMEOUT_S,
+            env=claude_env(),
         )
     except subprocess.TimeoutExpired:
         raise LaunchError(f"claude agents --json timed out after {AGENTS_TIMEOUT_S} s") from None
@@ -537,8 +546,20 @@ def launch(worktree: Path, name: str, brief_file: Path, agent: str | None = None
         tokens,
         {"name": name, "agent": agent or "", "brief": f"Read {brief_path} and follow it."},
     )
+    if Path(argv[0]).name == "claude" and "--bg" in argv and "--settings" not in argv:
+        # a `claude --bg` session takes the daemon's environment, not this one: the worker's
+        # variables go in as settings (`we-worker` writes its own)
+        import worker_rights  # noqa: PLC0415
+
+        settings_path = gd / SETTINGS
+        settings_path.write_text(
+            json.dumps({"env": worker_rights.worker_env(key)}, indent=2) + "\n"
+        )
+        argv[1:1] = ["--settings", str(settings_path)]
     try:
-        out = subprocess.run(argv, cwd=worktree, capture_output=True, text=True, check=False)
+        out = subprocess.run(
+            argv, cwd=worktree, capture_output=True, text=True, check=False, env=claude_env()
+        )
         failed = out.returncode != 0
         detail = f"exited {out.returncode}: {out.stderr.strip()}"
     except OSError as exc:
@@ -647,7 +668,12 @@ def _stop_one(row: dict, launcher: str | None) -> str:
     argv = [launcher or "claude", "stop", rid]
     try:
         out = subprocess.run(
-            argv, capture_output=True, text=True, check=False, timeout=STOP_VERB_TIMEOUT_S
+            argv,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=STOP_VERB_TIMEOUT_S,
+            env=claude_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise LaunchError(f"{argv[0]} stop {rid}: {exc}") from exc
