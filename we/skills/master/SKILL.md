@@ -233,6 +233,7 @@ Then one `we:dev-medium` finisher in `<int>` runs the finish sequence.
      quota resets, then watch again.
    - exit 13 (a failed job never started: zero steps, billing or runner) → no rerun; one line to the
      coordinator with the watcher's annotation.
+   - exit 14 (another watcher holds this PR) → nothing to do; its notification carries the result.
    Bounds, no `/loop` or `/goal`: ci-review's three rounds; the watcher's 6-h lifetime (exit 9 →
    report); at most three re-arms per PR head; a repeat finding (ci-review § 4) stops and reports.
 6. A conflict exit of `watch-pr-conflicts.sh` (or the `conflict_gate.py` Stop hook) goes back to the

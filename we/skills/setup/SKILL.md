@@ -48,8 +48,8 @@ never commit yourself.
    says how the change was observed, or `not-observed — <reason>`. On `yes`, offer to scaffold
    `.weside/verify.md` from what step 1 found: the repo's CLI, its dev bring-up command, whether a
    browser driver exists.
-6. **Worker cap**: how many sessions may work at once on this machine, and above which share of the
-   active account's 5h window no new worker starts? Defaults `10` and `80` (skip keeps them). Process
+6. **Worker cap**: how many sessions may work at once on this machine, and above which share of
+   the 5h window an account counts as full (no new worker starts while every account in rotation is)? Defaults `10` and `80` (skip keeps them). Process
    workers share one login, so too many at once hit the usage limit together; `we-worker` refuses a
    start over either (`${CLAUDE_PLUGIN_ROOT}/scripts/worker_launch.py` `capacity`).
 

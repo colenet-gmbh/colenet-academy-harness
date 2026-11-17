@@ -16,19 +16,12 @@ placeholder inside a token (`--x={name}`). `{name}` and `{brief}` are required. 
 one-line prompt `Read <git-dir>/we-brief.md and follow it.`: the brief never passes through a
 shell. The command runs without a shell, cwd = the worker's worktree.
 
-Name and brief (one owner, read by `launch`, by `check` and through `check` by `we-worker`): a worker
+The name (one owner, read by `launch`, by `check` and through `check` by `we-worker`): a worker
 name starts with a match of the crew's `naming.key` (default `[A-Z]+-\\d+`), alone or followed by
-`-<chunk>` (`check_name`). A brief carries four fields as Markdown headings outside fenced code, each
-with a non-blank body up to the next heading of its level or above (`check_brief`); a heading counts
-when its text starts, case-insensitively, with one of the field's two names: `Ziel`/`Goal`,
-`Ausgabe`/`Output`, `Werkzeuge und Quellen`/`Tools and sources`, `Grenzen und wann stoppen`/`Limits
-and when to stop`. A brief that is exactly `Read <path> and follow it.` is that file's text. The name
-check refuses; the brief check warns while `BRIEF_ENFORCED` is false (it prints the finding and
-`TEMPLATE`, which passes its own check, and the worker starts) and refuses once a follow-up sets it.
-Every checked start is one `brief` line in `brakes.jsonl` (`worker_rights.brake_log`): the switch
-is due when the last 30 logged starts pass.
+`-<chunk>` (`check_name`); a name without one refuses. The brief's shape is not checked (its four
+fields: `references/worker-dispatch.md`).
 
-`launch` checks name (and, once enforced, brief) first, then writes two files into the worktree's own git dir (untracked,
+`launch` checks the name first, then writes two files into the worktree's own git dir (untracked,
 removed with the worktree): `we-brief.md` (the brief under a first `Lead:` line) and `we-worker.json`
 (the marker: name, key, lead, agent, launched_at, and the worker's `session_id` from `claude agents --json`). The hooks treat a session
 as a process worker only when the marker's `session_id` is its own (`worker_marker`), so the Lead
@@ -38,17 +31,21 @@ files, also for a session that already ended.
 
 Usage:
   worker_launch.py backend [--repo <dir>]          prints `subagent` or the template; 2 = invalid
-  worker_launch.py check --name <n> (--brief-file <f|-> | --no-brief) [--repo <dir>] [--prefix <p>]
-                                                   prints the story key; 2 with the refusal lines
-                                                   (and the template) on stderr; a living session
+  worker_launch.py check --name <n> [--repo <dir>] [--prefix <p>]
+                                                   prints the story key; 2 with the refusal line
+                                                   on stderr (`--brief-file`, `--no-brief`: accepted
+                                                   and ignored, an older `we-worker` copy passes
+                                                   them); a living session
                                                    of the same key is named on stderr as the
                                                    SendMessage target of a follow-up
   worker_launch.py capacity [--repo <dir>] [--prefix <p>]
                                                    exit 0: a worker may start; 3: refused while
                                                    the busy workers (background or window) reach
-                                                   workers.max_busy_sessions (10) or the active
-                                                   account's 5h window (`cswap status --json`) is
-                                                   above workers.max_active_5h_percent (80), both
+                                                   workers.max_busy_sessions (10) or no account in
+                                                   rotation (`cswap list --json`) has 7d under 95 %
+                                                   and 5h at or under
+                                                   workers.max_active_5h_percent (80; unreadable
+                                                   list: the active account's 5h decides), both
                                                    from .weside/config.json, both values named;
                                                    an unreadable value skips its check (stderr;
                                                    silent without cswap on PATH);
@@ -286,14 +283,53 @@ def five_hour_percent() -> float | None:
     return float(pct) if isinstance(pct, (int, float)) and not isinstance(pct, bool) else None
 
 
+SEVEN_DAY_FULL = 95
+
+
+def _pct(window: object) -> float | None:
+    pct = window.get("pct") if isinstance(window, dict) else None
+    return float(pct) if isinstance(pct, (int, float)) and not isinstance(pct, bool) else None
+
+
+def rotation_room(max_pct: float) -> tuple[int, int] | None:
+    """`(with room, in rotation)` over `cswap list --json` `accounts[]`; None when unreadable or
+    without the list. An account is in rotation unless it carries `disabled: true`; it has room
+    when its `usage.sevenDay.pct` is under `SEVEN_DAY_FULL` and its `usage.fiveHour.pct` is at or
+    under `max_pct`. An account without a readable reading has no room. Never reads a name."""
+    try:
+        out = subprocess.run(
+            ["cswap", "list", "--json"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=CSWAP_TIMEOUT_S,
+        )
+        rows = json.loads(out.stdout)["accounts"]
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(rows, list) or not rows:
+        return None
+    in_rotation = [r for r in rows if isinstance(r, dict) and r.get("disabled") is not True]
+    room = 0
+    for row in in_rotation:
+        usage = row.get("usage") if isinstance(row.get("usage"), dict) else {}
+        five, seven = _pct(usage.get("fiveHour")), _pct(usage.get("sevenDay"))
+        if five is not None and seven is not None and seven < SEVEN_DAY_FULL and five <= max_pct:
+            room += 1
+    return room, len(in_rotation)
+
+
 def capacity(repo: Path, prefix: str) -> None:
     """Refuse a new worker (`LaunchError`, exit 3) while the busy background sessions on this
     machine and busy window workers (`claude agents --json`, `status` busy; an interactive row
     counts only when `is_worker` says so: a companion or master is busy whenever it answers its
-    human) reach `workers.max_busy_sessions` or the active
-    account's 5h window is above `workers.max_active_5h_percent`; the refusal names both measured
-    values. A value that cannot be read skips its check with one stderr warning; without `cswap` on
-    PATH (it is optional) the 5h check is skipped silently."""
+    human) reach `workers.max_busy_sessions`, or while no account in rotation has room
+    (`rotation_room`: 7d under 95 %, 5h at or under `workers.max_active_5h_percent`; one with room
+    is enough, the rotation switches to it). When `cswap list --json` is unreadable the active
+    account's 5h window decides as the fallback (`five_hour_percent`, refused above the limit). The
+    refusal names the measured values, never an account. A value that cannot be read skips its
+    check with one stderr warning; without `cswap` on PATH (it is optional) the 5h check is skipped
+    silently."""
     limits = cap_limits(repo)
     max_busy, max_pct = limits["max_busy_sessions"], limits["max_active_5h_percent"]
     try:
@@ -308,20 +344,32 @@ def capacity(repo: Path, prefix: str) -> None:
             f"{prefix}: warning: busy sessions unreadable ({exc}); that check is skipped",
             file=sys.stderr,
         )
-    pct = five_hour_percent() if shutil.which("cswap") else None
-    if pct is None and shutil.which("cswap"):
+    have_cswap = bool(shutil.which("cswap"))
+    room = rotation_room(max_pct) if have_cswap else None
+    pct = five_hour_percent() if have_cswap and room is None else None
+    if have_cswap and room is None and pct is None:
         print(
-            f"{prefix}: warning: the active account's 5h window is unreadable"
-            " (cswap status --json failed); that check is skipped",
+            f"{prefix}: warning: the accounts' 5h windows are unreadable"
+            " (cswap list --json and cswap status --json failed); that check is skipped",
             file=sys.stderr,
         )
-    if (busy is not None and busy >= max_busy) or (pct is not None and pct > max_pct):
+    full = (room is not None and room[0] == 0) or (pct is not None and pct > max_pct)
+    if (busy is not None and busy >= max_busy) or full:
         shown_busy = "?" if busy is None else str(busy)
-        shown_pct = "?" if pct is None else f"{pct:g}"
+        if room is not None:
+            quota = (
+                f"no account in rotation has room (0 of {room[1]} with 7d under"
+                f" {SEVEN_DAY_FULL} % and 5h at or under {max_pct:g} %"
+                if room[0] == 0
+                else f"{room[0]} of {room[1]} accounts in rotation with room (5h limit {max_pct:g} %"
+            )
+        else:
+            shown_pct = "?" if pct is None else f"{pct:g}"
+            quota = f"active account 5h at {shown_pct} % (limit {max_pct:g} %"
         raise LaunchError(
             f"refused, no worker started: {shown_busy} workers busy (limit {max_busy:g},"
-            f" workers.max_busy_sessions), active account 5h at {shown_pct} % (limit {max_pct:g} %,"
-            " workers.max_active_5h_percent); try again later",
+            f" workers.max_busy_sessions), {quota}, workers.max_active_5h_percent);"
+            " try again later",
             3,
         )
 
@@ -377,22 +425,7 @@ def _timing(event: str, **fields) -> None:
             fh.write(json.dumps({"ts": time.time(), "event": event, **fields}) + "\n")
 
 
-FIELDS = (
-    ("Ziel", "Goal", "what is done when you stop; the story key and the plan"),
-    ("Ausgabe", "Output", "what you deliver and how you report it, to whom"),
-    ("Werkzeuge und Quellen", "Tools and sources", "the tree, the files and commands to use"),
-    (
-        "Grenzen und wann stoppen",
-        "Limits and when to stop",
-        "what you never do; when you stop and report",
-    ),
-)
-TEMPLATE = "\n".join(f"## {de} ({en})\n<{hint}>\n" for de, en, hint in FIELDS)
 DEFAULT_KEY = "[A-Z]+-\\d+"
-BRIEF_ENFORCED = False  # warn first (Vyra 11.11.); a brake-change follow-up sets it
-_POINTER = re.compile(r"Read (?P<path>\S.*?) and follow it\.")
-_HEADING = re.compile(r"^[ ]{0,3}(?P<level>#{1,6})[ \t]+(?P<text>.*?)[ \t#]*$")
-_FENCE = re.compile(r"^[ ]{0,3}(```|~~~)")
 
 
 def key_pattern(repo: Path | None) -> str:
@@ -421,55 +454,6 @@ def check_name(name: str, key_re: str = DEFAULT_KEY, example: str | None = None)
     )
 
 
-def _brief_text(text: str, base: Path | None = None) -> str:
-    """The brief itself: a pointer line `Read <path> and follow it.` becomes that file's text."""
-    found = _POINTER.fullmatch(text.strip())
-    if not found:
-        return text
-    path = Path(found.group("path"))
-    if not path.is_absolute() and base is not None:
-        path = base / path
-    try:
-        return path.read_text()
-    except OSError as exc:
-        raise LaunchError(f"brief: {path}: {exc.strerror or exc}", 2) from exc
-
-
-def check_brief(text: str, base: Path | None = None) -> list[str]:
-    """The fields the brief lacks, as `Ziel / Goal`; empty when all four carry a body."""
-    lines = _brief_text(text, base).splitlines()
-    headings: list[tuple[int, int, str]] = []  # (line, level, text) outside fences
-    fence = None
-    for i, line in enumerate(lines):
-        opened = _FENCE.match(line)
-        if fence:
-            if opened and opened.group(1) == fence:
-                fence = None
-            continue
-        if opened:
-            fence = opened.group(1)
-            continue
-        found = _HEADING.match(line)
-        if found:
-            headings.append((i, len(found.group("level")), found.group("text")))
-    present = set()
-    for n, (i, level, heading) in enumerate(headings):
-        end = next((j for j, lv, _t in headings[n + 1 :] if lv <= level), len(lines))
-        if not any(line.strip() for line in lines[i + 1 : end] if not _HEADING.match(line)):
-            continue
-        for de, en, _hint in FIELDS:
-            if heading.casefold().startswith((de.casefold(), en.casefold())):
-                present.add(de)
-    return [f"{de} / {en}" for de, en, _hint in FIELDS if de not in present]
-
-
-def brief_refusal(missing: list[str]) -> str:
-    return (
-        f"the brief lacks {', '.join(missing)}; a brief carries four Markdown headings, each with "
-        f"a body:\n\n{TEMPLATE}"
-    )
-
-
 def _example_key(repo: Path | None, key_re: str) -> str | None:
     branch = _git(repo or Path.cwd(), "branch", "--show-current") or ""
     try:
@@ -479,22 +463,10 @@ def _example_key(repo: Path | None, key_re: str) -> str | None:
     return found.group(0) if found else None
 
 
-def check(name: str, brief: str, repo: Path | None = None, prefix: str = "worker_launch") -> str:
-    """`check_name`, then `check_brief`: the key, or a `LaunchError` (exit 2) naming what is wrong;
-    a brief finding is a stderr warning while `BRIEF_ENFORCED` is false. Logs one `brief` line."""
-    import worker_rights  # noqa: PLC0415
-
+def check(name: str, repo: Path | None = None) -> str:
+    """`check_name` against the repo's `naming.key`: the key, or a `LaunchError` (exit 2)."""
     key_re = key_pattern(repo)
-    key = check_name(name, key_re, _example_key(repo, key_re))
-    missing = check_brief(brief, repo)
-    worker_rights.brake_log(
-        repo, {"type": "brief", "name": name, "key": key, "ok": not missing, "missing": missing}
-    )
-    if missing and BRIEF_ENFORCED:
-        raise LaunchError(brief_refusal(missing), 2)
-    if missing:
-        print(f"{prefix}: warning: {brief_refusal(missing)}", file=sys.stderr)
-    return key
+    return check_name(name, key_re, _example_key(repo, key_re))
 
 
 def write_settings(repo: Path, key: str, out: Path, session_start: str | None = None) -> dict:
@@ -516,7 +488,7 @@ def launch(worktree: Path, name: str, brief_file: Path, agent: str | None = None
         brief = brief_file.read_text()
     except OSError as exc:
         raise LaunchError(f"brief: {exc}") from exc
-    key = check(name, brief, worktree)
+    key = check(name, worktree)
     template = backend(worktree)
     if template == SUBAGENT:
         raise LaunchError(
@@ -769,10 +741,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", type=Path, default=Path.cwd())
     p = sub.add_parser("check")
     p.add_argument("--name", required=True)
-    p.add_argument("--brief-file")
-    p.add_argument(
-        "--no-brief", action="store_true", help="check the name only (a resumed session)"
-    )
+    p.add_argument("--brief-file", help=argparse.SUPPRESS)  # an older we-worker copy passes it
+    p.add_argument("--no-brief", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--repo", type=Path, default=Path.cwd())
     p.add_argument("--prefix", default="worker_launch")
     p = sub.add_parser("capacity")
@@ -823,21 +793,9 @@ def _check_verb(args: argparse.Namespace) -> int:
     """`check`: the key on stdout, or exit 2 with the refusal under `--prefix`; a living
     worker of the same key is named as the follow-up's target (`same_key_hint`)."""
     try:
-        if args.no_brief:
-            key_re = key_pattern(args.repo)
-            key = check_name(args.name, key_re, _example_key(args.repo, key_re))
-        else:
-            if not args.brief_file:
-                raise LaunchError("check needs --brief-file <f|-> or --no-brief", 2)
-            text = (
-                sys.stdin.read() if args.brief_file == "-" else Path(args.brief_file).read_text()
-            )
-            key = check(args.name, text, args.repo, args.prefix)
+        key = check(args.name, args.repo)
         same_key_hint(args.name, key, args.prefix)
         print(key)
-    except OSError as exc:
-        print(f"{args.prefix}: brief: {exc}", file=sys.stderr)
-        return 2
     except LaunchError as exc:
         print(f"{args.prefix}: {exc}", file=sys.stderr)
         return exc.code

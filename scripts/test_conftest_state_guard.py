@@ -17,11 +17,11 @@ import worker_rights
 
 def test_drops_its_state_dir(monkeypatch):
     monkeypatch.delenv("WE_STATE_DIR", raising=False)
-    worker_rights.brake_log(None, {{"type": "brief", "name": "LEAK-1-x"}})
+    worker_rights.brake_log(None, {{"type": "deny", "name": "LEAK-1-x"}})
 
 
 def test_keeps_its_state_dir(own_state_dir):
-    worker_rights.brake_log(None, {{"type": "brief", "name": "OWN-1-x"}})
+    worker_rights.brake_log(None, {{"type": "deny", "name": "OWN-1-x"}})
 """
 
 

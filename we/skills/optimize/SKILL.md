@@ -19,11 +19,19 @@ description: >
    instruction changes land, ask once.
 5. The plugin's own checkout holds no store. Plugin changes go there as a PR; their findings stay in this repo's inbox.
 
-## 1 · Restore
+## 1 · Close what settled itself, then restore
+
+In the store's checkout, up to date with the default branch:
 
 ```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/optimization_close.py"
 git fetch -q origin && git show origin/<default>:.weside/optimization/CHARTER.md
 ```
+
+The script sets every inbox entry a merged PR names to `applied` and every unconfirmed old one to
+`expired` (rules: store reference § Inbox entry, Lifecycle), writes their ledger rows and prints
+them; its changes go into this run's store commit. Exit 2: relay the line and decide by hand.
+Steps 3 to 5 decide only what is left.
 
 Read the charter (goal, decisions, findings, next steps), then `LEDGER.md`, then every file in
 `inbox/`, plus entries staged under `~/.claude/we-inbox/<repo>/` by an auto or collect retro: move those into

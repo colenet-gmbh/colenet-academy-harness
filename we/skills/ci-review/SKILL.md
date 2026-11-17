@@ -126,16 +126,13 @@ Findings table: `| # | Source | Bot? | Severity | File:Line | Issue | Thread ID 
 - A summary comment splits into one row per `SEV:` marker, with Thread ID `—`.
 - A `—` row cannot be resolved. It clears when the next review posts PASS, or when your evidence comment for a skip is on the PR.
 
-**Reviews before tests.** A review posts within minutes; the slowest test job often takes several times as long.
-Fix and push a review finding without waiting for the test job. Check the CI workflow's `concurrency:` once:
-with `cancel-in-progress: true` the push cancels the stale run. Wait for the test job only when it is the last thing open.
-Holding a committed fix for a pending job: wait with a background `gh run watch <run-id> --exit-status` (no expiry).
-When you cannot keep that watch, push at once; a cancelled run costs less than an idle hour.
+**One push per head.** The fixer collects every finding of the head, all reviewers and the cheap checks concluded, and pushes once: a push into a running test job cancels it.
 
 **Green → stop** only when three things hold: every required check concluded non-red, 0 unresolved bot threads, and no open BLOCKING or WARNING row.
 
 ## 2 · Fix and validate
 
+- A fix round starts when all reviews and required checks of the head concluded or are red; a check still running holds the push (§ 4).
 - Collect every fix before the one commit.
 - A finding about lost or stuck state (a draft, a lock, a selection) names one path, and its neighbours fail the same
   way: list every transition of that state (load, reload, save, add, edit, remove, move, cancel, conflict), fix all of
@@ -179,10 +176,10 @@ When you cannot keep that watch, push at once; a cancelled run costs less than a
 
 ## 4 · Wait and repeat
 
-- After the push, run `${CLAUDE_PLUGIN_ROOT}/scripts/watch-pr-checks.sh $PR --sha "$(git rev-parse HEAD)" --fail-fast`
+- After the push, run `${CLAUDE_PLUGIN_ROOT}/scripts/watch-pr-checks.sh $PR --sha "$(git rev-parse HEAD)"`
   as a background command, plus `${CLAUDE_PLUGIN_ROOT}/scripts/watch-pr-conflicts.sh $PR` when none runs for it.
-  `--fail-fast` and exit 6 (Codex WARNING/BLOCKING on the head) wake you on a review without waiting for the
-  test job; on exit 6 or a red review check the watcher has already disarmed auto-merge. End the turn and act on the notification. Do not poll in the foreground.
+  Exit 6 (Codex WARNING/BLOCKING on the head) wakes you before the test job ends: fix and commit, then start the
+  watcher again on the same head and push when its final line comes; on exit 6 or a red review check the watcher has already disarmed auto-merge. End the turn and act on the notification. Do not poll in the foreground.
 - Each round runs sections 1 to 3 again in full, including the thread resolve.
 - The default is at most three rounds. A budget the user states replaces that default, and you never raise it yourself.
 - **A repeat** is the same finding text on the same `file:line` after a fix aimed at it. It means the fix

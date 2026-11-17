@@ -81,7 +81,9 @@ refusal line; a second refusal: `LV write <id> <lens> --failed "finding without 
 ## 5. Check and report
 
 Run `LV check <id>` and relay its lines verbatim: one per lens, a `stale` line when the plan or head moved,
-and the panel line (forms: the script's docstring, § Carried warnings included). Exit 0 only for green. The board's move to
+and the panel line (forms: the script's docstring, § Carried warnings included). Exit 0 only for green.
+A crew whose Ready rounds should end on WARNINGs alone sets `ready_panel.warning_ok_after_rounds: 1`
+(the rule for any N: the docstring's § Carried warnings). The board's move to
 Selected reads the Ready panel itself (`board.py select`); no merge reads the T2 panel.
 On a green Ready panel, find the plan's open PR (`gh pr list --search "<KEY> in:title" --state open --json number,isDraft,body`):
 a draft whose only draft reason is this panel goes ready now (`gh pr ready <n>`), nobody else watches for it;

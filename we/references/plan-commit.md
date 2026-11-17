@@ -62,8 +62,8 @@ refresh), `/we:master` (the plans its refiner workers wrote), `/we:merged`,
    A push straight to the default branch only where the instruction files grant it for docs. A
    rejected push (non-fast-forward included) is reported with its message, never forced. The
    document is on the default branch once the PR merged. A step that needs it there (a dispatch
-   reading the plan, Selected for Development) polls `gh pr view <url> --json state,mergedAt`
-   (or `gh pr checks <url> --watch`) until `state` is `MERGED`. If `gh pr merge --auto` is
+   reading the plan, Selected for Development) waits with a background
+   `watch-pr-checks.sh <number> --until-merged` until its final line reads `merged`. If `gh pr merge --auto` is
    refused (auto-merge off in the repo), a required review blocks, or the PR is not merged within
    60 min: report the PR URL to the owner (in a crew: the coordinator) and leave the
    story unselected; never merge by hand, never force. The PR URL goes into your report before

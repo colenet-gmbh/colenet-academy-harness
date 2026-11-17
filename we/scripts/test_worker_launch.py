@@ -40,7 +40,7 @@ sys.exit(9)
 """
 
 TEMPLATE = "claude --bg -n {name} --agent {agent} {brief}"
-BRIEFS = Path(__file__).parent / "fixtures" / "briefs"
+BRIEF_TEXT = "## Goal\n\nThe hook denies the never-list.\n\n## Output\n\nOne commit, the report.\n"
 
 
 def _git(cwd, *args):
@@ -94,9 +94,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "s-lead")
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     brief = tmp_path / "brief.md"
-    brief.write_text(
-        'Run Skill("we:develop") for KEY.\n\n' + (BRIEFS / "complete-en.md").read_text()
-    )
+    brief.write_text('Run Skill("we:develop") for KEY.\n\n' + BRIEF_TEXT)
 
     def configure(value):
         (wt / ".weside").mkdir(exist_ok=True)
@@ -582,8 +580,6 @@ class TestCheckName:
             "check",
             "--name",
             "#12-fix",
-            "--brief-file",
-            str(BRIEFS / "complete-de.md"),
             "--repo",
             str(env["wt"]),
         )
@@ -611,56 +607,38 @@ class TestCheckName:
         assert not any("--bg" in c["argv"] for c in _calls(env))
 
 
-class TestCheckBrief:
-    @pytest.mark.parametrize(
-        "fixture,missing",
-        [
-            ("missing-goal.md", ["Ziel / Goal"]),
-            ("missing-output.md", ["Ausgabe / Output"]),
-            ("missing-tools.md", ["Werkzeuge und Quellen / Tools and sources"]),
-            ("missing-limits.md", ["Grenzen und wann stoppen / Limits and when to stop"]),
-            ("empty-body.md", ["Ausgabe / Output"]),
-            ("fenced-heading.md", ["Ziel / Goal"]),
-            ("complete-de.md", []),
-            ("complete-en.md", []),
-        ],
-    )
-    def test_each_field_counts(self, fixture, missing):
-        assert wl.check_brief((BRIEFS / fixture).read_text()) == missing
-
-    def test_a_brief_without_headings_lacks_all_four(self):
-        assert len(wl.check_brief("fix it")) == 4
-
-    def test_the_template_passes_its_own_check(self):
-        assert wl.check_brief(wl.TEMPLATE) == []
-
-    def test_a_pointer_line_is_the_file_it_names(self, tmp_path):
-        assert wl.check_brief(f"Read {BRIEFS / 'complete-de.md'} and follow it.") == []
-        assert len(wl.check_brief(f"Read {BRIEFS / 'missing-goal.md'} and follow it.")) == 1
-        with pytest.raises(wl.LaunchError, match="brief: "):
-            wl.check_brief(f"Read {tmp_path / 'absent.md'} and follow it.")
-
-    def test_check_names_each_missing_field_and_prints_the_template(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("WE_STATE_DIR", str(tmp_path))
-        out = _run(
-            "check",
-            "--name",
-            "AB-1-x",
-            "--brief-file",
-            str(BRIEFS / "missing-limits.md"),
-            "--prefix",
-            "we-worker",
+class TestCheck:
+    def test_a_one_line_brief_starts_without_a_warning_or_a_brake_line(
+        self, env, tmp_path, monkeypatch
+    ):
+        """A start with a one-line brief prints no warning and writes no line to the brake log."""
+        state = tmp_path / "we-state"
+        env_vars = {**os.environ, "WE_STATE_DIR": str(state)}
+        out = subprocess.run(
+            [sys.executable, str(SCRIPT), "check", "--name", "AB-1-x", "--prefix", "we-worker"],
+            capture_output=True,
+            text=True,
+            env=env_vars,
+            check=False,
         )
-        assert out.returncode == 0 and out.stdout.strip() == "AB-1"
-        assert out.stderr.startswith(
-            "we-worker: warning: the brief lacks Grenzen und wann stoppen / Limits and when to stop;"
-        )
-        assert "## Ziel (Goal)" in out.stderr
-        assert "## Grenzen und wann stoppen (Limits and when to stop)" in out.stderr
-        (line,) = [json.loads(x) for x in (tmp_path / "brakes.jsonl").read_text().splitlines()]
-        assert line["type"] == "brief" and line["key"] == "AB-1" and line["ok"] is False
-        assert line["missing"] == ["Grenzen und wann stoppen / Limits and when to stop"]
-        assert line["ts"].endswith("Z")
+        assert (out.returncode, out.stdout.strip(), out.stderr) == (0, "AB-1", "")
+        env["configure"](TEMPLATE)
+        one_line = tmp_path / "one-line.md"
+        one_line.write_text("fix it")
+        monkeypatch.setenv("WE_STATE_DIR", str(state))
+        wl.launch(env["wt"], "KEY-1-w1", one_line, "we:dev-medium")
+        assert not (state / "brakes.jsonl").exists()
+
+    def test_an_older_we_worker_copy_still_passes_its_brief_flags(self):
+        for flags in (["--brief-file", "-"], ["--no-brief"]):
+            out = subprocess.run(
+                [sys.executable, str(SCRIPT), "check", "--name", "AB-1-x", *flags],
+                input="fix it",
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert (out.returncode, out.stdout.strip(), out.stderr) == (0, "AB-1", ""), flags
 
     def test_check_names_a_living_worker_of_the_same_key_as_the_sendmessage_target(self, env):
         """Red arm: five workers on one ticket, three of them follow-ups the refiner could have
@@ -678,35 +656,6 @@ class TestCheckBrief:
             "we-worker: hint: KEY-1-refiner (idle) works on KEY-1 and lives: a follow-up goes to"
             " it by SendMessage, not to a new worker KEY-1-planfix"
         ]
-
-    @pytest.mark.usefixtures("own_state_dir")
-    def test_an_enforced_check_refuses(self, monkeypatch):
-        monkeypatch.setattr(wl, "BRIEF_ENFORCED", True)
-        with pytest.raises(wl.LaunchError, match="the brief lacks") as exc:
-            wl.check("AB-1-x", (BRIEFS / "missing-goal.md").read_text())
-        assert exc.value.code == 2
-
-    @pytest.mark.usefixtures("own_state_dir")
-    def test_check_reads_stdin(self):
-        out = subprocess.run(
-            [sys.executable, str(SCRIPT), "check", "--name", "AB-1-x", "--brief-file", "-"],
-            input=(BRIEFS / "complete-en.md").read_text(),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert out.returncode == 0 and out.stdout.strip() == "AB-1"
-
-    @pytest.mark.parametrize("fixture", ["missing-goal.md", "empty-body.md"])
-    def test_launch_refuses_an_incomplete_brief_before_writing_a_file(
-        self, env, fixture, monkeypatch
-    ):
-        monkeypatch.setattr(wl, "BRIEF_ENFORCED", True)
-        env["configure"](TEMPLATE)
-        with pytest.raises(wl.LaunchError, match="the brief lacks") as exc:
-            wl.launch(env["wt"], "KEY-1-w1", BRIEFS / fixture, "we:dev-medium")
-        assert exc.value.code == 2 and wl.read_marker(env["wt"]) is None
-        assert not (wl.git_dir(env["wt"]) / wl.BRIEF).exists()
 
     def test_the_marker_carries_the_key(self, env):
         env["configure"](TEMPLATE)
@@ -741,13 +690,37 @@ class TestSettings:
         assert doc["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "timer arm x"
 
 
-# The concurrency cap: busy sessions and the active account's 5h window.
+# The concurrency cap: busy sessions and room in the account rotation.
 
 CSWAP = r"""#!/usr/bin/env python3
 import os, sys
 if os.environ.get("STUB_CSWAP_FAILS"): sys.exit(1)
-print(os.environ["STUB_CSWAP_JSON"])
+if sys.argv[1] == "list":
+    print(os.environ.get("STUB_CSWAP_LIST", "{}"))
+else:
+    print(os.environ["STUB_CSWAP_JSON"])
 """
+
+
+def _account(number, five, seven, active=False, disabled=False):
+    """One `cswap list --json` row in the recorded shape, name fields redacted."""
+    row = {
+        "number": number,
+        "email": "redacted@example.com",
+        "organizationName": "",
+        "organizationUuid": "",
+        "isOrganization": False,
+        "active": active,
+        "usageStatus": "ok",
+        "usage": {"fiveHour": {"pct": five}, "sevenDay": {"pct": seven}},
+    }
+    if disabled:
+        row["disabled"] = True
+    return row
+
+
+def _rotation(*rows):
+    return json.dumps({"schemaVersion": 1, "activeAccountNumber": 1, "accounts": list(rows)})
 
 
 @pytest.fixture
@@ -800,9 +773,62 @@ def test_capacity_skips_the_window_check_without_cswap_and_says_so(cap, monkeypa
     out = cap(1, 99.0)
     assert out.returncode == 0
     assert out.stderr.strip() == (
-        "we-worker: warning: the active account's 5h window is unreadable (cswap status --json"
-        " failed); that check is skipped"
+        "we-worker: warning: the accounts' 5h windows are unreadable (cswap list --json and cswap"
+        " status --json failed); that check is skipped"
     )
+
+
+def test_capacity_starts_while_another_account_in_rotation_has_room(cap, monkeypatch):
+    """The active account is full, another has room: the rotation switches, no refusal."""
+    monkeypatch.setenv(
+        "STUB_CSWAP_LIST",
+        _rotation(_account(1, 91.0, 32.0, active=True), _account(2, 0.0, 77.0)),
+    )
+    out = cap(1, 91.0)
+    assert out.returncode == 0 and out.stderr == ""
+
+
+def test_capacity_refuses_when_no_account_in_rotation_has_room(cap, monkeypatch):
+    monkeypatch.setenv(
+        "STUB_CSWAP_LIST",
+        _rotation(
+            _account(1, 91.0, 32.0, active=True),
+            _account(2, 0.0, 100.0),  # 7d spent
+            _account(3, 0.0, 95.0),  # 7d at the cap
+            _account(4, 0.0, 10.0, disabled=True),  # out of rotation
+            {**_account(5, 0.0, 0.0), "usage": None, "usageStatus": "error"},  # no reading
+        ),
+    )
+    out = cap(1, 2.0)
+    assert out.returncode == 3
+    assert out.stderr.strip() == (
+        "we-worker: refused, no worker started: 1 workers busy (limit 10,"
+        " workers.max_busy_sessions), no account in rotation has room (0 of 4 with 7d under 95 %"
+        " and 5h at or under 80 %, workers.max_active_5h_percent); try again later"
+    )
+    assert "redacted" not in out.stderr
+
+
+def test_capacity_an_account_at_the_5h_limit_has_room(cap, monkeypatch):
+    monkeypatch.setenv("STUB_CSWAP_LIST", _rotation(_account(1, 80.0, 94.0, active=True)))
+    assert cap(1, 99.0).returncode == 0
+
+
+def test_capacity_busy_limit_holds_with_room_in_rotation(cap, monkeypatch):
+    monkeypatch.setenv("STUB_CSWAP_LIST", _rotation(_account(1, 0.0, 0.0, active=True)))
+    out = cap(10, 0.0)
+    assert out.returncode == 3
+    assert (
+        "10 workers busy" in out.stderr and "1 of 1 accounts in rotation with room" in out.stderr
+    )
+
+
+@pytest.mark.parametrize("listing", ["not json", "{}", '{"accounts": []}', '{"accounts": "x"}'])
+def test_capacity_falls_back_to_the_active_account_without_a_list(cap, monkeypatch, listing):
+    monkeypatch.setenv("STUB_CSWAP_LIST", listing)
+    out = cap(1, 81.0)
+    assert out.returncode == 3 and "active account 5h at 81 % (limit 80 %" in out.stderr
+    assert cap(1, 79.0).returncode == 0
 
 
 def test_capacity_refuses_a_limit_that_is_no_number(cap):

@@ -93,7 +93,11 @@ The quoted line, why it no longer fits, and the proposed replacement text.
 - No `merge=union` for the inbox: on a changed frontmatter line it keeps both sides as duplicate
   YAML keys, without a conflict marker. One file per finding keeps real conflicts rare and visible.
 - **Lifecycle:** `/we:optimize` decides an entry `applied` or `rejected`, writes its ledger row and
-  deletes the inbox file in the same commit. A later finding on a rejected key is a fresh file under
+  deletes the inbox file in the same commit. Before it decides, `scripts/optimization_close.py`
+  closes two kinds by rule (its docstring owns the row it writes): an entry whose key a merged PR's
+  title or body names, merged on or after the entry's first-seen date and changing no file under
+  `.weside/optimization/`, is `applied` with that PR as evidence; an entry with fewer than two evidence lines whose first-seen date is
+  `optimization.expire_days` or more days old is `expired`. A later finding on a rejected key is a fresh file under
   that key; `/we:optimize` § 3 puts it to the user only when it answers the rejection's reason.
 
 ## Ledger row
@@ -103,7 +107,8 @@ The quoted line, why it no longer fits, and the proposed replacement text.
 `| date | key | target | decision | evidence | metric | before → after | review_by | change |`
 
 - `decision`: `applied` · `rejected` · `upstream` (reported to the plugin's
-  maintainers) · `removed` (a later sunset or ablation removal took the change out).
+  maintainers) · `removed` (a later sunset or ablation removal took the change out) · `expired`
+  (closed unconfirmed by `optimization_close.py`; a later finding under its key is a fresh file).
 - `metric`: what shows the effect (the adapter command, or the re-check of a repo fact); every
   applied row that adds or rewords text has one. An applied removal has `—` here and in `review_by`.
 - `before → after`: the metric's numbers; `after` is `pending` until step 4 of `/we:optimize`
@@ -157,6 +162,7 @@ the `skill-creator` plugin's evals) instead; an unused skill shows up in `/skill
     "reminder": true,
     "reminder_days": 14,
     "review_days": 30,
+    "expire_days": 14,
     "budget": {"rules_total_lines": 600},
     "exclude": ["content", "archive"]
   },
@@ -169,6 +175,7 @@ the `skill-creator` plugin's evals) instead; an unused skill shows up in `/skill
   `last_optimize`); it speaks when an open entry is `confidence: High` or
   `last_optimize` is `reminder_days` (default 14) or more days old.
 - `review_days`: days from applying a change to its `review_by` (default 30).
+- `expire_days`: age in days after which an entry with a single evidence line expires (default 14).
 - `budget`, `exclude`: overrides for `scripts/check-instruction-budget.py` (keys in its
   `DEFAULT_BUDGET`); `exclude` takes directory names or repo-relative prefixes. Exclude every tree
   whose `SKILL.md` or `AGENTS.md` files are product content or archives rather than instructions
