@@ -174,7 +174,11 @@ caller's shell.
 
 Each start also starts the supervisor, which tells the starter about a worker's stop and cleans up
 after it; `we-worker close <KEY>` is the one closing step after a merge (In Review, teardown, the
-epic's log line; `scripts/worker_close.py`); `we-worker gc` removes what dead sessions left (`scripts/worker_supervisor.py`, its
+epic's log line; `scripts/worker_close.py`). It moves nothing while another worker on the key
+lives or waits in the queue, because it sees only PRs that exist and that worker may not have
+opened one yet; and nothing without a story plan on the default branch, because only the plan
+names every repo that must land; the teardown runs either way and the session moves the ticket
+itself or runs close again. `we-worker gc` removes what dead sessions left (`scripts/worker_supervisor.py`, its
 docstring owns both, and the one end reason `we-worker status` prints). `we-worker stop` prints the
 stopped worker's full session id and its resume command; a follow-up brief resumes it with
 `we-worker <name> --bg --resume <name>`, which finds the session through its kept
