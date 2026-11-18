@@ -246,7 +246,9 @@ Then one `we:dev-medium` finisher in `<int>` runs the finish sequence.
   crew's `risk.command` on the diff gives the class; without one, run
   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/risk_paths.py origin/<default>` in the PR branch's worktree
   before the arm. Every PR that is not one-way you arm right after `gh pr create`: a review that must
-  block the merge is a required check of the repo, and GitHub waits for it. No hook checks the arm;
+  block the merge is a required check of the repo, and GitHub waits for it. Under the crew's
+  `merge.armer: workflow` the repo's own workflow arms every ready PR: your step is `gh pr ready`,
+  and `arm_pr.sh` refuses. A PR with a label of `merge.hold_labels` is the human's merge in either mode. No hook checks the arm;
   this table is an instruction, backed by the human's permission prompts and the repo's ruleset.
 
   | Class | Who arms or merges | Condition |

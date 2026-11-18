@@ -25,6 +25,8 @@ Usage:
   crew.py launch FIELD [--from DIR]         the value of ``launch.FIELD`` for a shell: a bool as
                                             ``true``/``false``, null as an empty line; without a
                                             crew file the default (exit 0), a broken crew exit 1
+  crew.py merge FIELD [--from DIR]          the value of ``merge.FIELD`` for a shell: a string, or a
+                                            list one item per line; without a crew file the default
   crew.py human [--from DIR]                this session's human (``current_human``):
                                             "<slug>\t<name>\t<runs, comma-separated>", exit 1 when
                                             the crew cannot tell (the reason on stderr)
@@ -299,6 +301,13 @@ DEFAULTS: dict[str, Any] = {
         "story_days": 1,
     },
     "naming": {"key": "[A-Z]+-\\d+", "master": "<word>-<number>", "worker": "<key>-<chunk>"},
+    "merge": {
+        # session: a session arms with arm_pr.sh; workflow: the repo's own workflow arms every ready
+        # PR, so arm_pr.sh refuses and the session's step is `gh pr ready`
+        "armer": "session",
+        # a PR carrying one of these labels is merged by a human only; arm_pr.sh refuses it
+        "hold_labels": [],
+    },
     "launch": {
         "worker": None,
         "subagent_fallback": False,
@@ -1555,6 +1564,7 @@ VERBS = (
     "validate",
     "state-dir",
     "launch",
+    "merge",
     "human",
     "name",
     "deliverer",
@@ -1566,12 +1576,13 @@ def main(argv: list[str]) -> int:
         print(__doc__.strip().splitlines()[2], file=sys.stderr)
         return 2
     cmd = argv[0]
-    if cmd in ("skill-path", "path", "state-dir", "launch"):
+    if cmd in ("skill-path", "path", "state-dir", "launch", "merge"):
         return {
             "skill-path": _skill_path_cli,
             "path": _path_cli,
             "state-dir": _state_dir_cli,
             "launch": _launch_cli,
+            "merge": _merge_cli,
         }[cmd](argv)
     notes: list[str] = []
     loaded = _load_cli(argv, notes, strict=cmd == "validate" and "--strict" in argv)
@@ -1612,6 +1623,24 @@ def _launch_cli(argv: list[str]) -> int:
         return 1
     value = (crew or DEFAULTS)["launch"][field]
     print(("true" if value else "false") if isinstance(value, bool) else (value or ""))
+    return 0
+
+
+def _merge_cli(argv: list[str]) -> int:
+    field = _positional(argv[1:], ("--from",))
+    if field not in DEFAULTS["merge"]:
+        print(f"crew: merge takes one of {', '.join(DEFAULTS['merge'])}", file=sys.stderr)
+        return 2
+    try:
+        _path, crew = find_and_load(_opt(argv, "--from"))
+    except CrewError as exc:
+        print(f"crew: {exc}", file=sys.stderr)
+        return 1
+    value = (crew or DEFAULTS)["merge"][field]
+    if field == "armer" and value not in ("session", "workflow"):
+        print(f"crew: merge.armer {value!r} is not session or workflow", file=sys.stderr)
+        return 1
+    print("\n".join(value) if isinstance(value, list) else value)
     return 0
 
 

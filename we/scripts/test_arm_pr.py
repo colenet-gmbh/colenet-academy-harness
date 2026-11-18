@@ -56,6 +56,7 @@ if args[:2] == ["api", "graphql"]:
         "id": "PR_1", "state": s.get("state", "OPEN"), "isDraft": s.get("draft", False),
         "headRefOid": s["head"], "baseRefName": "main",
         "mergeStateStatus": s.get("merge", "CLEAN"), "reviewDecision": s.get("review"),
+        "labels": {"nodes": [{"name": n} for n in s.get("labels", [])]},
         "commits": {"nodes": [{"commit": {"oid": s.get("commit", s["head"]),
             "statusCheckRollup": {"contexts": {"nodes": nodes}}}}]}}}}})
 if args[0] == "api" and "/rules/branches/" in args[1]:
@@ -75,7 +76,12 @@ GREEN = [check("lint"), check("Claude Review")]
 PENDING = [check("lint"), check("Claude Review", "IN_PROGRESS", None)]
 
 
-def run(tmp_path, reads, arms, required=REQUIRED):
+def run(tmp_path, reads, arms, required=REQUIRED, merge=None):
+    if merge is not None:  # a crew with a `merge` block; `.git` bounds the crew lookup at tmp_path
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".weside").mkdir()
+        crew = {"version": 2, "roles": {}, "members": {}, "merge": merge}
+        (tmp_path / ".weside" / "crew.json").write_text(json.dumps(crew))
     for name, items in (("reads", reads), ("arms", arms), ("required", required)):
         (tmp_path / f"{name}.json").write_text(json.dumps(items))
     gh = tmp_path / "bin" / "gh"
@@ -98,7 +104,8 @@ def run(tmp_path, reads, arms, required=REQUIRED):
         timeout=30,
         check=False,
     )
-    calls = [json.loads(line) for line in (tmp_path / "calls.log").read_text().splitlines()]
+    log = tmp_path / "calls.log"
+    calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
     merges = [c for c in calls if c[:2] == ["pr", "merge"] or "mergePullRequest" in " ".join(c)]
     assert merges == [], f"the helper merged: {merges}"
     return res.returncode, res.stdout.strip().splitlines(), calls
@@ -196,3 +203,37 @@ def test_refusals_never_arm(tmp_path, reads, arms, code, line):
     assert (got, out[-1]) == (code, line)
     if code == 4:
         assert arm_calls(calls) == []
+
+
+@pytest.mark.parametrize(
+    "merge, labels, code, line",
+    [
+        (
+            {"hold_labels": ["review"]},
+            ["review"],
+            4,
+            "refused: label review — only the human merges it",
+        ),
+        (
+            {"hold_labels": ["review"]},
+            ["docs", "review"],
+            4,
+            "refused: label review — only the human merges it",
+        ),
+        ({"armer": "workflow"}, [], 4, "refused: armed by workflow — the step is gh pr ready"),
+    ],
+    ids=["hold-label", "hold-label-among-others", "workflow-armer"],
+)
+def test_crew_merge_block_refuses_before_any_arm(tmp_path, merge, labels, code, line):
+    got, out, calls = run(
+        tmp_path, [{"head": NEW, "checks": PENDING, "labels": labels}], ["ok"], merge=merge
+    )
+    assert (got, out[-1]) == (code, line)
+    assert arm_calls(calls) == []
+
+
+def test_a_label_outside_hold_labels_still_arms(tmp_path):
+    reads = [{"head": NEW, "checks": PENDING, "labels": ["docs"]}]
+    code, out, calls = run(tmp_path, reads, ["ok"], merge={"hold_labels": ["review"]})
+    assert (code, out[0]) == (0, f"armed: auto-merge on {NEW} (merge)")
+    assert len(arm_calls(calls)) == 1
