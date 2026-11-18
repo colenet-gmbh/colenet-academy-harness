@@ -57,10 +57,12 @@ Usage:
                                                    (`worker_rights.py`), the command as its
                                                    SessionStart hook, the lean context of
                                                    `workers.context` (`apply_context`)
-  worker_launch.py tree --repo <dir> --name <n> [--branch <b>]
+  worker_launch.py tree --repo <dir> --name <n> [--branch <b>] [--auto | --main-checkout]
                                                    creates the worker's own worktree beside the
                                                    main checkout (`add_tree`) and prints its path;
-                                                   with --main-checkout only prints the main
+                                                   --auto only under `workers.tree: own`
+                                                   (`auto_tree`), exit 1 when it creates none;
+                                                   --main-checkout only prints the main
                                                    checkout's top, exit 1 when <dir> is none
   worker_launch.py marker --tree <wt> --name <n> [--key K] [--role R] [--starter S] [--mode M]
                                                    writes the launcher's marker (`write_marker`)
@@ -516,6 +518,30 @@ def tree_path(top: Path, name: str) -> Path:
     return top.parent / f"{top.name}-{name}"
 
 
+TREE_MODES = ("caller", "own")
+
+
+def tree_mode(repo: Path) -> str:
+    """`workers.tree` of the repo's `.weside/config.json`: `caller` (default: a start stays where
+    the caller stands) or `own` (a start from the main checkout gets its own worktree)."""
+    mode = workers_block(repo).get("tree", "caller")
+    if mode not in TREE_MODES:
+        raise LaunchError(f"workers.tree: one of {', '.join(TREE_MODES)}, not {mode!r}", 2)
+    return mode
+
+
+def auto_tree(repo: Path, name: str, branch: str | None = None) -> Path | None:
+    """The tree a start without `--tree`/`--here` gets: under `workers.tree: own` a start from the
+    main checkout gets a new one (`add_tree`); otherwise None, the start stays where it is. Under
+    `caller` a start from the main checkout prints one tip on stderr."""
+    if main_checkout(repo) is None:
+        return None
+    if tree_mode(repo) == "own":
+        return add_tree(repo, name, branch)
+    print("we-worker: tip: --tree/--here, or workers.tree: own", file=sys.stderr)
+    return None
+
+
 def add_tree(repo: Path, name: str, branch: str | None = None) -> Path:
     """Create the worker's own worktree beside the main checkout holding `repo`: the repo's
     `workers.add_worktree` (a template with the tokens `{path}` and `{branch}`, run without a shell
@@ -926,6 +952,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--name", required=True)
     p.add_argument("--branch")
     p.add_argument("--main-checkout", action="store_true")
+    p.add_argument("--auto", action="store_true")
     p = sub.add_parser("marker")
     p.add_argument("--tree", type=Path, required=True)
     p.add_argument("--name", required=True)
@@ -996,11 +1023,13 @@ def _tree_verbs(args: argparse.Namespace) -> int:
         return 0
     if args.main_checkout:
         top = main_checkout(args.repo.resolve())
-        if top is None:
-            return 1
-        print(top)
-        return 0
-    print(add_tree(args.repo.resolve(), args.name, args.branch))
+    elif args.auto:
+        top = auto_tree(args.repo.resolve(), args.name, args.branch)
+    else:
+        top = add_tree(args.repo.resolve(), args.name, args.branch)
+    if top is None:
+        return 1
+    print(top)
     return 0
 
 

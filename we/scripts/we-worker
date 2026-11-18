@@ -45,11 +45,11 @@
 #   --limit  the time limit handed to the timer (default 3h; 90m, 2h30m; a bare number is minutes)
 #   --tree <path>  start in that existing worktree (an integration tree, a finisher, a fix round)
 #   --here   start where the caller stands: a worker that only reads (probe, walk, card, pre-sorter)
-#   --branch <b>  the branch of a tree the launcher creates (default feat/<name>)
-#   Tree: without --tree or --here a start from the main checkout of a repo gets its own worktree
-#   (`worker_launch.py tree`: the repo's `workers.add_worktree`, else `git worktree add <repo>-<name>
-#   -b <branch> origin/<default>`); a start from a linked worktree or outside a repo, and a --resume,
-#   stay where they are. The tree is printed; a created or named tree gets the launcher's marker
+#   --branch <b>  the branch of a tree the launcher creates (default feat/<name>; workers.tree: own)
+#   Tree: without --tree or --here a start stays where the caller stands; only under `.weside/config.json`
+#   `workers.tree: own` a start from the main checkout gets its own worktree (`worker_launch.py tree`:
+#   the repo's `workers.add_worktree`, else `git worktree add <repo>-<name> -b <branch> origin/<default>`).
+#   A start from a linked worktree or outside a repo, and a --resume, stay where they are. The tree is printed; a created or named tree gets the launcher's marker
 #   (name, key, role, starter, tree, mode; `worker_launch.py marker`).
 #   Supervisor: every start also starts `worker_supervisor.py spawn` (detached; its docstring owns what
 #   it does); $WE_WORKER_NO_SUPERVISOR=1 skips it.
@@ -526,9 +526,14 @@ if [[ -n "$tree" ]]; then
     exit 2
   fi
   mark=1
-elif [[ $here -eq 0 && $resuming -eq 0 ]] && python3 "$wl" tree --main-checkout --repo "$PWD" --name "$name" >/dev/null 2>&1; then
-  tree=$(python3 "$wl" tree --repo "$PWD" --name "$name" ${branch:+--branch "$branch"}) || exit 2
-  mark=1
+elif [[ $here -eq 0 && $resuming -eq 0 ]]; then
+  rc=0
+  created=$(python3 "$wl" tree --auto --repo "$PWD" --name "$name" ${branch:+--branch "$branch"}) || rc=$?
+  case $rc in
+    0) tree=$created; mark=1 ;;
+    1) ;;
+    *) exit 2 ;;
+  esac
 fi
 if [[ -n "$tree" ]]; then
   cd "$tree"

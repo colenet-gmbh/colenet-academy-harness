@@ -4,7 +4,7 @@ description: >
   From: 2026-11-17 — a build worker built directly in the shared main checkout instead of a
   worktree, and the human switched the branch there under it; the worker-rights gate braked work on
   the default branch 52 times between 2026-11-11 and 2026-11-17. Since then `we-worker` gives a
-  build worker its own worktree, and the worker card says what a worker that still finds itself on
+  build worker its own worktree under `workers.tree: own`, and the worker card says what a worker that still finds itself on
   the default branch of the main checkout does: build nothing, tell its starter, stop.
 tags: [worker, family-2]
 plugins: ["../../we"]

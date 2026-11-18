@@ -944,8 +944,13 @@ def _marker(tree):
     )
 
 
-def test_a_build_start_in_the_main_checkout_lands_in_a_new_worktree(tmp_path):
+def _tree_mode(project, mode):
+    (project / ".weside" / "config.json").write_text(json.dumps({"workers": {"tree": mode}}))
+
+
+def test_under_tree_own_a_build_start_in_the_main_checkout_lands_in_a_new_worktree(tmp_path):
     project, env = git_setup(tmp_path)
+    _tree_mode(project, "own")
     proc = run(project, env, "AC-12-impl", "--bg", GO)
     assert proc.returncode == 0, proc.stderr
     tree = tmp_path / "project-AC-12-impl"
@@ -979,3 +984,14 @@ def test_here_a_linked_worktree_and_tree_choose_the_tree_without_creating_one(tm
     assert _marker(linked)["name"] == "AC-12-fix"
     main = run(linked, env, "AC-12-back", "--tree", str(project), "--bg", GO)
     assert main.returncode == 2 and "--here" in main.stderr
+
+
+def test_under_tree_caller_a_start_in_the_main_checkout_stays_there_with_a_tip(tmp_path):
+    project, env = git_setup(tmp_path)
+    _tree_mode(project, "caller")
+    proc = run(project, env, "AC-12-impl", "--bg", GO)
+    assert proc.returncode == 0, proc.stderr
+    assert "tip: --tree/--here, or workers.tree: own" in proc.stderr
+    assert [c["cwd"] for c in started(tmp_path)] == [str(project)]
+    assert not (tmp_path / "project-AC-12-impl").exists()
+    assert not Path(_git(project, "rev-parse", "--absolute-git-dir"), "we-worker.json").exists()

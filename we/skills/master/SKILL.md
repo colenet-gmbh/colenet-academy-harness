@@ -97,7 +97,8 @@ no confirm: the invocation is the go.
 ## Refine lane
 
 A refiner is a `we:dev-high` worker `<KEY>-refiner` that you start in a worktree of its own (`we-worker`
-from the main checkout creates it and prints its path; the brief's `Tree:` names it) (L0 §Lifecycle: the epic's
+from the main checkout creates it under `workers.tree: own`, else `git worktree add --detach <path>
+origin/<default>` and `--tree <path>`; the brief's `Tree:` names it) (L0 §Lifecycle: the epic's
 master starts it; the owner judges, never starts), whose brief (the four headings of `references/worker-dispatch.md`
 § Name and brief) begins under its goal: "Use the Skill tool with skill `we:plan-story` and args `<KEY>`" (a bare `/we:plan-story` in a subagent prompt is not proven to run the skill, probe 27.09.2026). Refiners may run in parallel (up to three); each writes its plan and, for `receipt` ACs, the staging-check file the plan's `**Staging checks:**` line names. The
 brief carries the context a human would give: epic frame (3–5 lines), the story's intent, scope
@@ -192,7 +193,7 @@ replacement while the original may be alive: stop it, verify, then re-dispatch o
 
 **Parallel chunks** (per the plan's `parallel_groups` or § Choosing the worker): create the integration worktree
 `git worktree add <repo>-<KEY>-integration -b <type>/<KEY>-<slug> origin/<default>` (the one tree the launcher
-does not make; each chunk worker gets its own from `we-worker`, a finisher starts with `--tree <int>`), dispatch
+does not make; under `workers.tree: own` each chunk worker gets its own from `we-worker`; a finisher starts with `--tree <int>`), dispatch
 the wave in one message, and merge each branch as it returns, not after the wave: `git -C <int> merge --no-ff <branch> -m "chore(<KEY>): integrate <branch>"`.
 A serial successor is dispatched on its predecessor's head the moment that one reports. A result without
 commits is a lost dispatch: re-dispatch, never integrate an empty tree. After each merge run

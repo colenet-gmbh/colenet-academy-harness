@@ -83,6 +83,7 @@ Written always, also when step 4 is declined. Only keys a verb reads:
   "review": { "available": ["claude"] },
   "agents": { "visible_teammates": false, "worker_launch": "subagent" },
   "workers": { "max_busy_sessions": 10, "max_active_5h_percent": 80,
+               "tree": "caller|own",
                "add_worktree": "<command with {path} {branch}, or null>",
                "remove_worktree": "<command with {path}, or null>",
                "context": { "auto_memory": "off", "disable_plugins": [], "deny_mcp_servers": [],
@@ -101,7 +102,8 @@ receipt for the acceptance keeper; `lenses.acceptance.sample` stays the lens sam
 `/we:merged` moves a landed story to In Review, never to Done (L0 §Lifecycle;
 `${CLAUDE_PLUGIN_ROOT}/skills/merged/SKILL.md` § 5).
 
-`workers.add_worktree`, `remove_worktree` and `context` shape a `we-worker` start: the repo's
+`workers.tree`, `add_worktree`, `remove_worktree` and `context` shape a `we-worker` start: whether
+a start from the main checkout gets its own tree (`own`; default `caller`, it stays there), the repo's
 worktree commands and the worker's lean settings (`${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md`
 § Tree, context and end). Write them only when the repo has a worktree command of its own or the
 user names plugins or MCP servers a worker never needs; absent, the plugin's defaults hold.

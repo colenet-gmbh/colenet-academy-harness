@@ -131,11 +131,13 @@ misguided worker, no boundary: a script file passes it.
 ### Tree, context and end (`we-worker`)
 
 A `we-worker <name>` start picks the worker's tree in one of three modes (`we-worker --help` owns
-the flags, `worker_launch.py tree` the rule):
+the flags, `worker_launch.py tree` the rule). `.weside/config.json` `workers.tree` decides what a start
+without a flag does: `caller` (default) stays where the caller stands and, from the main checkout,
+prints a tip; `own` gives a start from the main checkout its own tree.
 
 | Mode | When | Tree |
 |---|---|---|
-| default | a build worker started from the main checkout | a new worktree beside it: `.weside/config.json` `workers.add_worktree` (a template with the tokens `{path}` and `{branch}`), else `git worktree add <repo>-<name> -b feat/<name> origin/<default>`; `--branch` names the branch |
+| own tree | a build worker started from the main checkout under `workers.tree: own` | a new worktree beside it: `.weside/config.json` `workers.add_worktree` (a template with the tokens `{path}` and `{branch}`), else `git worktree add <repo>-<name> -b feat/<name> origin/<default>`; `--branch` names the branch |
 | `--tree <path>` | an integration worktree, a finisher, a fix round | that existing worktree |
 | `--here` | a worker that only reads: probe, walk, card, pre-sorter | where the caller stands |
 
