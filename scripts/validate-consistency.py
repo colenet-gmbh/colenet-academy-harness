@@ -135,6 +135,9 @@ RETIRED_TERMS = (
     "§ Mirror block",
     "Mirror-refresh",
     "<mirror block",
+    # The docs-vault MCP integration: ripgrep answers the same search; nothing reads `tools.turbovault`.
+    "turbovault",
+    "TurboVault",
 )
 # Files that name the retired terms on purpose: this checker and the tests that pin it.
 RETIRED_ALLOWLIST = {

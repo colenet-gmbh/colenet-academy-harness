@@ -60,6 +60,9 @@ phase:
 A refactor chunk's last step deletes the characterization tests that a test on the new seam now
 asserts; the report's `retired:` field names each one and the test that replaces it.
 
+When you change a module's flow or meet a decision the code does not show, leave the note at the
+code (`${CLAUDE_PLUGIN_ROOT}/references/code-notes.md`): the next agent reads the code, not your report.
+
 ## 4. Local gates
 
 Run the commands yourself; they are deterministic. Scope and exceptions are in the contract:

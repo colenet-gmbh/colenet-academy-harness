@@ -472,6 +472,9 @@ asker's open question `<Q>` on the same `--key`: once the new one is posted, `<Q
 another key, is refused. An asker who takes a question back without a new one runs
 `board.py withdraw <Q>` (§ Several humans).
 
+**An answer worth keeping** is written where the next agent works (`references/code-notes.md`), by
+the asker, in the commit it makes anyway: the board is pruned, the code stays.
+
 Every `ask` past the field check appends one line to `board-questions.jsonl`:
 `{id?, ts, session, key, key_title, ask, recommendation, cause, outcome, reason?, reader?}`, with
 `outcome` `posted` (only then `id`), `returned`, `reader-error`, `duplicate` (with `of`), `replaced` (with `by`), `repeat` (with the first `id`), `closed` (`close-merged`) or `pruned` (§ Pruning), and `reader` the reader's raw
