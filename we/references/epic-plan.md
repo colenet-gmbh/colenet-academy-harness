@@ -113,7 +113,7 @@ _Mirror of child Stories in the ticketing tool, refreshed YYYY-MM-DD._
    order. Read first: the plan, the goal file, the instruction files, ADRs, `docs/plans/out-of-scope/`
    when present, and the glossary the instruction files name.
 2. Worktree and commit path: `${CLAUDE_PLUGIN_ROOT}/references/plan-commit.md` (repo fact first, else a detached scratch
-   worktree off the default branch).
+   worktree off the default branch, landed by push or docs PR per `plans.land`).
 3. Dispatch `Agent(subagent_type: "we:dev-high", description: "draft epic <slug>", prompt: <brief>)`.
    Plan-writing is a named `dev-high` case (owner 27.09.2026); the session's `medium` would write it
    otherwise. A subagent writes a plan file here, never code. Brief: first line `Read <abs>/skills/epic/references/template.md and <abs>/references/epic-plan.md, then follow § Writer contract.`

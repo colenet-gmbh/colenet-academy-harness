@@ -14,7 +14,8 @@
   to a file), else as a board news item. A worker stopped with `we-worker stop` (its settings
   file is already gone) ends without a line;
 - then it removes the worker's settings file and timer file, unless a living session of the same
-  name holds them again (a resume).
+  name holds them again (a resume). A worker never seen within 5 minutes keeps its files (a start
+  held by a dialog may still read them); `gc` ages them out.
 
 `gc` touches only the plugin's own files of sessions that no longer live: the settings files
 `<name>.settings.json` and timer files `<name>.json` of the state dir, and the launcher's marker
@@ -262,8 +263,8 @@ def supervise(
             row = found[-1] if found else None
         if row is None:
             if clock() >= give_up:
+                # its files stay: a start held by a dialog may still read them; gc ages them out
                 log(f"{name}: no living session within {APPEAR_S} s")
-                _remove_files(state, name)
                 return "never-seen"
             sleep(POLL_S)
     pid, sid = row.get("pid"), row.get("sessionId")
@@ -349,9 +350,13 @@ def _worktrees(repo: Path) -> list[dict]:
 
 
 def merged(repo: Path, branch: str, base: str) -> bool:
-    """The branch's head is in `origin/<base>`, or GitHub lists a merged PR from it."""
+    """The branch's head, with commits of its own (it moved since its reflog's first entry), is in
+    `origin/<base>`, or GitHub lists a merged PR from it. A branch with no commit of its own sits in
+    `origin/<base>` too and is never merged by that alone."""
     head = wl._git(repo, "rev-parse", f"refs/heads/{branch}")
-    if head and wl._git(repo, "merge-base", "--is-ancestor", head, f"origin/{base}") is not None:
+    born = (wl._git(repo, "reflog", "show", "--format=%H", f"refs/heads/{branch}") or "").split()
+    own = bool(head and born and born[-1] != head)
+    if own and wl._git(repo, "merge-base", "--is-ancestor", head, f"origin/{base}") is not None:
         return True
     if not shutil.which("gh"):
         return False

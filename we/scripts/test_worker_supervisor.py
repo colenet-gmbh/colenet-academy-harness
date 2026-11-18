@@ -153,9 +153,9 @@ def test_a_permission_prompt_older_than_15_min_is_one_board_item(box):
     assert [iid for iid, _t in box["items"]] == [f"W-{NAME}-0001abcd"]
 
 
-def test_a_session_that_never_shows_up_leaves_no_files(box):
+def test_a_session_that_never_shows_up_keeps_its_files(box):
     assert box["run"]([]) == "never-seen"
-    assert not list(box["state"].iterdir())
+    assert (box["state"] / f"{NAME}.settings.json").exists()
 
 
 # --- gc ----------------------------------------------------------------------------------------
@@ -214,6 +214,9 @@ def test_gc_removes_only_dead_sessions_own_files_and_lists_merged_clean_trees(
     open_tree = _tree(repo, "AC-4-open", merged=False)
     dirty = _tree(repo, "AC-5-dirty", merged=True, dirty=True)
     live_tree = _tree(repo, "AC-1-live", merged=True)
+    bare = repo.parent / "repo-AC-6-bare"  # no commit of its own: in origin/main, never "merged"
+    _git(repo, "worktree", "add", "-q", "-b", "feat/AC-6-bare", str(bare), "origin/main")
+    Path(_gd(bare), "we-worker.json").write_text(json.dumps({"name": "AC-6-bare"}))
     old = time.time() - 3600
     for p in [
         *state.iterdir(),

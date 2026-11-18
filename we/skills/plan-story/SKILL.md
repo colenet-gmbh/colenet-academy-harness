@@ -16,7 +16,9 @@ line in the plan (step 5), nothing else: no commit, no push, no ticket write. Sh
 `git log`) are fine. Your final message is the report the dispatcher reads (step 6).
 **A brief that makes the plan a PR chunk** (it names the commit or plan-PR command) overrides the no-commit
 line: you commit and open the PR by that command, and the chunk ends at its merge (L0 § Workers): you watch it
-until green, answer its review and Ready-panel rounds on the same branch, then report. Without such a line the
+until green, answer its review and Ready-panel rounds on the same branch, then report. A brief that names
+`plan_push.py` instead lands the plan per `${CLAUDE_PLUGIN_ROOT}/references/plan-commit.md` step 5, and the
+chunk ends at its exit 0 (no PR to watch). Without such a line the
 report ends you.
 
 ## Rules
