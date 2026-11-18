@@ -126,6 +126,7 @@ def test_lands_plan_with_its_planned_receipt(make, capsys):
     "case, needle",
     [
         ("code path", "src/app.py"),
+        ("config widens itself", ".weside/config.json"),
         ("armed receipt", ".weside/verify/ACME-1.yaml"),
         ("receipt without plan", ".weside/verify/ACME-1.yaml"),
         ("dirty", "dirty"),
@@ -138,6 +139,11 @@ def test_refuses_and_pushes_nothing(make, capsys, monkeypatch, case, needle):
     world = make(crew={"oracles": {"receipt_dir": ".weside/verify"}})
     plan = ("docs/plans/ACME-1-story.md", "# plan\n")
     if case == "code path":
+        write(world.scratch, "src/app.py", "print(1)\n")
+        commit(world.scratch, *plan)
+    elif case == "config widens itself":
+        wide = {"plans": {"push_paths": ["**"], "secret_scan": "none"}}
+        write(world.scratch, ".weside/config.json", json.dumps(wide))
         write(world.scratch, "src/app.py", "print(1)\n")
         commit(world.scratch, *plan)
     elif case == "armed receipt":
@@ -163,7 +169,7 @@ def test_refuses_and_pushes_nothing(make, capsys, monkeypatch, case, needle):
     assert plan_push.main([]) == plan_push.REFUSED
     err = capsys.readouterr().err
     assert needle in err
-    if case in ("code path", "armed receipt", "receipt without plan"):
+    if case in ("code path", "config widens itself", "armed receipt", "receipt without plan"):
         assert "land these by PR" in err
     assert world.remote_head() == before
 

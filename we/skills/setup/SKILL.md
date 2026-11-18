@@ -83,8 +83,7 @@ Written always, also when step 4 is declined. Only keys a verb reads:
   "review": { "available": ["claude"] },
   "agents": { "visible_teammates": false, "worker_launch": "subagent" },
   "workers": { "max_busy_sessions": 10, "max_active_5h_percent": 80 },
-  "plans": { "land": "pr", "push_paths": ["docs/plans/**"],
-             "secret_scan": "<command with {range} and optional {report}, or \"none\"; default gitleaks>" },
+  "plans": { "land": "pr", "push_paths": ["docs/plans/**"], "secret_scan": null },
   "acceptance": { "receipts_workflow": "<workflow path whose RC run uploads accept.json, or null>",
                   "rc_tag_glob": "<RC tag glob, e.g. v*-rc.*>" }
 }
@@ -97,6 +96,9 @@ receipt for the acceptance keeper; `lenses.acceptance.sample` stays the lens sam
 
 `/we:merged` moves a landed story to In Review, never to Done (L0 §Lifecycle;
 `${CLAUDE_PLUGIN_ROOT}/skills/merged/SKILL.md` § 5).
+
+`plans.secret_scan` stays `null` (gitleaks) unless the user names a scanner: a command with `{range}`
+and an optional `{report}`, or `"none"` (`${CLAUDE_PLUGIN_ROOT}/scripts/plan_push.py`).
 
 `agents.worker_launch` is a command template that starts each dev worker as a session of its own
 (`${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md` § Worker launch backend), for a repo without a

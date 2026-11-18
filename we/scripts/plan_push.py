@@ -12,8 +12,8 @@ The worktree holds one or more commits on top of the default branch. The script
 3. refuses any path the commits touch outside the allowed globs: `plans.push_paths` in
    `.weside/config.json` (default `docs/plans/**`), plus a staging-check file under the crew's
    `oracles.receipt_dir` that travels with a plan and still carries `state: planned`. Config and
-   crew are read from this tree after the rebase, i.e. as committed on the default branch (a path
-   that changes them is refused), never from the main checkout's uncommitted copy;
+   crew are read from `<remote>/<default>` (`git show`), never from the commits being landed nor
+   from the main checkout's uncommitted copy, so a commit cannot widen its own check;
 4. runs the secret scan over the commit range: `plans.secret_scan`, a command template with
    `{range}` and an optional `{report}` (a JSON report path in gitleaks' format), default
    `gitleaks git --log-opts={range} --redact --no-banner --report-format json --report-path {report}`
@@ -101,29 +101,39 @@ def default_branch(remote: str) -> str:
     raise PushError(FAILED, f"no default branch on {remote}; pass --branch")
 
 
-def load_config(top: Path) -> dict[str, Any]:
-    path = top / ".weside" / "config.json"
-    if not path.is_file():
+def load_config(base: str) -> dict[str, Any]:
+    shown = git("show", f"{base}:.weside/config.json", check=False)
+    if shown.returncode != 0:
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise PushError(FAILED, f"{path}: {exc}") from exc
+        data = json.loads(shown.stdout)
+    except ValueError as exc:
+        raise PushError(FAILED, f"{base}:.weside/config.json: {exc}") from exc
     plans = data.get("plans") if isinstance(data, dict) else None
     return plans if isinstance(plans, dict) else {}
 
 
-def receipt_dir(top: Path) -> str | None:
-    path = crew.at(top)
-    try:
-        data = crew.load(path) if path else None
-    except crew.CrewError:
-        return None
+def receipt_dir(base: str) -> str | None:
+    """`oracles.receipt_dir` of the crew in `<base>`'s `.weside/` (a pointer outside it: None)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        archive = subprocess.run(
+            ["git", "archive", "--format=tar", base, ".weside"], capture_output=True, check=False
+        )
+        if archive.returncode != 0:
+            return None
+        subprocess.run(
+            ["tar", "-x", "-C", tmp], input=archive.stdout, capture_output=True, check=False
+        )
+        path = crew.at(tmp)
+        try:
+            data = crew.load(path) if path else None
+        except crew.CrewError:
+            return None
     value = ((data or {}).get("oracles") or {}).get("receipt_dir")
     return value.strip("/") if isinstance(value, str) and value.strip("/") else None
 
 
-def preflight() -> Path:
+def preflight() -> None:
     if git("rev-parse", "--is-inside-work-tree", check=False).stdout.strip() != "true":
         raise PushError(REFUSED, "not inside a git worktree")
     git_dir = Path(git("rev-parse", "--absolute-git-dir").stdout.strip())
@@ -136,7 +146,6 @@ def preflight() -> Path:
         )
     if git("status", "--porcelain").stdout.strip():
         raise PushError(REFUSED, "refused: the tree is dirty; commit or remove the changes first")
-    return Path(git("rev-parse", "--show-toplevel").stdout.strip())
 
 
 def rebase(base: str) -> None:
@@ -216,11 +225,11 @@ def _findings(report: Path) -> list[str]:
     return lines
 
 
-def check(base: str, plans: dict[str, Any], top: Path) -> None:
+def check(base: str, plans: dict[str, Any]) -> None:
     globs = plans.get("push_paths") or DEFAULT_PATHS
     if isinstance(globs, str):
         globs = [globs]
-    bad = outside(touched(base), globs, receipt_dir(top))
+    bad = outside(touched(base), globs, receipt_dir(base))
     if bad:
         listed = "\n".join(f"  {p}" for p in bad)
         raise PushError(
@@ -232,12 +241,12 @@ def check(base: str, plans: dict[str, Any], top: Path) -> None:
 
 
 def land(remote: str, branch: str | None) -> list[str]:
-    top = preflight()
+    preflight()
     branch = branch or default_branch(remote)
     base = f"{remote}/{branch}"
     for _attempt in range(RETRIES + 1):
         rebase(base)
-        check(base, load_config(top), top)
+        check(base, load_config(base))
         before = git("rev-parse", base).stdout.strip()
         out = push(remote, branch)
         if out.returncode == 0:
