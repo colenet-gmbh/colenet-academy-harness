@@ -129,13 +129,14 @@ RETIRED_ALLOWLIST = {
 }
 # `gh pr merge … --auto` merges at once when the PR looks clean (the old head's state right after a
 # push); every arm goes through the helper. Named on purpose: the helper, its test and doc, this
-# checker and its test, and the cold-start cases that forbid the term.
+# checker and its test, and the cold-start and repeat cases that forbid the term.
 RETIRED_ARM = re.compile(r"gh pr merge\b[^\n`|]*?\s--auto(?![\w-])")
 RETIRED_ARM_ALLOWLIST = {
     "we/scripts/arm_pr.sh",
     "we/scripts/test_arm_pr.py",
     "we/references/session-traps.md",
     "scripts/test_coldstart_cases.py",
+    "evals/fix-push-then-arm/case.yaml",
 }
 RETIRED_ARM_ALLOWED_DIRS = ("tests/coldstart/",)
 CODE_SUFFIXES = (".py", ".ts", ".tsx", ".js", ".json")
