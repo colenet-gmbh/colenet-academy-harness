@@ -42,8 +42,9 @@
 # The crew's `merge` block (crew.py merge) decides two refusals right after the first PR read:
 # `merge.armer: workflow` (the repo's own workflow arms every ready PR, so no session arms) and a
 # label of `merge.hold_labels` on the PR (a human merges it). The block is read from the PR's base
-# (`crew.py merge --rev origin/<base>`), the checkout's only when the base has no crew file: the rule
-# that holds a PR must not be editable by that PR, and a PR's own worktree carries its crew file.
+# (`crew.py merge --rev origin/<base>`, fetched first), the checkout's only when the base has no crew
+# file or the caller is outside any git repo: the rule that holds a PR must not be editable by that
+# PR, and a PR's own worktree carries its crew file. A base that cannot be read is a `crew:` error.
 #
 # Env: ARM_INTERVAL (seconds between reads, default 10), ARM_REGISTER_TIMEOUT (default 300).
 set -uo pipefail
@@ -81,6 +82,7 @@ crew_merge() {  # the base's merge.$1 (a warning on stderr passes through); a br
 HOLD="" MERGE_READ=""
 merge_block() {  # once, after the first read names the base: the armer refusal, then HOLD
   [ -z "$MERGE_READ" ] || return 0
+  git fetch -q origin "$BASE" 2>/dev/null || true  # a stale or missing base ref reads an old rule
   ARMER=$(crew_merge armer) || { echo "$ARMER"; exit 2; }
   if [ "$ARMER" = workflow ]; then echo "refused: armed by workflow — the step is gh pr ready"; exit 4; fi
   HOLD=$(crew_merge hold_labels) || { echo "$HOLD"; exit 2; }

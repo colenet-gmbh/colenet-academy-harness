@@ -30,6 +30,7 @@ Usage:
                                             list one item per line; without a crew file the default;
                                             ``--rev`` reads the crew file as commit REV has it
                                             (``find_at_rev``), the checkout's only when REV has none
+                                            or the cwd is no git repo; REV unreadable: exit 1
   crew.py human [--from DIR]                this session's human (``current_human``):
                                             "<slug>\t<name>\t<runs, comma-separated>", exit 1 when
                                             the crew cannot tell (the reason on stderr)
@@ -1127,7 +1128,10 @@ def find_at_rev(rev: str, start: str | Path | None = None) -> tuple[str, str] | 
     """(path in the tree, text) of the crew file ``find`` would pick, as commit ``rev`` has it.
 
     The same walk as ``find`` from ``start`` up to the repo root, over ``rev``'s tree instead of
-    the working tree; None when ``rev`` is unreadable, declares no crew, or points outside the repo.
+    the working tree. A pointer out of the repo names a file no commit of it can change: read from
+    disk. None only outside a git repo or when ``rev`` declares no crew; an unreadable ``rev`` or a
+    dangling pointer raises ``CrewError``: the caller asked for ``rev``'s rule, and the working
+    tree's would be the one under review.
     """
     cwd = Path(start or Path.cwd()).resolve()
 
@@ -1140,9 +1144,11 @@ def find_at_rev(rev: str, start: str | Path | None = None) -> tuple[str, str] | 
             return None
         return res.stdout if res.returncode == 0 else None
 
-    prefix = git("rev-parse", "--show-prefix")
-    if prefix is None or git("rev-parse", "-q", "--verify", f"{rev}^{{commit}}") is None:
+    prefix, top = git("rev-parse", "--show-prefix"), git("rev-parse", "--show-toplevel")
+    if prefix is None or top is None:
         return None
+    if git("rev-parse", "-q", "--verify", f"{rev}^{{commit}}") is None:
+        raise CrewError(f"{rev} unreadable here (fetch it)")
     parts = [p for p in prefix.strip().strip("/").split("/") if p]
     for n in range(len(parts), -1, -1):
         here = "/".join(parts[:n])
@@ -1160,9 +1166,13 @@ def find_at_rev(rev: str, start: str | Path | None = None) -> tuple[str, str] | 
         if isinstance(pointer, str) and pointer.strip():
             target = os.path.normpath(os.path.join(here, pointer.strip()))
             if target.startswith("..") or os.path.isabs(target):
-                return None
-            text = git("show", f"{rev}:{target}")
-            return (target, text) if text is not None else None
+                outside = Path(top.strip(), target).resolve()
+                text = outside.read_text(encoding="utf-8") if outside.is_file() else None
+            else:
+                text = git("show", f"{rev}:{target}")
+            if text is None:
+                raise CrewError(f"{rev}:{weside}/config.json: crew {pointer.strip()} not found")
+            return target, text
     return None
 
 

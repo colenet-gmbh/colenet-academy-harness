@@ -1069,7 +1069,12 @@ def test_merge_rev_reads_the_crew_the_commit_has_through_its_pointer(tmp_path):
     assert crew.find_at_rev("HEAD", deep)[0] == "team/crew.json"
     assert run(deep, "merge", "hold_labels", "--rev", "HEAD").stdout == "review\n"
     assert run(deep, "merge", "hold_labels").stdout == "\n"
-    assert run(deep, "merge", "hold_labels", "--rev", "origin/nope").stdout == "\n"
+    out = run(deep, "merge", "hold_labels", "--rev", "origin/nope")
+    assert out.returncode == 1 and "origin/nope unreadable" in out.stderr
+    (repo / ".weside" / "config.json").write_text(json.dumps({"crew": "team/gone.json"}))
+    subprocess.run(["git", "-C", str(repo), "commit", "-qam", "d"], check=True, env=env)
+    out = run(deep, "merge", "hold_labels", "--rev", "HEAD")
+    assert out.returncode == 1 and "crew team/gone.json not found" in out.stderr
 
 
 def test_launch_worker_mode_is_default_or_bypass(tmp_path):

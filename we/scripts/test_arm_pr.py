@@ -288,3 +288,12 @@ def test_a_base_without_a_crew_file_leaves_the_checkouts_block(tmp_path):
     code, out, calls = run(tmp_path, reads, ["ok"])
     assert (code, out[-1]) == (4, "refused: label review — only the human merges it")
     assert arm_calls(calls) == []
+
+
+def test_an_unreadable_base_is_a_crew_error_not_the_checkouts_block(tmp_path):
+    base_crew(tmp_path, {"hold_labels": ["review"]}, {"hold_labels": []})
+    _git(tmp_path, "update-ref", "-d", "refs/remotes/origin/main")
+    reads = [{"head": NEW, "checks": PENDING, "labels": ["review"]}]
+    code, out, calls = run(tmp_path, reads, ["ok"])
+    assert (code, out[-1]) == (2, "crew: origin/main unreadable here (fetch it)")
+    assert arm_calls(calls) == []
