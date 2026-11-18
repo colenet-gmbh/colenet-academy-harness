@@ -406,6 +406,22 @@ def test_every_denial_is_one_line_in_brakes_jsonl_without_the_command(world):
     assert second["argv0"] == "gh"
 
 
+def test_the_starter_logs_a_card_verdict_and_later_its_outcome(tmp_path, own_state_dir, capsys):
+    verdict = tmp_path / "verdict.md"
+    verdict.write_text(
+        "<!-- security-card-review -->\n## Security card review\n\n**Overall: BLOCKING**\n"
+    )
+    assert wr.main(["brake", "card", "--pr", "12", "--file", str(verdict)]) == 0
+    assert wr.main(["brake", "outcome", "--pr", "12", "--kind", "card", "--danger", "no"]) == 0
+    card, outcome = [
+        json.loads(x) for x in (own_state_dir / "brakes.jsonl").read_text().splitlines()
+    ]
+    assert (card["type"], card["verdict"], card["pr"]) == ("card", "BLOCKING", "12")
+    assert (outcome["type"], outcome["kind"], outcome["danger"]) == ("outcome", "card", "no")
+    verdict.write_text("no verdict here\n")
+    assert wr.main(["brake", "card", "--pr", "12", "--file", str(verdict)]) == 2
+
+
 def test_a_marker_worker_names_its_lead(world):
     gd = subprocess.run(
         ["git", "-C", str(world["repo"]), "rev-parse", "--absolute-git-dir"],

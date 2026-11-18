@@ -34,8 +34,8 @@ them; its changes go into this run's store commit. Exit 2: relay the line and de
 Steps 3 to 5 decide only what is left.
 
 Read the charter (goal, decisions, findings, next steps), then `LEDGER.md`, then every file in
-`inbox/`, plus entries staged under `~/.claude/we-inbox/<repo>/` by an auto or collect retro: move those into
-`inbox/` now. With `feedback-sources.md`, add each listed repo's plugin findings as named
+`inbox/`, plus entries staged under `~/.claude/we-inbox/<repo>/` by an auto or collect retro: move each into
+`inbox/` now with `retro_write.py inbox/ <file> --date <its file name's date>` (keeps the first-seen date, revives an expired key), then delete the staged file. With `feedback-sources.md`, add each listed repo's plugin findings as named
 sources, read-only, key, target and fact only (`optimization-store.md` § Plugin checkout and workspace, Feedback sources). No
 store → offer `/we:setup` § Instruction loop and stop. Tell the user briefly where
 things stand, what you do now, and whether you need anything.

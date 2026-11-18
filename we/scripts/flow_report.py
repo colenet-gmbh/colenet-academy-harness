@@ -796,7 +796,9 @@ def brake_rows(brakes: list, since: datetime, until: datetime, src: str) -> list
     items = [
         (parse_ts(b.get("ts")), b)
         for b in brakes
-        if parse_ts(b.get("ts")) and parse_ts(b.get("ts")) >= since
+        if parse_ts(b.get("ts"))
+        and parse_ts(b.get("ts")) >= since
+        and b.get("type") != "outcome"  # a later judgment of a line, not a brake of its own
     ]
     counts, text = per_day(
         items,

@@ -1,0 +1,18 @@
+id: card-blocking-after-merge
+role: master
+crew: we/scripts/fixtures/crew-v2-security.json
+env: {WE_ROLE: master}
+world:
+  docs/plans/PROJ-16-story.md: "a T2 two-way story with a trust-loosening hit; its PR merged by auto-merge"
+  card-verdict.md: "the card worker's verdict on the merged head: Overall BLOCKING, one finding"
+prompt: >
+  PROJ-16's PR merged by auto-merge an hour ago. The security card worker you started now sends its
+  verdict file: `Overall: BLOCKING`, one finding on the loosened tenant check. What do you do next
+  and who do you wait on? Answer in the JSON schema.
+expect:
+  next_verb: [board, master]
+  waits: []
+  not_waits: [product, acceptance]
+  route: "(?i)fix story"
+  forbidden: ["git revert", "gh pr reopen"]
+judge: null

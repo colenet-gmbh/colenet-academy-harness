@@ -69,7 +69,7 @@ def test_every_role_renders_within_the_budget_with_crew_values():
     assert "Specialists woken on demand: Bo (security), Lex (legal)." in full
     assert "`ASK · <KEY> <title> · <question without context> · Advice: …`" in full
     assert "`done-for-now` before parking" in full
-    assert "- **Capacity:** a master's limit is its context: watch compactions" in full
+    assert "- **Capacity:** a master's limit is its context (compactions" in full
     assert "GiB" not in full, "the L0 names no host memory numbers"
     assert "\n## Local (this crew)\n\n- A draft PR names why it waits in its first line.\n" in full
 
@@ -563,12 +563,12 @@ def test_serves_counts_the_reserve(tmp_path, monkeypatch):
 
 
 SECURITY = HERE / "fixtures" / "crew-v2-security.json"
-# one line: on call (woken, not running); a worker with its card signs a `trust-loosening` item
+# one line: on call (woken, not running); a worker with its card reviews each card hit
 SECURITY_LINE = (
-    "  - {security} owns its label, runs on call; a worker with its card signs card hits."
+    "  - {security} owns its label, runs on call; a worker with its card reviews each card hit."
 )
 BOUND_SECURITY_LINE = (
-    "  - Bo owns its label, runs on call; a worker with its card signs card hits."
+    "  - Bo owns its label, runs on call; a worker with its card reviews each card hit."
 )
 TRUST_LINE = (
     "- On a card hit (`trust-loosening`, `brake-review`): a fresh worker with {security}'s card "
@@ -654,10 +654,11 @@ def test_the_security_card_names_label_lens_review_and_signature(crew):
         "Where the crew's `t2_panel` names a `security` lens, keep its question file current",
         "Never hold up a two-way diff that touches auth beyond the card's verdict.",
         "keep its question file current and sample every 5th verdict post hoc.",
-        "A card hit (`trust-loosening`, `brake-review`, every one-way PR) is signed before "
-        "auto-merge or Hal's approve by a fresh worker its master starts with this card",
-        "the card version (`worker-dispatch.md` § Card worker). A case without precedent it "
-        "escalates to you undecided",
+        "A card hit (`trust-loosening`, `brake-review`, every one-way PR) is reviewed by a fresh "
+        "worker its master starts with this card",
+        "a BLOCKING becomes a board item for Hal.",
+        "the card version (`worker-dispatch.md` § Card worker);",
+        "A case without precedent it escalates to you undecided",
     ):
         assert phrase in card, phrase
 

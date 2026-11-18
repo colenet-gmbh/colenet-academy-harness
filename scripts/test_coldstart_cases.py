@@ -167,8 +167,10 @@ ORDER_LINE = (
     "head, its verdict a PR comment; auto-merge does not wait on it; on a one-way PR it goes to Hal "
     "with the T2 panel."
 )
-# L0's one security line: the holder runs on call; a worker with its card signs the card hits
-SECURITY_LINE = "  - Bo owns its label, runs on call; a worker with its card signs card hits."
+# L0's one security line: the holder runs on call; a worker with its card reviews each card hit
+SECURITY_LINE = (
+    "  - Bo owns its label, runs on call; a worker with its card reviews each card hit."
+)
 
 
 def _rendered(fixture: str) -> tuple[str, str]:
@@ -179,14 +181,14 @@ def _rendered(fixture: str) -> tuple[str, str]:
 
 def test_the_security_cases_crew_renders_the_routing_they_expect():
     """The security master cases route on lines the rendered process must carry: the master card's
-    order (panel, signature, auto-merge), and L0's security line (on call, signs the card hits).
+    order (panel, review, auto-merge), and L0's security line (on call, reviews each card hit).
     Comparing the YAML with a table only checks it against itself; this renders what the master
     reads with the crew the cases name."""
     l0, card = _rendered(SECURITY_FIXTURE)
     lines = l0.split("\n")
     assert ORDER_LINE in card.split("\n"), "master card lacks the card-hit order line"
     assert "Bo's review" not in card, "master card still waits on the security review"
-    assert SECURITY_LINE in lines, "L0 lacks the security line (on call, signs card hits)"
+    assert SECURITY_LINE in lines, "L0 lacks the security line (on call, reviews each card hit)"
 
 
 def test_the_generic_crew_renders_no_security_routing():
@@ -195,3 +197,21 @@ def test_the_generic_crew_renders_no_security_routing():
     assert "also waits for" not in card
     assert "owns its label" not in l0
     assert "signs `trust-loosening`" not in l0
+
+
+@pytest.mark.parametrize(
+    ("name", "fixture"),
+    [
+        ("card-blocking-after-merge", SECURITY_FIXTURE),
+        ("merge-stop-before-arm", GENERIC_FIXTURE),
+    ],
+)
+def test_the_merge_cases_route_on_a_line_the_rendered_l0_carries(name, fixture):
+    """A card verdict after the merge becomes a fix story; a merge stop on the board holds the arm.
+    Both routes must be satisfiable by the L0 the master reads with the case's crew."""
+    case = REPO / "tests" / "coldstart" / "master" / f"{name}.yaml"
+    top = {k: v.strip() for k, v in TOP.findall(case.read_text(encoding="utf-8"))}
+    assert top["crew"] == fixture
+    [route] = ROUTE.findall(case.read_text(encoding="utf-8"))
+    l0, _ = _rendered(fixture)
+    assert re.search(route, " ".join(l0.split()))

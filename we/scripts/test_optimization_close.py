@@ -100,12 +100,16 @@ def test_one_applied_by_a_merged_pr_one_expired_the_rest_open(tmp_path):
         "closed 1 applied, 1 expired, 2 open",
     ]
     assert (
-        sorted(p.name for p in (s / "inbox").iterdir())
+        sorted(p.name for p in (s / "inbox").glob("*.md"))
         == [
             "2026-10-01-gap--old-md.md",  # old, but two evidence lines
             "2026-11-15-gap--rules-x-md.md",  # one line, young; one PR naming it is older, one a store PR
         ]
     )
+    # the expired entry stays readable for a revival by retro_write.py
+    assert [p.name for p in (s / "inbox" / "expired").iterdir()] == [
+        "2026-10-20-g2-volatile--readme-md.md"
+    ]
     rows = (s / "LEDGER.md").read_text().splitlines()
     assert (
         rows[4]
@@ -123,6 +127,17 @@ def test_expire_days_comes_from_the_config(tmp_path):
     (s.parent / "config.json").write_text(json.dumps({"optimization": {"expire_days": 60}}))
     out = run(tmp_path, s)
     assert out.stdout.splitlines()[-1] == "closed 1 applied, 0 expired, 3 open"
+
+
+def test_expire_all_before_expires_the_old_stock_whatever_its_evidence(tmp_path):
+    s = store(tmp_path)
+    out = run(tmp_path, s, "--expire-all-before", "2026-11-15")
+    assert out.stdout.splitlines()[-1] == "closed 1 applied, 2 expired, 1 open"
+    assert sorted(p.name for p in (s / "inbox" / "expired").iterdir()) == [
+        "2026-10-01-gap--old-md.md",  # two evidence lines, but older than the date
+        "2026-10-20-g2-volatile--readme-md.md",
+    ]
+    assert [p.name for p in (s / "inbox").glob("*.md")] == ["2026-11-15-gap--rules-x-md.md"]
 
 
 def test_a_missing_ledger_is_created_with_its_header(tmp_path):

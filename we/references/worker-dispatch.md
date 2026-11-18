@@ -305,6 +305,18 @@ it checks the marker, the sha against the PR's current head and the file's mtime
 worker's start, then posts the file unchanged with `gh pr comment <N> --body-file <file>`. The worker judged, the starter only passes the verdict on, so this does not go
 around `worker_rights_gate.py`; never start a second worker only to post (owner decision, 13.11.2026).
 
+The card is input, not a gate (security owner, 18.11.2026). Right after the post the starter:
+
+- logs the verdict: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/worker_rights.py brake card --pr <N> --file <file>`
+  (one `card` line in `brakes.jsonl` with `verdict` and `pr`);
+- on `BLOCKING`, raises one board item for the human with the PR and the finding: `board.py ask
+  --cause info`, the finding in `--ask`, a fix story as the recommendation;
+- adds the outcome once it is known (`worker_rights.py brake outcome --pr <N> --kind card --danger yes|no`):
+  `yes` when the finding was real (a fix story or a held merge followed), `no` when not; for a
+  `BLOCKING` after the human's answer, for a `PASS` at the merge.
+
+The security owner samples one card verdict in five against the PR; a sample finding sharpens the card.
+
 ## Lead checks around a worker
 
 ### Premise check
