@@ -78,7 +78,14 @@ Run the finish sequence (the deterministic gates over the branch, `code-review` 
 money, auth, tenant isolation or a migration, the ordered verification, the deviations from the plan recorded in it, the
 affected gates again) and commit after each step. The brief says "not yours": skip it and say so.
 
-## 6. Report
+## 6. The PR, when the brief says `PR owner: worker`
+
+Carry the PR after step 5: `/we:pr`, then the arm with `${CLAUDE_PLUGIN_ROOT}/scripts/arm_pr.sh`
+and fix rounds with `/we:ci-review`, as `worker-dispatch.md` § PR-carrying worker orders. Your
+report's last line is exactly one of `armed: <PR> on <sha>` · `held: <PR> (<why>)` ·
+`parked: <branch> (<why>)`: your starter acts on that line alone. Without the line this step is not yours.
+
+## 7. Report
 
 A critical chunk gets its `code-review` at `high` (`worker-dispatch.md` § Dev-only worker contract) unless
 step 5 just ran it; any other chunk gets no LLM review. Push only when the brief says `Push: yes` (`git push -u origin <branch> && git ls-remote --heads origin

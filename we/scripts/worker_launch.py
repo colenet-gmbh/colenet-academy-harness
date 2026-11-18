@@ -31,6 +31,8 @@ files, also for a session that already ended.
 
 Usage:
   worker_launch.py backend [--repo <dir>]          prints `subagent` or the template; 2 = invalid
+  worker_launch.py pr-owner [--repo <dir>]         prints `master` or `worker` (`build.pr_owner`,
+                                                   `pr_owner`); 2 = another value
   worker_launch.py check --name <n> [--repo <dir>] [--prefix <p>]
                                                    prints the story key; 2 with the refusal line
                                                    on stderr (`--brief-file`, `--no-brief`: accepted
@@ -283,6 +285,39 @@ def workers_block(repo: Path) -> dict:
         raise LaunchError(f"{path}: unreadable ({exc})", 2) from exc
     block = config.get("workers") if isinstance(config, dict) else None
     return block if isinstance(block, dict) else {}
+
+
+PR_OWNERS = ("master", "worker")
+PR_OWNER_LINE = "PR owner: worker"
+
+
+def pr_owner_of(config: object) -> str:
+    """`build.pr_owner` of a parsed `.weside/config.json`: `master` (the default, also without the
+    file, the block or the key) or `worker`; another value refuses (exit 2).
+
+    `master`: a build worker ends with its report and the master pushes, opens, arms and watches the
+    PR. `worker`: a single-chunk build worker carries its own PR to one of three end lines
+    (`references/worker-dispatch.md` § PR-carrying worker); the master writes `PR_OWNER_LINE` into
+    that worker's brief, and `worker_rights.py` reads the same key from the default branch to open
+    the worker's PR rights."""
+    block = config.get("build") if isinstance(config, dict) else None
+    value = block.get("pr_owner", "master") if isinstance(block, dict) else "master"
+    if value not in PR_OWNERS:
+        raise LaunchError(f"build.pr_owner: one of {', '.join(PR_OWNERS)}, not {value!r}", 2)
+    return value
+
+
+def pr_owner(repo: Path) -> str:
+    """`build.pr_owner` of the repo's `.weside/config.json` in the worktree (`pr_owner_of`)."""
+    top = Path(_git(repo, "rev-parse", "--show-toplevel") or repo)
+    path = top / ".weside" / "config.json"
+    try:
+        config = json.loads(path.read_text())
+    except FileNotFoundError:
+        return "master"
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LaunchError(f"{path}: unreadable ({exc})", 2) from exc
+    return pr_owner_of(config)
 
 
 def cap_limits(repo: Path) -> dict[str, float]:
@@ -1080,6 +1115,8 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("backend")
     p.add_argument("--repo", type=Path, default=Path.cwd())
+    p = sub.add_parser("pr-owner")
+    p.add_argument("--repo", type=Path, default=Path.cwd())
     p = sub.add_parser("check")
     p.add_argument("--name", required=True)
     p.add_argument("--brief-file", help=argparse.SUPPRESS)  # an older we-worker copy passes it
@@ -1216,6 +1253,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.cmd == "backend":
             print(backend(args.repo))
+        elif args.cmd == "pr-owner":
+            print(pr_owner(args.repo))
         elif args.cmd == "settings":
             write_settings(args.repo.resolve(), args.key, args.out, args.session_start, args.name)
             print(args.out)

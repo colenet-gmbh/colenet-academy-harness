@@ -81,6 +81,7 @@ Written always, also when step 4 is declined. Only keys a verb reads:
                     "pre_merge_receipt": "<command with {KEY}: prints report:/skip:/not-run:, exit 0 green, 1 red>" },
   "review": { "available": ["claude"] },
   "agents": { "visible_teammates": false, "worker_launch": "subagent" },
+  "build": { "pr_owner": "master|worker" },
   "workers": { "max_busy_sessions": 10, "max_active_5h_percent": 80,
                "tree": "caller|own",
                "add_worktree": "<command with {path} {branch}, or null>",
@@ -112,6 +113,11 @@ it is not the default `worker_launch.py` maps from `ticketing.tool` (`TICKETING_
 writing `workers.context.disable_plugins` or `deny_mcp_servers`, run
 `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/worker_launch.py needs --all --repo .` and show every line it
 prints as a warning: a worker started for that skill is refused.
+
+`build.pr_owner` (default `master`: the master pushes, opens, arms and watches every build PR) set to
+`worker` makes a story's build worker carry its own PR to one end line
+(`${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md` § PR-carrying worker); it opens that worker's PR
+rights once on the default branch. Write it only when the user asks for it.
 
 `plans.secret_scan` stays `null` (gitleaks) unless the user names a scanner: a command with `{range}`
 and an optional `{report}`, or `"none"` (`${CLAUDE_PLUGIN_ROOT}/scripts/plan_push.py`).

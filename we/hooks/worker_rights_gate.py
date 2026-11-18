@@ -10,8 +10,9 @@ It acts only for a process worker: env `WE_ROLE=worker` (set by `we-worker`) or 
 `worker_launch.py` naming this session. A master, a companion and their subagents pass untouched.
 For a worker it
   1. denies a never-list item (`worker_rights.never`): `never for a worker (<item>): ask …`;
-  2. denies a right (`gh pr ready`, `gh pr comment`, the crew's `branch_rc`) whose conditions fail:
-     `not a worker right (<reason>): ask …`;
+  2. denies a right (`gh pr ready`, `gh pr comment`, the crew's `branch_rc`; under
+     `build.pr_owner: worker` also the PR owner rights, every `gh pr merge` among them) whose
+     conditions fail: `not a worker right (<reason>): ask …`;
   3. allows a held right that is the whole command, without a prompt; a held right inside a
      compound command only passes this gate.
 `ask …` names the marker's Lead (`ask your Lead <name>`), else `ask your starter`. Fail closed: an
@@ -71,12 +72,13 @@ def decide(payload: dict, env: dict) -> tuple[str, str] | None:
     if item:
         return "deny", f"never for a worker ({item}): {ask}"
     key = env.get("WE_STORY_KEY") or (marker or {}).get("key")
+    owner = wr.pr_owner_on_default(cwd)
     held = []
     for argv in parsed.commands:
-        right = wr.right_of(argv, rights)
+        right = wr.right_of(argv, rights, owner)
         if right is None:
             continue
-        reason = wr.right_refusal(argv, right, rights, key, cwd)
+        reason = wr.right_refusal(argv, right, rights, key, cwd, owner)
         if reason:
             return "deny", f"not a worker right ({reason}): {ask}"
         held.append(right)

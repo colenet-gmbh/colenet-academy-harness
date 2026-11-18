@@ -160,6 +160,7 @@ Run Skill("we:develop") for <KEY> [--phases N]. Plan: docs/plans/<KEY>-story.md.
 Branch: <type>/<KEY>-<slug> (-p<N> for a parallel chunk); rename `worktree-…` to it before the first commit.
 [Base: first `git merge <PR branch>` — the chunk builds on it.]
 Finish: [you are the last writer: run the finish sequence | not yours]. Verification: [<journeys> | none].
+[PR owner: worker]   (when `worker_launch.py pr-owner` prints `worker`: the single build worker or the finisher; worker-dispatch.md § PR-carrying worker)
   (Order verification whenever `.weside/config.json` has `verification.required: true`.)
 Report: worker-dispatch.md § Report, as your final message or to your `Lead:`; a skill's output is never it.
 ## Tools and sources
@@ -172,7 +173,7 @@ Gates: <affected suites>; [critical chunk: run <integration suite> against <data
 Repo constraints: <generated artifacts to regenerate and commit; baselines you leave alone>.
 Tools: read and search with the Read, Grep and Glob tools on absolute paths; never `cd <dir> && grep …` or `cat`/`rg` through Bash.
 ## Limits and when to stop
-Push: no — the Lead pushes once (write `Push: yes` only when the Lead cannot push from the worker's tree).
+Push: no — the Lead pushes once (`Push: yes` only when the Lead cannot push from the worker's tree; no Push line under `PR owner: worker`).
 Scratch: temp files only under <scratchpad>/<name>/, never in the scratchpad root.
 Before the report, message the Lead only for a terminal fact: pushed SHA, green, cap, blocked, a question. Stop after the report.
 ```
@@ -198,6 +199,9 @@ Then one `we:dev-medium` finisher in `<int>` runs the finish sequence.
 
 ## Push, PR, CI
 
+A worker briefed `PR owner: worker` runs steps 2–3 and its fix rounds; you act on its end line
+(`worker-dispatch.md` § PR-carrying worker). Every other PR follows the steps below.
+
 1. Read the report. Re-run a test it names, in the worker's worktree, only when its `gates:` line
    lacks a receipt (the command, the HEAD it ran on, its result line), that HEAD is not the branch's HEAD, or you changed the tree after the report (a
    lane merge, your own fix); CI runs the suite again, and § After each lane merge covers integration.
@@ -210,9 +214,9 @@ Then one `we:dev-medium` finisher in `<int>` runs the finish sequence.
    (`git -C <wt> push -u origin <branch>`); the pre-push hooks run once over the whole diff.
    Point the statusline at it: `~/.claude/we-focus/$CLAUDE_CODE_SESSION_ID.json` with
    `{"dir":"<wt>","branch":"<branch>","pr":<n>}` (add `pr` after step 3).
-3. A "push now" relay to a worker says "push; merge `origin/<default>` first only on a conflict". `gh pr create --body-file <file>`: ticket link, AC → evidence, the plan's `## Verification` block
-   spliced in by `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-body-receipt.py <KEY> <body-in> <body-out>` in the PR branch's worktree (never retyped), the test line per `/we:pr` step 3, and one line naming money, auth or tenant work when the diff has it. `--draft` only per
-   `/we:pr` step 4. The `receipt …` line comes only from that script (`/we:pr` step 3). Link the PR to the ticket and move
+3. A "push now" relay to a worker says "push; merge `origin/<default>` first only on a conflict". Open the PR per `/we:pr`
+   (body, receipt from `pr-body-receipt.py` in the PR branch's worktree, never retyped; `--draft` only per its step 4), plus one
+   line naming money, auth or tenant work when the diff has it. Link the PR to the ticket and move
    no status: In Review is "PR merged and linked" (L0 §Lifecycle) and `/we:merged` sets it.
 4. Run `${CLAUDE_PLUGIN_ROOT}/scripts/watch-pr-checks.sh <PR> --sha <pushed sha>` as a background command,
    with `--until-merged` once auto-merge is armed (`--human-merge` on a one-way PR the human merges), and next to it one
@@ -258,11 +262,9 @@ Then one `we:dev-medium` finisher in `<int>` runs the finish sequence.
   | `T2` with a card hit (`trust-loosening:`, `brake-review:` hit line) | you, the same arm | as `T2`; the security card verdict is a PR comment for the human and the security owner |
   | `T2 one-way <class>` | only the human; you never arm it, in any repo | their approve on the head, then their merge, from a board item |
 
-  - `--method squash|rebase` when `.weside/orchestrate.md` names it. The helper arms only the head it
-    read and never merges; act on its final line: `armed` → the watch `--until-merged`; `ready`
-    (every required check already green on that head) → run the `gh pr merge <PR> --<method>
-    --match-head-commit <sha>` it printed; `refused: head moved` → run it again on the new head; any
-    other line → report it.
+  - `--method squash|rebase` when `.weside/orchestrate.md` names it. The helper never merges; act on
+    its final line: `armed` → the watch `--until-merged`; `ready` → run the merge line it printed;
+    `refused: head moved` → run it again on the new head; any other line → report it.
   - A code PR with a `plan: waits for <docs PR> and Selected` line (§ Build) is armed only once that
     docs PR merged and the story is Selected and pulled; no check holds it until then.
   - **Card hit** (and every one-way PR): start a security card worker on the head

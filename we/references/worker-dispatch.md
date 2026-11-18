@@ -7,7 +7,7 @@ description: How the Lead picks and dispatches a dev worker, the dev-only worker
 
 ## Contents
 
-Choosing the worker · Worker launch backend · Dev-only worker contract · Finish sequence · Card worker · Lead checks around a worker
+Choosing the worker · Worker launch backend · Dev-only worker contract · PR-carrying worker · Finish sequence · Card worker · Lead checks around a worker
 (premise check, code graph in the brief, watchdog, lane merge) · Report.
 
 The Lead (`/we:master`) dispatches; the worker (`/we:develop`) obeys the contract below. A
@@ -228,7 +228,8 @@ arms (the worker card).
   gate fails three times, or when the work needs a product decision, a money-path redesign or a
   foreign subsystem's redesign.
 - The worker never opens a PR, runs or waits for CI, moves or creates a ticket, merges into the
-  default branch, or edits files outside its chunk. It pushes only when the brief says `Push: yes`, or when the Lead
+  default branch, or edits files outside its chunk (a brief with `PR owner: worker` hands it the PR:
+  § PR-carrying worker). It pushes only when the brief says `Push: yes`, or when the Lead
   says a quota end is near: then it commits its phase and pushes it to `wip/<KEY>-<slug>`. Every push
   is preceded by the conflict check of `/we:ci-review` § 3 (merge `origin/<default-branch>` only on a conflict).
 - No wait loops and no `sleep` in the foreground: the auto mode holds them as a permission prompt. Wait on
@@ -264,6 +265,44 @@ arms (the worker card).
   fresh context and reviews the session's directory unless `args` names the path). A review whose
   findings name no file from `git diff --name-only origin/<default-branch>...HEAD` ran on the wrong
   tree: run it again. Fix BLOCKING and WARNING, commit, report the counts.
+
+## PR-carrying worker
+
+`.weside/config.json` `build.pr_owner` (`worker_launch.py pr-owner`) says who carries a build PR.
+`master` (the default): the worker ends with § Report and the master pushes, opens, arms and watches
+(`/we:master` § Push, PR, CI). `worker`: the master writes the line `PR owner: worker` into the brief
+of a story's single build worker, or of the finisher in a parallel story's integration tree; a
+parallel chunk never gets it, the master integrates its branch as before. The line is the switch a
+worker reads: without it, it runs the dev-only contract and never guesses from the config.
+
+With the line, after § Finish sequence the worker carries its PR itself, because a hand-off to the
+master costs a round trip per head and the master's context:
+
+1. Push once and open the PR with `/we:pr`.
+2. The class and the arm per `/we:master` § Close the run (who merges what): `arm_pr.sh <PR>`, acting
+   on its final line as that table says (`ready` → the printed `gh pr merge … --match-head-commit`).
+   One-way, a hold label or a draft reason → no arm: `held`. Under `merge.armer: workflow` the
+   repo's workflow arms the ready PR and `arm_pr.sh` refuses: the end is `armed` without an arm.
+3. Red checks or review findings → `/we:ci-review`: one push per head, at most two rounds, a repeat
+   finding stops (`held`).
+4. The § Report, its last line exactly one of:
+
+```
+armed: <PR> on <sha>       armed and green or waiting for checks; GitHub merges, the worker ends
+held: <PR> (<why>)         one-way, hold label, draft, a human decision, the round cap; the PR is the starter's
+parked: <branch> (<why>)   time limit, quota or a stop: checkpoint pushed to wip/<KEY>-<slug>, the resume command in <why>
+```
+
+The starter acts on that line alone: `armed` → `watch-pr-checks.sh <PR> --sha <sha> --until-merged`,
+on its merge `/we:merged <PR>` (it runs `we-worker close <KEY> --pr <n>`); `held` → the PR continues
+at `/we:master` § Push, PR, CI step 5 or the one-way row; `parked` → resume per the line. The Stop
+hook `worker_report_gate.py` sends a report with any other last line back once.
+
+Rights: under `worker` the rights gate opens, read from the default branch, `git push` of a branch
+carrying the key, `gh pr create`, `gh pr edit` and `gh pr comment` on the own PR, `arm_pr.sh` on it,
+`gh pr merge` only as `--disable-auto` or as the `--match-head-commit <checkout HEAD>` line, and
+`gh api graphql` with `resolveReviewThread` alone (`scripts/worker_rights.py`, its docstring); any
+other `gh pr merge` and the whole never-list stay denied.
 
 ## Finish sequence (the last writer, before the first push)
 

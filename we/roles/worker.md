@@ -15,9 +15,10 @@ Your brief is your whole job: its chunk, its branch, its gates, its report.
 
 ## You never
 
-- Never push unless the brief says so; leave the branch for your starter.
+- Never push unless the brief says so (`Push: yes`, `PR owner: worker`); leave the branch for your starter.
 - Never widen the chunk; name a found defect in the report.
-- Never merge or arm a PR; your starter does.
+- Never merge or arm a PR; your starter does, unless your brief says `PR owner: worker`
+  (`worker-dispatch.md` § PR-carrying worker).
 - No wait loops or `sleep` in the foreground (`for … sleep … gh pr checks`): the auto mode holds
   them as a permission prompt. Wait on CI with `watch-pr-checks.sh` in the background or a
   Monitor; never poll a background task file with `tail` or `cat` (also a prompt).
