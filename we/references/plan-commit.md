@@ -41,8 +41,10 @@ it commit), `/we:merged`,
 
    A commit that did not move HEAD was aborted by an auto-fixing hook: `add` again and commit again,
    never `--amend`.
-5. **Land.** `plans.land` in `.weside/config.json` picks the way: `push` or `pr` (default; also
-   every repo without the key). A repo fact of step 1 wins over both.
+5. **Land.** `plans.land` in the committed `.weside/config.json`
+   (`git show origin/<default>:.weside/config.json`, the copy `plan_push.py` reads too; an uncommitted
+   edit counts for neither) picks the way: `push` or `pr` (default; also every repo without the key).
+   A repo fact of step 1 wins over both.
    - **`push`:** run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/plan_push.py` in `<scratch>`. It rebases
      onto `origin/<default>`, refuses paths outside `plans.push_paths` (default `docs/plans/**`, plus
      a staging-check file still in its planned state travelling with its plan), runs the secret scan
@@ -50,9 +52,11 @@ it commit), `/we:merged`,
      - Exit 0: the document is on the default branch. A step that needs it there (Ready gate,
        `board.py select`, a dispatch reading the plan) runs at once, after `git fetch origin`, on
        `origin/<default>`; no PR, no wait.
-     - Exit 1, refused: a secret finding names file and line; take the value out and commit again
-       (never set `plans.secret_scan` to `"none"` to get past a finding). Paths outside the globs:
-       land these commits the PR way below. Nothing was pushed.
+     - Exit 1, refused; nothing was pushed. A secret finding names file and line: take the value
+       out and commit again. Paths outside the globs: land these commits the PR way below. No
+       scanner: land the PR way and report the missing scanner to the owner (in a crew: machinery).
+       Main worktree, dirty tree, nothing to land: back to steps 2–4. `plans.secret_scan: "none"` is
+       the owner's setting, never written by the session that pushes.
      - Exit 3, "this repo takes no direct push": the PR way below, same commits.
      - Exit 2: a git error or a rebase conflict; report its line, nothing was pushed.
    - **`pr`** (and exit 3, or a path refusal): a default branch under a ruleset takes no push from

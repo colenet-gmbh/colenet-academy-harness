@@ -55,8 +55,9 @@ never commit yourself.
 7. **Plan landing**, asked only when the default branch has a ruleset
    (`gh api repos/{owner}/{repo}/rules/branches/<default>` returns a rule): do plans reach it by a
    docs PR or by direct push? `pr` (default) · `push` (only when this session's account may bypass the
-   ruleset). `push` lands plan commits through `plan_push.py`, with its path check and secret scan
-   (`${CLAUDE_PLUGIN_ROOT}/references/plan-commit.md` step 5); a rejected push falls back to the PR.
+   ruleset). `push` lands plan commits through `plan_push.py`
+   (`${CLAUDE_PLUGIN_ROOT}/references/plan-commit.md` step 5), and only once `.weside/config.json`
+   is committed on the default branch: both read that copy.
 
 Review gates are detected, not asked: a Claude or Codex review workflow in `.github/workflows/`, a
 CodeRabbit or Greptile app. The ids go to `review.available`; `/we:ci-review` collects threads from

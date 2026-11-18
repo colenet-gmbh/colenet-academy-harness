@@ -11,7 +11,9 @@ The worktree holds one or more commits on top of the default branch. The script
 2. fetches and rebases the commits onto `<remote>/<default>`;
 3. refuses any path the commits touch outside the allowed globs: `plans.push_paths` in
    `.weside/config.json` (default `docs/plans/**`), plus a staging-check file under the crew's
-   `oracles.receipt_dir` that travels with a plan and still carries `state: planned`;
+   `oracles.receipt_dir` that travels with a plan and still carries `state: planned`. Config and
+   crew are read from this tree after the rebase, i.e. as committed on the default branch (a path
+   that changes them is refused), never from the main checkout's uncommitted copy;
 4. runs the secret scan over the commit range: `plans.secret_scan`, a command template with
    `{range}` and an optional `{report}` (a JSON report path in gitleaks' format), default
    `gitleaks git --log-opts={range} --redact --no-banner --report-format json --report-path {report}`
@@ -233,10 +235,9 @@ def land(remote: str, branch: str | None) -> list[str]:
     top = preflight()
     branch = branch or default_branch(remote)
     base = f"{remote}/{branch}"
-    plans = load_config(top)
     for _attempt in range(RETRIES + 1):
         rebase(base)
-        check(base, plans, top)
+        check(base, load_config(top), top)
         before = git("rev-parse", base).stdout.strip()
         out = push(remote, branch)
         if out.returncode == 0:

@@ -140,8 +140,8 @@ after the first merged; its PR waits for that merge). Wait for the merge only wh
 still open (owner, 09.11.2026: "wir müssen keine tage warten").
 
 **Before every dispatch:** `git fetch origin`, re-read the plan (another session may have built it).
-A plan landed by push has no docs PR: after `plan_push.py` exit 0, `board.py select` reads it on `origin/<default>`
-at once, and the waits-for line below never applies. When only CI holds the plan's docs PR, the build may start once the Ready panel is green on the plan
+A plan landed by push (`references/plan-commit.md` step 5) has no docs PR; the waits-for line below does not apply.
+When only CI holds the plan's docs PR, the build may start once the Ready panel is green on the plan
 blob, before the pull: `board.py select` needs the plan on the default branch (with a crew
 `risk.command` its tier fails until then), and In Progress needs Selected. The code PR carries the
 line `plan: waits for <docs PR> and Selected`; once the docs PR merged, run `board.py select`, pull
