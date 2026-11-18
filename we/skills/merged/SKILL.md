@@ -74,13 +74,15 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/we-worker close <KEY> --pr <N> [--learning "<one l
 
 The script is the one writer of the move to In Review and of the epic's Updates Log line; the
 session carries only what it prints (its docstring, `scripts/worker_close.py`, owns the rules). It derives the story's PRs from GitHub, moves the key to In Review only when no
-open PR carries it and every repo of the plan has a merged one, tears down the story's worktrees,
+open PR carries it, every repo of the plan has a merged one and no other worker on the key lives, tears down the story's worktrees,
 branches, worker files and the processes in those trees, and is safe to run twice. Read its output:
 
 - `keep <tree>: <why>`: dirty, unmerged, a living session, or the caller stands in it. The tree
   stays; name it in the report.
 - `refused: in_review: …`: an open PR, a repo without a merged PR, or `gh` unreadable. The story
   stays; name what is missing in the report.
+- `held: …`: another worker on the key lives or is queued (run close again when it ends), or no
+  story plan is on the default branch (make the printed move). The story stays; name it in the report.
 - `in_review: no crew file, …`: there is no transitions log. Move the ticket to In Review with
   your ticketing tool (§ 5).
 - `epic: add to <file> … <line>`: land that line per `${CLAUDE_PLUGIN_ROOT}/references/plan-commit.md`.
