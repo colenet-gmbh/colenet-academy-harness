@@ -3,10 +3,11 @@
 
 Usage:
   board.py [--board FILE] answer <id> <accept|deny|discuss|info|update|withdraw> --session NAME --via chat
-           [--quote "<the owner's words>"]
+           [--quote "<the owner's words>" | --text-file <path or ->]
   board.py [--board FILE] path [--crew-only]
   board.py [--board FILE] set [--for NAME | --session NAME] <field>=<value> …   fields: waiting_on, state, now, topic, keys, epic
-  board.py [--board FILE] ask --session NAME --key KEY --key-title T --ask Q --recommendation R
+  board.py [--board FILE] ask [--session NAME] --key KEY --key-title T (--ask Q | --text-file <path or ->)
+           --recommendation R
            --cause <merge-go|plan|prod|cut-fence|access-click|window-go|info> [--urgent]
            [--pr REF [--one-way CLASS]] [--to HUMAN]
   board.py [--board FILE] close-merged
@@ -42,7 +43,8 @@ Usage:
 
 show     prints one question as JSON: the open `owner_queue` item (else its `posted` line), its
          lines from board-answers.jsonl and a `status` (`answered: <kind>` after an Accept, Deny
-         or Withdraw, `withdrawn`/`superseded`, `open`, `off the board`). The answer a pane
+         or Withdraw, `withdrawn`/`superseded`, `open`, else `closed`/`replaced`/`pruned` or
+         `off the board`: `question_status`, the one definition of open). The answer a pane
          click wrote lives only in the answers file, never in board.json: read it here before
          repeating another session's question to the owner. Read-only; exit 1 for an unknown id.
 answer   writes back an answer the owner gave in a session's chat: one line in
@@ -60,14 +62,28 @@ set      writes the caller's own session line (found by `name` through `claude a
          `since`. `topic=<text>` and `keys=<KEY>[,<KEY>…]` (each a match of the crew's
          `naming.key`) write the line's own topic and keys, `epic=<KEY or number>` the epic a
          master's compaction hook reads (`epic_state.py`); an empty value clears them.
-         `--session <name>` is checked against the caller's own name and refused when it differs. It stamps
+         `--session <name>` is checked against the caller's own name and refused when it differs.
+         A refused value (and a field passed as a flag, `--now x`, or an answer kind like `no`)
+         prints the valid values and `corrected call: board.py …` with the value it likely
+         meant: a member's name in `waiting_on` names the role it holds. It stamps
          the line's `updated_at` (UTC minute); the board's `updated` moves with every write of the
          coordinator (`write_board`), `updated_by` never.
 ask      posts a question for the owner after a cold reader (`cold_reader.py`) understood it
          without context (`--key` is the crew's `naming.key` or, before the ticket exists, a
          lower-case plan slug like `onboarding-v2`; `proj-12`, a key in lower case, is refused); otherwise the reader's reason goes back as a `note` on the asking
          session's line and in the refusal; the owner's news gets nothing. Every run past the field check leaves one line
-         in board-questions.jsonl, text included. Prints `posted Q<n>`. `--urgent` stamps
+         in board-questions.jsonl, text included. On success it prints exactly one JSON object on
+         stdout, `{"id": "Q<n>", "outcome": "posted"}` (with `carry` for an `ask --to` on jira),
+         everything else on stderr. The same question again from the same session within
+         REPEAT_WINDOW (text, key, cause, recommendation and `--to`; no `--replace`) while the
+         first is open posts nothing and prints the first id with `"outcome": "repeat"` (a
+         `repeat` line in board-questions.jsonl): a retry never doubles a question. Without
+         `--session` the asker is this session's own name (as `set` finds it); `--text-file`
+         reads the ask from a file or `-` stdin, so a `code span` never meets the shell, and a
+         refusal of text that looks shell-mangled names both. The cold reader sees only the
+         asker's text, never a line the tool appends. The item keeps `asker_id` and the launcher
+         marker's `starter` (only when `--session` is the caller itself) and, when the repo's `.weside/config.json` sets
+         `board.answer_to: asker`, `answer_to` (docs/board.md § Delivery). `--urgent` stamps
          `urgent: true` on the item and the log line; `bundle` lists urgent questions first.
          A `merge-go` question needs `--pr` (a URL, `<owner>/<repo>#<n>` or a number) on an OPEN
          PR (`gh pr view`), else it is refused before the reader; the item keeps `pr_url`.
@@ -90,15 +106,16 @@ ask      posts a question for the owner after a cold reader (`cold_reader.py`) u
          pane shows it waiting on that human, with Withdraw only), and the carry
          is the comment `board_humans.question_comment` and the label
          `board_humans.question_label`; `signals` reads the reply back.
-close-merged removes every open `merge-go` question whose PR is MERGED or CLOSED from
-         `owner_queue` (one `closed` line each in board-questions.jsonl) and prints the ids;
-         `bundle` runs it first.
+close-merged removes every `merge-go` question in `owner_queue` whose PR (its `pr_url`, in
+         any repo) is MERGED or CLOSED, whatever its answer, the owner's hand merge included (one
+         `closed` line each in board-questions.jsonl) and prints `closed <id>: PR <state> <url>`
+         per question, `closed: none` without one; `bundle` runs it first.
 prune    drops what is handled from board.json (docs/board.md § Pruning) and prints the ids:
          a question or item an Accept or Deny closed once nothing is owed to its asker any more
          (the deliverer finds the asker only on the board): every answer line on it is older than
          the ledger's epoch, written in the asker's own session, or the asker's row in
          board-deliveries.jsonl is `delivered: true` (refused, or not taken within PRUNE_AFTER_H:
-         the route row is), except a one-way merge-go accepted, which `close-merged` takes, and a
+         the starter's or the route row is), except a one-way merge-go accepted, which `close-merged` takes, and a
          `window-go` accepted, which stays until its asker runs `withdraw` once the go is typed; an
          unanswered `withdrawn` or `superseded` one; a news item the
          owner marked read; a `returned` item at once; a bundle (`B-…`) PRUNE_AFTER_H after its `ts`. Escalation
@@ -178,7 +195,10 @@ withdraw takes the caller's own open question off `owner_queue` (`supersede --by
          asked with `--to` also gets a comment and loses its label. Only its asker (session name)
          or the coordinator. `withdraw --for Q2` records that it gave way to Q2; a refused
          `supersede` of Q2 names every session that withdrew for it (`--for`, or Q2 in the
-         reason), so the caller tells them their alternative is on no board.
+         reason), so the caller tells them their alternative is on no board. A question already
+         off the queue (answered and pruned, closed, withdrawn) is no refusal: it prints
+         `<id>: nothing to withdraw, it is off the queue (<status>, <last outcome> <ts>)` and exits
+         0; an id the board and its logs never had exits 1.
 move     moves a story to another state when that state's entry rule holds (docs/board.md
          § Moves; with `humans` first the owner of the state it leaves, read from the ticket's
          status, § Several humans): `on_hold` --reopen, `backlog` --epic of an approved epic plan, `in_progress`
@@ -224,11 +244,13 @@ from __future__ import annotations
 import argparse
 import contextlib
 import copy
+import difflib
 import fcntl
 import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -603,7 +625,7 @@ def prune(board, state, now):
         if not asker or line.get("session") == asker or epoch is None or (at and at <= epoch):
             return True
         key = (line.get("id"), line.get("ts"))
-        return (*key, "asker") in delivered or (*key, "route") in delivered
+        return any((*key, role) in delivered for role in ("asker", "starter", "route"))
 
     def answered(item, qid, close):
         """A closed question goes once its asker is owed nothing: delivered to the asker, or
@@ -723,18 +745,21 @@ def load_crew(start=None):
     return defaults
 
 
-def own_session_name(env=None):
+def own_session_name(env=None, verb="set"):
     """(name, session id) of the calling session as `claude agents --json` lists it."""
     env = os.environ if env is None else env
     session_id = env.get("CLAUDE_CODE_SESSION_ID") or None
     try:
         rows = wl.sessions()
     except wl.LaunchError as exc:
-        raise BoardError(f"board.py set: {exc}") from None
+        raise BoardError(f"board.py {verb}: {exc}") from None
     try:
         return wl.lead_address(rows, session_id), session_id
     except wl.LaunchError:
-        raise BoardError("board.py set: this session has no name; run /rename first") from None
+        raise BoardError(
+            f"board.py {verb}: this session has no name; run /rename first"
+            + (" or pass --session <name>" if verb == "ask" else "")
+        ) from None
 
 
 def _daytime_window(daytime):
@@ -768,27 +793,87 @@ def daytime_due(since, hours, daytime, tz):
         day += timedelta(days=1)
 
 
+# The state words sessions typed in place of a SESSION_STATES value, mapped to the one meant.
+STATE_WORDS = {
+    "working": "build",
+    "work": "build",
+    "building": "build",
+    "coding": "build",
+    "waiting": "wait-owner",
+    "wait": "wait-owner",
+    "blocked": "wait-owner",
+    "refine": "active",
+    "refining": "active",
+    "planning": "active",
+    "busy": "active",
+    "review": "ci",
+    "stopped": "parked",
+    "paused": "parked",
+    "finished": "done",
+}
+
+
+def _closest(value, choices):
+    found = difflib.get_close_matches(value.strip().lower(), choices, n=1, cutoff=0.6)
+    return found[0] if found else None
+
+
+def _state_fix(value):
+    return STATE_WORDS.get(value.strip().lower()) or _closest(value, SESSION_STATES)
+
+
+def _waiting_fix(value, crew):
+    """The role key a `waiting_on` value means: a member's name → the role it holds, the human's
+    name → `human`, a near miss → that key; None when nothing fits."""
+    text = value.strip()
+    head = re.split(r"[\s(,;]", text, maxsplit=1)[0]
+    roles = set(crew_mod.ROLE_KEYS) | {"human"}
+    if text.lower() in roles:
+        return text.lower()
+    for word in (text, head):
+        found = crew_mod.member(crew, word) if word else None
+        if found:
+            held = [r for r, slug in (crew.get("roles") or {}).items() if slug == found[0]]
+            if held:
+                return held[0]
+        names = [str((crew.get("human") or {}).get("name") or "")]
+        names += [h.get("name", "") for h in crew_mod.humans(crew).values()]
+        if word and word.lower() in {n.lower() for n in names if n}:
+            return "human"
+    return _closest(head, sorted(roles))
+
+
 def _parse_assignments(items, crew):
-    fields, failures = {}, []
+    """(fields, failures, fixed): `fixed` is the call's assignments with each refused value
+    replaced by the one it likely meant, or None when a failure has no such value."""
+    fields, failures, fixed = {}, [], []
     roles = set(crew_mod.ROLE_KEYS) | {"human"}
     for item in items:
         if "=" not in item:
             failures.append(f"board.py set: {item!r} is no <field>=<value>")
+            fixed = None
             continue
         key, value = item.split("=", 1)
+        fix = None
         if key not in SET_FIELDS:
+            near = _closest(key.replace("-", "_"), SET_FIELDS)
             failures.append(
                 f"board.py set: field {key!r} is not settable (only {', '.join(SET_FIELDS)})"
             )
+            fix = f"{near}={value}" if near else None
         elif key == "waiting_on" and value and value not in roles:
             failures.append(
                 f"board.py set: waiting_on {value!r} is no role key "
                 f"({', '.join(crew_mod.ROLE_KEYS)} or human)"
             )
+            meant = _waiting_fix(value, crew)
+            fix = f"waiting_on={meant}" if meant else None
         elif key == "state" and value not in SESSION_STATES:
             failures.append(
                 f"board.py set: state {value!r} is not one of {', '.join(SESSION_STATES)}"
             )
+            meant = _state_fix(value)
+            fix = f"state={meant}" if meant else None
         elif (
             key == "epic"
             and value
@@ -800,6 +885,7 @@ def _parse_assignments(items, crew):
             )
         elif key in ("now", "topic") and "\n" in value:
             failures.append(f"board.py set: {key} is one line")
+            fix = f"{key}={' '.join(value.split())}"
         elif key == "keys":
             keys = [k for k in re.split(r"[,\s]+", value) if k]
             key_rx = (crew.get("naming") or {}).get("key") or crew_mod.DEFAULTS["naming"]["key"]
@@ -810,9 +896,18 @@ def _parse_assignments(items, crew):
                 )
             else:
                 fields[key] = keys
+                fix = item
         else:
             fields[key] = value
-    return fields, failures
+            fix = item
+        if fixed is not None:
+            fixed = [*fixed, fix] if fix is not None else None
+    return fields, failures, fixed
+
+
+def _corrected(verb_argv):
+    """The line naming the corrected call."""
+    return "corrected call: board.py " + shlex.join(verb_argv)
 
 
 def _minute(ts):
@@ -880,7 +975,10 @@ def _wait_row(line, crew, now):
 
 
 def cmd_set(state, args, crew, now):
-    fields, failures = _parse_assignments(args.assignments, crew)
+    fields, failures, fixed = _parse_assignments(args.assignments, crew)
+    if failures and fixed:
+        who = ["--for", args.for_] if args.for_ is not None else []
+        failures.append(_corrected(["set", *who, *fixed]))
     if args.for_ is not None and not crew_mod.holds_role(crew, "coordinator", os.environ):
         failures.append(
             f"board.py set: --for {args.for_}: only the coordinator writes another session's line"
@@ -1140,6 +1238,7 @@ def _clear_blocked(state, args, crew, now):
 
 
 def cmd_answer(state, args, crew, now):
+    _text_file(args, "quote", "answer")
     if args.id not in state.ids():
         raise BoardError(
             f"board.py answer: {args.id} is in neither owner_queue nor news of {state.board_path}"
@@ -1180,37 +1279,51 @@ def cmd_path(state, args, _crew, _now):
     return 0
 
 
-def cmd_show(state, args, _crew, _now):
-    """One question as every session sees it: the open item (or its posted line), its answers
-    from the answers file and its last outcome; exit 1 for an id the board never had."""
-    qid = args.id
+def question_status(state, qid, board=None, logs=None):
+    """(status, queue item or None, log lines, answer lines) of one question: the one definition
+    of "open" that `show`, `withdraw`, `close-merged` and `bundle` read; the pane's `isClosed`
+    (hooks/board/board.ts) mirrors it. `status` is `answered: <kind>` after an Accept, Deny or
+    Withdraw, `withdrawn`/`superseded`, `open` while in `owner_queue`, else the last log outcome
+    that took it off (`closed`, `replaced`, `pruned`) or `off the board`; None for an id the board
+    and its logs never had. `logs` is (questions, answers) read once by a caller that asks for
+    many ids."""
+    board = state.board() if board is None else board
+    questions, every_answer = logs if logs is not None else (state.questions(), state.answers())
     item = next(
-        (
-            q
-            for q in state.board().get("owner_queue") or []
-            if isinstance(q, dict) and q.get("id") == qid
-        ),
+        (q for q in board.get("owner_queue") or [] if isinstance(q, dict) and q.get("id") == qid),
         None,
     )
-    lines = [q for q in state.questions() if isinstance(q, dict) and q.get("id") == qid]
-    answers = [a for a in state.answers() if isinstance(a, dict) and a.get("id") == qid]
+    lines = [q for q in questions if isinstance(q, dict) and q.get("id") == qid]
+    answers = [a for a in every_answer if isinstance(a, dict) and a.get("id") == qid]
     if item is None and not lines and not answers:
+        return None, None, [], []
+    closing = [a for a in answers if a.get("answer") in CLOSING]
+    gone = [q for q in lines if q.get("outcome") in GONE]
+    off = [q for q in lines if q.get("outcome") in ("closed", "replaced", "pruned")]
+    if closing:
+        status = f"answered: {closing[0]['answer']}"
+    elif gone:
+        status = gone[-1]["outcome"]
+    elif item is not None:
+        status = "open"
+    elif off:
+        status = off[-1]["outcome"]
+    else:
+        status = "off the board"
+    return status, item, lines, answers
+
+
+def cmd_show(state, args, _crew, _now):
+    """One question as every session sees it: the open item (or its posted line), its answers
+    from the answers file and its status (`question_status`); exit 1 for an id the board never had."""
+    qid = args.id
+    status, item, lines, answers = question_status(state, qid)
+    if status is None:
         raise BoardError(f"board.py show: {qid} is in neither owner_queue nor the logs")
     posted = next((q for q in lines if q.get("outcome") == "posted"), None)
     question = dict(item or posted or {"id": qid})
     question.pop("reader", None)
     question.pop("outcome", None)
-    closing = [a for a in answers if a.get("answer") in ("accept", "deny", "withdraw")]
-    gone = [q for q in lines if q.get("outcome") in GONE]
-    status = (
-        f"answered: {closing[-1]['answer']}"
-        if closing
-        else f"{gone[-1]['outcome']}"
-        if gone
-        else "open"
-        if item
-        else "off the board"
-    )
     print(
         json.dumps(
             {**question, "status": status, "answers": answers}, ensure_ascii=False, indent=1
@@ -1382,7 +1495,11 @@ def _ask_failures(args, crew):
         if failures and failures[-1].startswith("board.py ask: --key"):
             failures.append(NO_STORY_KEY)
     if args.cause and args.cause.strip() and args.cause.strip() not in CAUSES:
-        failures.append(f"board.py ask: --cause {args.cause!r} is not one of {', '.join(CAUSES)}")
+        near = _closest(args.cause, CAUSES)
+        failures.append(
+            f"board.py ask: --cause {args.cause!r} is not one of {', '.join(CAUSES)}"
+            + (f"; corrected: --cause {near}" if near else "")
+        )
     return failures
 
 
@@ -1492,8 +1609,177 @@ def _ask_gate(state, args, crew):
     return pr_url
 
 
+REPEAT_WINDOW = timedelta(hours=1)
+ANSWER_TO = ("coordinator", "asker")
+# A span the shell emptied: `x` inside double quotes ran as a command and left nothing behind.
+_MANGLED = re.compile(r"[^\s.!?:] {2,}\S|\S [.,;:!?)](?:\s|$)|\(\s*\)")
+MANGLED_HINT = (
+    "the text looks shell-mangled (an empty span where a `code span` likely stood: the shell ran "
+    "it inside double quotes); pass the text with --text-file <path>, or --text-file - with a "
+    "quoted heredoc (<<'EOF') on stdin"
+)
+
+
+def _mangled(*texts):
+    """MANGLED_HINT on its own line when one of the texts shows an emptied span, else ''."""
+    return f"\n{MANGLED_HINT}" if any(_MANGLED.search(t or "") for t in texts) else ""
+
+
+def _text_file(args, field, verb):
+    """`--text-file <path>` (or `-` for stdin) fills `field`; giving both is refused."""
+    path = getattr(args, "text_file", None)
+    if not path:
+        return
+    if (getattr(args, field) or "").strip():
+        raise BoardError(
+            f"board.py {verb}: give the text once: --{field} or --text-file, not both", code=2
+        )
+    try:
+        text = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise BoardError(
+            f"board.py {verb}: --text-file {path}: unreadable ({exc})", code=2
+        ) from None
+    setattr(args, field, text.strip())
+
+
+def _asked_text(line):
+    """The asker's own text of a posted question: its `ask` without the appended checks line."""
+    asked, checks = str(line.get("ask") or ""), line.get("checks")
+    if checks and asked.endswith(f"\n{checks}"):
+        return asked[: -len(checks) - 1]
+    return asked
+
+
+def _repeat_of(state, fields, now):
+    """The id of an open question this session posted with the same text, key, cause,
+    recommendation and `--to` within REPEAT_WINDOW, else None: a retry after an unread success
+    returns the first question instead of a second one; a re-ask after a withdraw or an answer
+    posts anew."""
+    board = state.board()
+    logs = (state.questions(), state.answers())
+    for line in reversed(logs[0]):
+        if not isinstance(line, dict) or line.get("outcome") != "posted":
+            continue
+        ts = _parse_ts(line.get("ts"))
+        if line.get("session") != fields["session"] or ts is None or now - ts > REPEAT_WINDOW:
+            continue
+        same = all(
+            str(line.get(f) or "").strip() == str(fields.get(f) or "").strip()
+            for f in ("key", "cause", "recommendation", "to")
+        )
+        if not same or _asked_text(line).strip() != fields["ask"].strip():
+            continue
+        if question_status(state, line.get("id"), board, logs)[0] == "open":
+            return line.get("id")
+    return None
+
+
+def _project_config(start=None):
+    """`.weside/config.json` of the nearest directory above `start` (default the cwd) holding
+    one; {} without one or unreadable."""
+    here = Path(start or Path.cwd()).resolve()
+    for folder in (here, *here.parents):
+        path = folder / ".weside" / "config.json"
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return {}
+            return data if isinstance(data, dict) else {}
+    return {}
+
+
+def _asker_stamp(session, env=None, cwd=None):
+    """Who receives the answer (docs/board.md § Delivery): `asker_id` (the asking session's id),
+    `starter` (the launcher marker's, so a gone worker's answer reaches its starter), both only
+    when `session` is the caller itself (a coordinator asking for another session stamps
+    neither), and `answer_to` when the repo's `board.answer_to` is `asker`; an unknown value
+    warns and keeps the coordinator."""
+    env = os.environ if env is None else env
+    stamp = {}
+    try:
+        own = own_session_name(env, verb="ask")[0]
+    except BoardError:
+        own = None
+    if own is not None and _same_session(own, session):
+        if env.get("CLAUDE_CODE_SESSION_ID"):
+            stamp["asker_id"] = env["CLAUDE_CODE_SESSION_ID"]
+        marker = wl.read_marker(cwd or Path.cwd()) or {}
+        if isinstance(marker.get("starter"), str) and marker["starter"].strip():
+            stamp["starter"] = marker["starter"].strip()
+    value = (_project_config(cwd).get("board") or {}).get("answer_to", "coordinator")
+    if value not in ANSWER_TO:
+        print(
+            f"board.py ask: warning: board.answer_to {value!r} in .weside/config.json is not one "
+            f"of {', '.join(ANSWER_TO)}; the answer goes through the coordinator",
+            file=sys.stderr,
+        )
+    elif value == "asker":
+        stamp["answer_to"] = "asker"
+    return stamp
+
+
+def _print_ask(qid, outcome, ops=()):
+    """The one JSON object `ask` prints on stdout; what the session still carries rides in it."""
+    out = {"id": qid, "outcome": outcome}
+    if ops:
+        out["carry"] = [op.as_json() for op in ops]
+    print(json.dumps(out, ensure_ascii=False))
+    if ops:
+        print(_carry_note(len(ops)), file=sys.stderr)
+
+
+def _cold_read(state, base, asked, fields, crew):
+    """(the reader's raw verdict, the reason to return the question or None). The reader judges
+    the asker's text alone: the checks line is the tool's, in English, and made the verdict on a
+    question in another language unstable."""
+    labels = crew.get("labels") or {}
+    question = {
+        "ask": asked,
+        "recommendation": fields["recommendation"],
+        "key_title": fields["key_title"],
+        "question_label": crew.get("question_label") or "QUESTION",
+        "recommendation_label": labels.get("recommendation") or "Recommendation",
+    }
+    try:
+        answer = cold_reader.read(question)
+    except cold_reader.ReaderError as exc:
+        state.append_question({**base, "outcome": "reader-error", "reason": str(exc)})
+        raise BoardError(f"board.py ask: reader-error: {exc}") from None
+    return {k: answer.get(k) for k in ("decides", "on_yes", "form")}, _reader_verdict(answer)
+
+
+def _repeated(state, args, now):
+    """Fill `--text-file` and the default `--session`, then answer a retry: True when this
+    session posted the same text within REPEAT_WINDOW and the first id was printed."""
+    _text_file(args, "ask", "ask")
+    if not (args.session or "").strip():
+        args.session = own_session_name(verb="ask")[0]
+    if args.replace or not (args.session or "").strip() or not (args.ask or "").strip():
+        return False
+    session = args.session.strip()
+    fields = {f: (getattr(args, f) or "") for f in ("key", "cause", "recommendation", "ask")}
+    fields["to"] = (getattr(args, "to", None) or "").strip().lower()
+    first = _repeat_of(state, {**fields, "session": session}, now)
+    if not first:
+        return False
+    state.append_question({"id": first, "ts": _iso(now), "outcome": "repeat", "session": session})
+    print(
+        f"board.py ask: {first} holds this text from this session already; nothing new was posted",
+        file=sys.stderr,
+    )
+    _print_ask(first, "repeat")
+    return True
+
+
 def cmd_ask(state, args, crew, now):
-    pr_url = _ask_gate(state, args, crew)
+    if _repeated(state, args, now):
+        return 0
+    try:
+        pr_url = _ask_gate(state, args, crew)
+    except BoardError as exc:
+        raise BoardError(f"{exc}{_mangled(args.ask, args.recommendation)}", exc.code) from None
     if pr_url is CARRY:
         return _carry_reads("ask", [], [args.key.strip()])
 
@@ -1506,25 +1792,13 @@ def cmd_ask(state, args, crew, now):
         fields["one_way"] = args.one_way.strip()
     fields.update(_ask_extras(args, crew))
     _same_key(state, {"ts": _iso(now), **fields}, args.replace, args.distinct)
+    asked = fields["ask"]
     if fields["cause"] == "merge-go":
         fields["checks"] = _required_checks(pr_url)
         fields["ask"] = f"{fields['ask']}\n{fields['checks']}"
+    fields.update(_asker_stamp(fields["session"]))
     base = {"ts": _iso(now), **fields}
-    labels = crew.get("labels") or {}
-    question = {
-        "ask": fields["ask"],
-        "recommendation": fields["recommendation"],
-        "key_title": fields["key_title"],
-        "question_label": crew.get("question_label") or "QUESTION",
-        "recommendation_label": labels.get("recommendation") or "Recommendation",
-    }
-    try:
-        answer = cold_reader.read(question)
-    except cold_reader.ReaderError as exc:
-        state.append_question({**base, "outcome": "reader-error", "reason": str(exc)})
-        raise BoardError(f"board.py ask: reader-error: {exc}") from None
-    reader = {k: answer.get(k) for k in ("decides", "on_yes", "form")}
-    reason = _reader_verdict(answer)
+    reader, reason = _cold_read(state, base, asked, fields, crew)
     session = fields["session"]
 
     def asker_lines(board):
@@ -1549,7 +1823,7 @@ def cmd_ask(state, args, crew, now):
                 {**base, "outcome": "returned", "reason": reason, "reader": reader}
             ),
         )
-        raise BoardError(f"board.py ask: {text}")
+        raise BoardError(f"board.py ask: {text}{_mangled(asked, fields['recommendation'])}")
 
     replaced = []
 
@@ -1568,8 +1842,8 @@ def cmd_ask(state, args, crew, now):
             state.append_question({"id": old, "ts": base["ts"], "outcome": "replaced", "by": qid})
         state.append_question({"id": qid, **base, "outcome": "posted", "reader": reader})
 
-    print(f"posted {state.write_board(posted, after=log_posted)}")
-    _print_carry(_remote_ops(args, crew, fields))
+    qid = state.write_board(posted, after=log_posted)
+    _print_ask(qid, "posted", _remote_ops(args, crew, fields))
     return 0
 
 
@@ -1768,10 +2042,21 @@ def cmd_withdraw(state, args, crew, now):
     open question off the board; a question asked on a ticket loses its label there too."""
     verb = "supersede" if getattr(args, "by", None) else "withdraw"
     qid = args.id
-    queue = [q for q in state.board().get("owner_queue") or [] if isinstance(q, dict)]
-    found = next((q for q in queue if q.get("id") == qid), None)
+    board = state.board()
+    queue = [q for q in board.get("owner_queue") or [] if isinstance(q, dict)]
+    status, found, lines, _answers = question_status(state, qid, board)
+    if status is None:
+        raise BoardError(
+            f"board.py {verb}: {qid} was never on {state.board_path} (neither owner_queue nor "
+            "its logs); check the id, or --board for another crew's board"
+        )
     if found is None:
-        raise BoardError(f"board.py {verb}: {qid} is no open question in owner_queue")
+        # Already off the queue (answered and pruned, closed, withdrawn): what the caller wanted
+        # holds, so it says the state it found and exits 0.
+        last = lines[-1] if lines else {}
+        when = f", {last.get('outcome')} {last.get('ts')}" if last.get("ts") else ""
+        print(f"{qid}: nothing to {verb}, it is off the queue ({status}{when})")
+        return 0
     caller = _caller()
     if not _same_session(found.get("session"), caller) and not crew_mod.holds_role(
         crew, "coordinator", os.environ
@@ -1972,11 +2257,13 @@ def _open_questions(state, board):
     """`owner_queue` questions no Accept, Deny or Withdraw closed: (open, obsolete). Open ones
     urgent first, each group oldest `since` first; obsolete ones (a resolved prompt,
     `blocked --clear`) apart."""
-    closed = {a.get("id") for a in state.answers() if a.get("answer") in CLOSING}
+    logs = (state.questions(), state.answers())
     items = [
         q
         for q in board.get("owner_queue") or []
-        if isinstance(q, dict) and isinstance(q.get("id"), str) and q["id"] not in closed
+        if isinstance(q, dict)
+        and isinstance(q.get("id"), str)
+        and question_status(state, q["id"], board, logs)[0] == "open"
     ]
     items.sort(
         key=lambda q: (
@@ -1989,19 +2276,21 @@ def _open_questions(state, board):
 
 
 def close_merged(state, now):
-    """Drop every open `merge-go` question whose PR is MERGED or CLOSED; returns the ids.
-    `gh` runs before the board lock, never under it."""
+    """Drop every `merge-go` question in `owner_queue` whose PR is MERGED or CLOSED, whatever its
+    answer (open, accepted, the owner merging by hand) and whichever repo the PR is in (its
+    `pr_url`); returns {id: (state, pr)}. `gh` runs before the board lock, never under it."""
     board = state.board()
-    open_items, _obsolete = _open_questions(state, board)
     done = {}
-    for q in open_items:
-        if q.get("cause") != "merge-go" or not q.get("pr_url"):
+    for q in board.get("owner_queue") or []:
+        if not isinstance(q, dict) or q.get("cause") != "merge-go" or not q.get("pr_url"):
+            continue
+        if not isinstance(q.get("id"), str):
             continue
         pr, failure = _view_pr(str(q["pr_url"]), None)
         if failure is None and pr.get("state") in ("MERGED", "CLOSED"):
-            done[q["id"]] = pr["state"]
+            done[q["id"]] = (pr["state"], str(pr.get("url") or q["pr_url"]))
     if not done:
-        return []
+        return {}
 
     def mutate(b):
         queue = b.get("owner_queue") or []
@@ -2014,16 +2303,19 @@ def close_merged(state, now):
     def log(gone):
         for qid in gone:
             state.append_question(
-                {"id": qid, "ts": _iso(now), "outcome": "closed", "reason": f"PR {done[qid]}"}
+                {"id": qid, "ts": _iso(now), "outcome": "closed", "reason": f"PR {done[qid][0]}"}
             )
 
     gone = state.write_board(mutate, after=log)
-    return [] if gone is UNCHANGED else gone
+    return {} if gone is UNCHANGED else {qid: done[qid] for qid in gone}
 
 
 def cmd_close_merged(state, _args, _crew, now):
     gone = close_merged(state, now)
-    print("closed: " + (", ".join(gone) if gone else "none"))
+    for qid, (pr_state, url) in gone.items():
+        print(f"closed {qid}: PR {pr_state} {url}")
+    if not gone:
+        print("closed: none")
     return 0
 
 
@@ -2179,15 +2471,18 @@ def _print_carry(ops):
     prints nothing (ticket_adapter.py)."""
     if ops:
         print("carry: " + json.dumps([op.as_json() for op in ops], ensure_ascii=False))
-        # the row says `ticket: pending`: a board Done over a ticket still In Review went
-        # unnoticed while it said `carried`
-        print(
-            f"board.py: the ticket is not changed yet (row `ticket: pending`): run each of the "
-            f"{len(ops)} `carry:` ops with your ticketing tool, then read the ticket back and "
-            "compare its status. No ticketing tool answers (its MCP server disconnected): tell "
-            "your starter which keys stay unmoved; never report the move as done",
-            file=sys.stderr,
-        )
+        print(_carry_note(len(ops)), file=sys.stderr)
+
+
+def _carry_note(count):
+    # the row says `ticket: pending`: a board Done over a ticket still In Review went unnoticed
+    # while it said `carried`
+    return (
+        f"board.py: the ticket is not changed yet (row `ticket: pending`): run each of the "
+        f"{count} `carry:` ops with your ticketing tool, then read the ticket back and "
+        "compare its status. No ticketing tool answers (its MCP server disconnected): tell "
+        "your starter which keys stay unmoved; never report the move as done"
+    )
 
 
 def _story_text(rec):
@@ -3764,6 +4059,9 @@ def parser():
     a.add_argument("--session", required=True, help="the session whose chat the answer came in")
     a.add_argument("--via", required=True, choices=("chat",))
     a.add_argument("--quote", help="the owner's own words")
+    a.add_argument(
+        "--text-file", metavar="PATH", help="the owner's words from a file, - for stdin"
+    )
     a.set_defaults(run=cmd_answer)
     _add_read_verbs(verbs)
 
@@ -3788,6 +4086,7 @@ def parser():
     q = verbs.add_parser("ask", help="post a question for the owner after the cold reader")
     for field in ASK_FIELDS:
         q.add_argument("--" + field.replace("_", "-"), dest=field)
+    q.add_argument("--text-file", metavar="PATH", help="the --ask text from a file, - for stdin")
     q.add_argument("--urgent", action="store_true", help="bundle lists it before the others")
     q.add_argument("--pr", metavar="REF", help="the open PR a merge-go question is about")
     q.add_argument(
@@ -3916,9 +4215,69 @@ def _guard_text(verb, caller, target, owner, mine=None):
     )
 
 
+ANSWER_WORDS = {
+    "yes": "accept",
+    "ok": "accept",
+    "go": "accept",
+    "approve": "accept",
+    "no": "deny",
+    "reject": "deny",
+    "later": "discuss",
+    "more": "info",
+}
+
+
+def _flag_to_field(argv, i):
+    """(`field=value`, next index) when argv[i] is a `set` field written as a flag, else None."""
+    flag, _, inline = argv[i].partition("=")
+    field = flag.lstrip("-").replace("-", "_")
+    if not flag.startswith("--") or field not in SET_FIELDS:
+        return None
+    if inline or argv[i].endswith("="):
+        return f"{field}={inline}", i + 1
+    value = argv[i + 1] if i + 1 < len(argv) and not argv[i + 1].startswith("--") else ""
+    return f"{field}={value}", i + 2 if value else i + 1
+
+
+def _usage_hint(argv):
+    """The corrected call for an argparse refusal the measured week saw most: `set` fields
+    passed as flags, an answer kind or `--via` outside its choices; None for any other."""
+    rest = list(argv)
+    lead = rest[:2] if rest[:1] == ["--board"] else []
+    rest = rest[len(lead) :]
+    if not rest:
+        return None
+    verb, tail, out, changed, i = rest[0], rest[1:], [], False, 0
+    if verb == "set":
+        while i < len(tail):
+            hit = _flag_to_field(tail, i)
+            if hit:
+                out.append(hit[0])
+                i, changed = hit[1], True
+            else:
+                out.append(tail[i])
+                i += 1
+    elif verb == "answer":
+        for j, word in enumerate(tail):
+            meant = word
+            if j == 1 and word not in KINDS and word.lower() in ANSWER_WORDS:
+                meant = ANSWER_WORDS[word.lower()]
+            elif j > 0 and tail[j - 1] == "--via" and word != "chat":
+                meant = "chat"
+            changed = changed or meant != word
+            out.append(meant)
+    return _corrected([*lead, verb, *out]) if changed else None
+
+
 def main(argv=None, now=None, adapter=None):
     """`adapter` is the tests' FakeAdapter; None means the crew's transport (`adapter_for`)."""
-    args = parser().parse_args(argv)
+    try:
+        args = parser().parse_args(argv)
+    except SystemExit as exc:
+        hint = _usage_hint(sys.argv[1:] if argv is None else argv) if exc.code == 2 else None
+        if hint:
+            print(hint, file=sys.stderr)
+        raise
     try:
         crew = None if args.verb in CREWLESS_VERBS else load_crew()
         args.adapter_given = adapter

@@ -108,8 +108,8 @@ function home($: T$, on: TOn, o: Opts) {
       // the real deliveries.py refuses a role it does not know: keep the fake as strict
       for (const r of rows) {
         const role = (JSON.parse(r) as { role?: string }).role
-        if (role !== undefined && !['coordinator', 'asker', 'owner', 'route'].includes(role)) {
-          return RUN('', 1, `deliveries.py: role must be one of coordinator, asker, owner, route`)
+        if (role !== undefined && !['coordinator', 'asker', 'owner', 'starter', 'route'].includes(role)) {
+          return RUN('', 1, `deliveries.py: role must be one of coordinator, asker, owner, starter, route`)
         }
       }
       files.set(path!, `${files.get(path!) ?? ''}${rows.map(r => `${r}\n`).join('')}`)
@@ -833,4 +833,43 @@ test('rebuildWaits: any request still owed blocks a new one; a stored or refused
   // Before the deliverer's first start: ten minutes apart.
   expect(rebuildWaits([line(T0)], { rows: {} }, T0 + 60_000)).toBe(true)
   expect(rebuildWaits([line(T0)], { rows: {} }, T0 + 600_000)).toBe(false)
+})
+
+// `board.answer_to: asker` (stamped on the question by board.py ask): the asker gets the answer
+// directly, the coordinator only a copy line; a gone asker's starter comes before the routing line.
+const directBoard = (starter?: string) =>
+  boardOf({
+    owner_queue: [{ id: 'Q1', session: 'asker', key: 'PROJ-40', since: '2026-11-03', answer_to: 'asker', ...(starter ? { starter } : {}) }],
+  })
+
+test('answer_to asker: the asker gets the answer and the coordinator one copy line', async ($, on) => {
+  const { clock, h } = await coordinator($, on, { board: directBoard('lead') })
+  await h.click({ id: 'Q1', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
+  await clock.advance(3_000)
+  expect(h.sent).toEqual([{ to: 'asker', text: 'Q1: proposal accepted (answered from the board pane in foxy)' }])
+  expect(h.submitted).toEqual(['Q1: accept — copy for the queue; the answer goes to asker directly, do not relay it (answered from the board pane in foxy)'])
+  expect(h.rows('Q1').map(r => [r.role, r.delivered])).toEqual([
+    ['asker', true],
+    ['coordinator', true],
+  ])
+})
+
+test('answer_to asker: a gone asker hands the answer to its starter, the coordinator routes nothing', async ($, on) => {
+  const gone = { isDelivered: false as const, reason: 'Failed to send to asker: session ended' }
+  const { clock, h } = await coordinator($, on, { board: directBoard('lead'), send: to => (to === 'asker' ? gone : { isDelivered: true }) })
+  await h.click({ id: 'Q1', answer: 'deny', ts: iso(T0 + 1_000), session: 'foxy' })
+  await clock.advance(6_000)
+  expect(h.sent.map(s => s.to)).toEqual(['asker', 'lead'])
+  expect(h.sent[1]!.text).toContain('(for asker, which did not take it')
+  expect(h.submitted.some(t => t.includes('did not reach'))).toBe(false)
+  expect(h.rows('Q1', 'starter').map(r => r.delivered)).toEqual([true])
+})
+
+test('answer_to asker: asker and starter both gone, the coordinator gets the routing line', async ($, on) => {
+  const gone = { isDelivered: false as const, reason: 'Failed to send to x: session ended' }
+  const { clock, h } = await coordinator($, on, { board: directBoard('lead'), send: () => gone })
+  await h.click({ id: 'Q1', answer: 'deny', ts: iso(T0 + 1_000), session: 'foxy' })
+  await clock.advance(9_000)
+  expect(h.sent.map(s => s.to)).toEqual(['asker', 'lead'])
+  expect(h.submitted.filter(t => t.includes('did not reach lead'))).toHaveLength(1)
 })
