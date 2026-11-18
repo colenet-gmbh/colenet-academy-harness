@@ -44,6 +44,7 @@ existing owners first:
 | optimization inbox and ledger | `references/optimization-store.md` |
 | privacy before anything leaves the repo | `references/privacy-guard.md` |
 | instruction limits and wording | `references/instruction-authoring.md` |
+| what a comment, docstring or doc carries | `references/code-notes.md` |
 
 **The one legitimate copy: self-contained briefs.** A brief sent verbatim to a process without
 plugin context (the master's worker brief, the refiner's tree limits, the `/we:codex-task` brief) may
@@ -125,4 +126,5 @@ filters out of step with the ones `/we:setup` installs; retired paths and terms;
 a skill naming its author's own owner; a second plugin resolver. The indiscretion check exists
 because this repo is public: a leak is not a lint finding, it is a rotation. Write placeholders
 (`/home/user/`, `os.environ["X"]` with no default), never a real value. **When you find a new
-cross-file error class, add a check there — don't just fix the instance.**
+cross-file error class that is expensive, irreversible or leaks outside, add a check there; any
+other class gets a guideline where it occurs (`we/AUTHORING.md` § Guideline before rule).**

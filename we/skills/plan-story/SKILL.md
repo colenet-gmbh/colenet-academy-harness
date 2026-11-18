@@ -67,7 +67,7 @@ report ends you.
      (`tests-after`)" in a `tdd` repo; good: "`test_discipline: tdd` (.weside/config.json)"); key absent or
      file unreadable → say so there. With `tdd` every phase gets its `**Test first:**` line.
      Which tests, and how many: `${CLAUDE_PLUGIN_ROOT}/references/test-economy.md`.
-     `tools.graphify` and `tools.turbovault` say which search tools exist.
+     `tools.graphify` says whether the code graph exists.
    - `.weside/verify.md` for the `## Verification` commands; absent → say so there and propose it under
      `## Documentation Impact`. A verb that cannot go red counts as missing.
    - The code: the seam the story names. With the code graph, `graphify affected "<identifier>" --relation calls
