@@ -472,10 +472,32 @@ def test_stop_waits_until_the_row_is_gone_and_ends_what_it_left(tmp_path):
         settings = tmp_path / "home" / ".claude" / "we-state" / "workers" / "w.settings.json"
         settings.parent.mkdir(parents=True)
         settings.write_text("{}")
+        # a stale queue entry of the same name (its waiter gone) never shields the living worker
+        (settings.parent / "queue").mkdir()
+        (settings.parent / "queue" / "w.json").write_text(json.dumps({"name": "w"}))
         proc = run(project, env, "stop", "w")
         assert proc.returncode == 0, proc.stderr
+        assert "queued start of w removed" in proc.stdout
         assert f"w (ab12) stopped; also ended: {child} sleep" in proc.stdout
         assert not settings.exists()  # the stop clears the worker's settings file
+        assert "session s; resume: we-worker w --bg --resume s" in proc.stdout
+    finally:
+        worker.kill()
+
+
+def test_a_stopped_worker_resumes_by_name_after_it_left_the_agent_list(tmp_path):
+    worker = subprocess.Popen(["sleep", "60"])
+    try:
+        rows = [{"id": "ab12", "name": "AC-12-impl", "kind": "background", "pid": worker.pid}]
+        rows[0]["sessionId"] = "0f0e0d0c-aaaa-bbbb-cccc-000000000001"
+        project, env = setup(tmp_path, rows)
+        assert run(project, env, "stop", "AC-12-impl").returncode == 0  # the stub drops the row
+        proc = run(project, env, "AC-12-impl", "--bg", "--resume", "AC-12-impl", GO)
+        assert proc.returncode == 0, proc.stderr
+        (call,) = started(tmp_path)
+        assert call["argv"][-3:] == ["--resume", rows[0]["sessionId"], GO]
+        proc = run(project, env, "AC-13-impl", "--bg", "--resume", "AC-13-impl", GO)
+        assert proc.returncode == 2 and "no stopped worker of that name" in proc.stderr
     finally:
         worker.kill()
 
@@ -907,6 +929,20 @@ def test_a_start_over_the_concurrency_cap_is_refused_and_starts_nothing(tmp_path
     assert proc.returncode == 3
     assert "we-worker: refused, no worker started: 10 workers busy (limit 10" in proc.stderr
     assert "active account 5h at 10 % (limit 80 %" in proc.stderr
+    assert "add --queue" in proc.stderr
+    assert not started(tmp_path)
+    # with --queue the refused start waits in the state dir; status lists it, stop removes it
+    proc = run(project, env, "AC-12-impl", "--bg", "--queue", "--queue-timeout", "90m", GO)
+    assert proc.returncode == 0 and "AC-12-impl queued (position 1" in proc.stdout, proc.stderr
+    entry = json.loads(
+        (tmp_path / "home/.claude/we-state/workers/queue/AC-12-impl.json").read_text()
+    )
+    assert entry["argv"] == ["AC-12-impl", "--bg"]
+    assert entry["deadline"] - entry["queued_at"] == 90 * 60
+    status = run(project, env, "status").stdout
+    assert "queued AC-12-impl position=1" in status
+    assert run(project, env, "stop", "AC-12-impl").returncode == 0
+    assert "queued" not in run(project, env, "status").stdout
     assert not started(tmp_path)
     (project / ".weside" / "config.json").write_text(
         json.dumps({"workers": {"max_busy_sessions": 11}})
@@ -999,3 +1035,26 @@ def test_under_tree_caller_a_start_in_the_main_checkout_stays_there_with_a_tip(t
     assert [c["cwd"] for c in started(tmp_path)] == [str(project)]
     assert not (tmp_path / "project-AC-12-impl").exists()
     assert not Path(_git(project, "rev-parse", "--absolute-git-dir"), "we-worker.json").exists()
+
+
+@pytest.mark.parametrize(
+    "needs, refused",
+    [
+        ("Needs: sentry, `supabase`", "supabase@claude-plugins-official"),  # a disabled plugin
+        ("Needs: playwright", "playwright"),  # a denied MCP server
+        ("Needs: sentry", None),
+    ],
+)
+def test_a_brief_that_needs_a_tool_the_context_turns_off_refuses(tmp_path, needs, refused):
+    project, env = setup(tmp_path)
+    context = {
+        "disable_plugins": ["supabase@claude-plugins-official"],
+        "deny_mcp_servers": ["playwright"],
+    }
+    (project / ".weside" / "config.json").write_text(json.dumps({"workers": {"context": context}}))
+    proc = run(project, env, "AC-12-impl", "--bg", f"{GO}\n{needs}\n")
+    if refused is None:
+        assert proc.returncode == 0, proc.stderr
+        return
+    assert proc.returncode == 2 and f"turns off ({refused})" in proc.stderr
+    assert not started(tmp_path)
