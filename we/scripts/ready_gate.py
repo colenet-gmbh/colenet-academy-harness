@@ -380,16 +380,10 @@ def phases(text: str) -> list[Phase]:
     return found
 
 
-# a media type such as ``application/pdf`` names no file, though it carries a ``/``
-_MEDIA_TYPE = re.compile(
-    r"(application|audio|font|image|message|model|multipart|text|video)/[A-Za-z0-9][\w.+-]*"
-)
-
-
 def _paths(lines: list[str]) -> list[tuple[str, bool]]:
     """Path-like backtick spans of a ``**Files:**`` list (story-plan.md § What the Ready gate
-    reads): no whitespace, and a ``/``, a leading ``.``, or an extension on a bullet's first span;
-    a media type (``image/png``) is no path."""
+    reads): no whitespace, and a ``/``, a leading ``.``, or an extension on a bullet's first span.
+    A span shaped like a media type stays here; ``Gate._drop_media_types`` needs the tree to judge it."""
     items: list[str] = []
     for line in lines:
         if _BULLET.match(line) or not items:
@@ -400,7 +394,7 @@ def _paths(lines: list[str]) -> list[tuple[str, bool]]:
     for item in items:
         for index, span in enumerate(_SPAN.finditer(item)):
             value = span.group(1)
-            if re.search(r"\s", value) or "://" in value or _MEDIA_TYPE.fullmatch(value):
+            if re.search(r"\s", value) or "://" in value:
                 continue
             value = _LINE_SUFFIX.sub("", value.split("§")[0]).rstrip("/")
             first = index == 0
@@ -410,6 +404,13 @@ def _paths(lines: list[str]) -> list[tuple[str, bool]]:
                 continue
             out.append((value, bool(_OTHER_REPO.match(item[span.end() :]))))
     return out
+
+
+# ``application/pdf`` names no file though it carries a ``/``; a span with an extension
+# (``model/user.py``) is a path whatever its first segment
+_MEDIA_TYPE = re.compile(
+    r"(application|audio|font|image|message|model|multipart|text|video)/[A-Za-z0-9][\w.+-]*"
+)
 
 
 def glob_regex(glob: str) -> re.Pattern[str]:
@@ -482,6 +483,7 @@ class Gate:
                 heading_line(text, "Open Fork"),
             )
         found_phases = [short_files(text)] if short else phases(text)
+        self._drop_media_types(found_phases)
         if short:
             self._short(found_phases[0], "Files" in present)
         markers = self._acs(text)
@@ -576,6 +578,53 @@ class Gate:
         except (OSError, subprocess.TimeoutExpired):
             return None
         return done.stdout if done.returncode == 0 else None
+
+    def _exists_on_ref(self, rel: str) -> bool | None:
+        """Whether a file or directory ``rel`` is on ``risk.rules_from``; None when that tree is
+        unreadable (no git, no ref)."""
+        try:
+            tree = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(self.root),
+                    "rev-parse",
+                    "--verify",
+                    "-q",
+                    f"{self._ref()}^{{tree}}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=RECEIPT_TIMEOUT,
+                check=False,
+            )
+            if tree.returncode != 0:
+                return None
+            done = subprocess.run(
+                ["git", "-C", str(self.root), "cat-file", "-e", f"{tree.stdout.strip()}:{rel}"],
+                capture_output=True,
+                timeout=RECEIPT_TIMEOUT,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return done.returncode == 0
+
+    def _drop_media_types(self, found: list[Phase]) -> None:
+        """A span shaped like a media type (``image/png``) is no path when nothing of that name is
+        on ``risk.rules_from``. In another repo, or with that tree unreadable, it stays a path: a
+        false scope change costs one answer, a missed one lets a plan past its fence."""
+        for phase in found:
+            if phase.repo is not None:
+                continue
+            phase.paths = [
+                (path, other)
+                for path, other in phase.paths
+                if other
+                or not _MEDIA_TYPE.fullmatch(path)
+                or _EXTENSION.search(path)
+                or self._exists_on_ref(path) is not False
+            ]
 
     def _oracle_line(self, text: str) -> None:
         """Check 9b: warn now what the PR hook refuses at `gh pr create`."""
