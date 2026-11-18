@@ -17,6 +17,18 @@ A line stays only if a session would act worse without it. Four kinds of line qu
 Everything else goes: generic engineering advice, restated Claude Code behaviour, motivational or
 emphatic wording (capitals, "never ever", ⛔), duplicated text across skills, run histories.
 
+## Guideline before rule
+
+A line says why: a reader who knows the reason handles the case the line did not foresee, so a rule
+without a stated reason is a candidate to cut. Write a guideline at the place where the case occurs
+(the skill step, the reference, the comment at the code) before a rule. A required field, a gate or
+a check is for a mistake that is expensive, irreversible or reaches outside the repo (a secret, a
+one-way change) and that a tool can carry; any other check costs every run and rusts as code moves.
+
+| Bad | Good |
+|---|---|
+| "Every module must have a header docstring", enforced by a validator | "A header pays where a reader would otherwise open neighbours to learn what calls the module" (`references/code-notes.md`) |
+
 ## Shape of a skill
 
 - Frontmatter `description` states what the verb does and its triggers; with `when_to_use` at most
