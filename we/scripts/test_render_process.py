@@ -69,7 +69,9 @@ def test_every_role_renders_within_the_budget_with_crew_values():
     assert "Specialists woken on demand: Bo (security), Lex (legal)." in full
     assert "`ASK · <KEY> <title> · <question without context> · Advice: …`" in full
     assert "`done-for-now` before parking" in full
-    assert "- **Capacity:** a master's limit is its context (compactions" in full
+    # a session guessed the ask call from the skill text; the L0 names both board calls
+    assert "`board.py ask --key K --key-title T --ask Q --recommendation R --cause C`" in full
+    assert "`board.py set state=… now=…`" in full
     assert "GiB" not in full, "the L0 names no host memory numbers"
     assert "\n## Local (this crew)\n\n- A draft PR names why it waits in its first line.\n" in full
 

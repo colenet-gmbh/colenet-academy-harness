@@ -14,6 +14,9 @@
 //   owner        the question's `owner` (`board.py ask --owner/--component`), `$.session.send` like the
 //                asker; a refusal is a ledger row, no routing line. Skipped when it is the coordinator,
 //                the asker or the session that wrote the line.
+//   starter      on a question stamped `answer_to: asker`: the asker's starter, `$.session.send`, once the
+//                asker refused or was not reached; the routing prompt follows only when the starter
+//                refuses too. On such a question the coordinator's prompt is one copy line (`copyText`).
 // Every text names where the answer was written (`writerNote`): transparency, no gate.
 // Without a running coordinator a pane writes one marker row per answer older than 60 s; the
 // deliverer delivers it anyway, its newer row superseding the marker.
@@ -83,7 +86,7 @@ export const keyOf = (id: string, answerTs: string, role: BoardDeliveryRole) => 
 
 export type Ledger = { epoch?: string; rows: Record<string, BoardDelivery> }
 
-const ROLES: readonly BoardDeliveryRole[] = ['coordinator', 'asker', 'owner', 'route']
+const ROLES: readonly BoardDeliveryRole[] = ['coordinator', 'asker', 'owner', 'starter', 'route']
 
 // Folds the ledger: per key the row with the newest `ts`, a later line winning a tie, so two equal
 // marker rows read as one. The first epoch row is the deliverer's start; a torn line is skipped.
@@ -132,8 +135,14 @@ const after = (ts: string, epoch: string) => Date.parse(ts) > Date.parse(epoch)
 export type AcceptAs = { as: BoardAcceptVariant; pr?: string }
 
 // One recipient of one line; a routing line carries the asker row it reports (`about`), an Accept the
-// variant of its question (`accept`).
-export type Delivery = Recipient & { line: AnswerLine; about?: BoardDelivery; accept?: AcceptAs }
+// variant of its question (`accept`); `copy` marks the coordinator's one-line copy of an answer that
+// went to its asker directly (`answer_to: asker`), `asker` names that asker; `hasStarter` on an asker
+// delivery: a refusal goes to the starter next, not to the routing line.
+export type Delivery = Recipient & { line: AnswerLine; about?: BoardDelivery; accept?: AcceptAs; copy?: boolean; asker?: string; hasStarter?: boolean }
+
+// How a question's answer travels (`board.py ask` stamps both): `asker` straight to the asker, the
+// coordinator a copy line; the starter when the asker is gone. Absent: through the coordinator.
+export type AnswerRoute = { answerTo?: 'asker'; starter?: string }
 
 // board.py PRUNE_AFTER_H: an answer its asker has not taken by then goes to the coordinator as a
 // routing line, so board.py prune never drops an answer nobody received.
@@ -150,6 +159,7 @@ export const pendingLines = (
   ownerOf: (id: string) => string | undefined,
   now: number,
   acceptOf: (id: string) => AcceptAs | undefined = () => undefined,
+  routeOf: (id: string) => AnswerRoute | undefined = () => undefined,
 ): Delivery[] => {
   const epoch = ledger.epoch
   if (!epoch) return []
@@ -159,15 +169,28 @@ export const pendingLines = (
     .flatMap(line => {
       const asker = askerOf(line.id)
       const accept = line.answer === 'accept' ? acceptOf(line.id) : undefined
-      const own: Delivery[] = recipientsOf(line, coordinator, asker, ownerOf(line.id)).map(r => ({ ...r, line, ...(accept ? { accept } : {}) }))
+      const how = routeOf(line.id)
+      const direct = how?.answerTo === 'asker' && !!asker && asker !== coordinator && line.session !== asker
+      // A gone asker's starter takes the answer before the coordinator is asked to route it.
+      const starter = direct && how?.starter && how.starter !== coordinator && how.starter !== asker ? how.starter : undefined
+      const own: Delivery[] = recipientsOf(line, coordinator, asker, ownerOf(line.id)).map(r => ({
+        ...r,
+        line,
+        ...(accept ? { accept } : {}),
+        ...(direct && r.role === 'coordinator' ? { copy: true, asker } : {}),
+        ...(starter && r.role === 'asker' ? { hasStarter: true } : {}),
+      }))
       const refused = ledger.rows[keyOf(line.id, line.ts, 'asker')]
       const overdue: BoardDelivery | undefined =
         asker && line.session !== asker && asker !== coordinator && !refused?.delivered && now - Date.parse(line.ts) >= ROUTE_AFTER_MS
           ? { id: line.id, answer_ts: line.ts, to: asker, role: 'asker', click_ts: line.ts, ts: line.ts, delivered: false, reason: 'not reached within 24 h' }
           : undefined
-      const about = refused && isFinal(refused) && !refused.delivered ? refused : overdue
+      const missed = refused && isFinal(refused) && !refused.delivered ? refused : overdue
+      const byStarter = starter ? ledger.rows[keyOf(line.id, line.ts, 'starter')] : undefined
+      const toStarter: Delivery[] = missed && starter ? [{ role: 'starter', to: starter, line, about: missed, asker, ...(accept ? { accept } : {}) }] : []
+      const about = !missed ? undefined : !starter ? missed : byStarter && isFinal(byStarter) && !byStarter.delivered ? byStarter : undefined
       const route: Delivery[] = about ? [{ role: 'route', to: coordinator, line, about }] : []
-      return [...own, ...route]
+      return [...own, ...toStarter, ...route]
     })
     .filter(owed)
 }
@@ -213,6 +236,14 @@ export const coordinatorText = (line: AnswerLine, prompts: Prompts, accept?: Acc
 export const askerText = (line: AnswerLine, prompts: Prompts, accept?: AcceptAs) =>
   `${answerPrompt(line.answer === 'update' ? 'update_asker' : kindOf(line, accept), line.id, prompts, accept?.pr)}${writerNote(line)}${quoteOf(line)}`
 
+// The peer message to a gone asker's starter: the asker's text, marked as such.
+export const starterText = (line: AnswerLine, asker: string, prompts: Prompts, accept?: AcceptAs) =>
+  `${askerText(line, prompts, accept)}\n(for ${asker}, which did not take it: carry it on or act on it)`
+
+// The coordinator's one line when the answer went to its asker directly (`answer_to: asker`).
+export const copyText = (line: AnswerLine, asker: string) =>
+  `${line.id}: ${line.answer} — copy for the queue; the answer goes to ${asker} directly, do not relay it${writerNote(line)}`
+
 // The peer message to the subject's owner: the answer as the coordinator gets it, marked as a copy.
 export const ownerText = (line: AnswerLine, prompts: Prompts, accept?: AcceptAs) =>
   `${coordinatorText(line, prompts, accept)}\n(copy for the owner of this subject)`
@@ -225,7 +256,11 @@ export const routeText = (line: AnswerLine, asker: string, reason: string) =>
 
 // The text a coordinator-side delivery submits: the answer itself, or the routing line.
 export const promptTextOf = (d: Delivery, prompts: Prompts) =>
-  d.role === 'route' ? routeText(d.line, d.about?.to ?? '?', d.about?.reason ?? 'not delivered') : coordinatorText(d.line, prompts, d.accept)
+  d.role === 'route'
+    ? routeText(d.line, d.about?.to ?? '?', d.about?.reason ?? 'not delivered')
+    : d.copy && d.asker
+      ? copyText(d.line, d.asker)
+      : coordinatorText(d.line, prompts, d.accept)
 
 export const NOTICE = '[Cross-session delivery notice]'
 
@@ -344,9 +379,10 @@ export const deliveryLine = (
 ): DeliveryLine | undefined => {
   if (!answer) return undefined
   const row = (role: BoardDeliveryRole) => rows[keyOf(answer.id, answer.ts, role)]
-  const [asker, own] = [row('asker'), row('coordinator')]
+  const [asker, own, starter] = [row('asker'), row('coordinator'), row('starter')]
   const withCoordinator = (reason: string | undefined) => ({ text: `not delivered, with ${coordinator ?? 'the orchestrator'} (${shortReason(reason)})`, isDelivered: false })
-  if (asker && !asker.delivered && isFinal(asker)) return withCoordinator(asker.reason)
+  if (asker && !asker.delivered && isFinal(asker) && starter?.delivered) return { text: `→ delivered to ${starter.to} ${hhmm(starter.ts)} (${asker.to} gone)`, isDelivered: true }
+  if (asker && !asker.delivered && isFinal(asker)) return withCoordinator(starter && isFinal(starter) ? starter.reason : asker.reason)
   if (own && !own.delivered && own.reason === NOT_RUNNING) return withCoordinator('not running')
   if (own && !own.delivered && isFinal(own)) return withCoordinator(own.reason)
   const reached = asker?.delivered ? asker : own?.delivered ? own : undefined

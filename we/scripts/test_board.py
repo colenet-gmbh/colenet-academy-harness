@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
 import re
 import subprocess
@@ -355,22 +356,53 @@ class TestSet:
         assert line_of(crewed, "lead-12")["sla_due"] == "2026-10-25T09:00Z"
 
     @pytest.mark.parametrize(
-        "assignment, message",
+        "assignment, message, corrected",
         [
-            ("waiting_on=legal", "waiting_on 'legal' is no role key"),
-            ("color=x", "field 'color' is not settable"),
-            ("keys=nope", "keys nope do not match the crew's naming.key"),
-            ("state=running", "state 'running' is not one of"),
-            ("waiting", "'waiting' is no <field>=<value>"),
+            ("waiting_on=legal", "waiting_on 'legal' is no role key", None),
+            ("color=x", "field 'color' is not settable", None),
+            ("keys=nope", "keys nope do not match the crew's naming.key", None),
+            ("state=running", "state 'running' is not one of", None),
+            ("waiting", "'waiting' is no <field>=<value>", None),
+            # the three values the measured week refused most, each with the call it meant
+            ("state=working", "state 'working' is not one of", "set now=x state=build"),
+            ("state=refine", "state 'refine' is not one of", "set now=x state=active"),
+            ("waiting_on=Hal", "waiting_on 'Hal' is no role key", "set now=x waiting_on=human"),
+            ("waiting-on=human", "field 'waiting-on'", "set now=x waiting_on=human"),
         ],
     )
     def test_refusals_name_the_input_and_write_nothing(
-        self, crewless, capsys, assignment, message
+        self, crewed, capsys, assignment, message, corrected
     ):
-        before = (crewless / "board.json").read_bytes()
-        assert go(crewless, "set", assignment) == 1
-        assert message in capsys.readouterr().err
-        assert (crewless / "board.json").read_bytes() == before
+        before = (crewed / "board.json").read_bytes()
+        assert go(crewed, "set", "now=x", assignment) == 1
+        err = capsys.readouterr().err
+        assert message in err
+        assert (
+            ("corrected call: board.py " + corrected in err)
+            if corrected
+            else ("corrected call" not in err)
+        )
+        assert (crewed / "board.json").read_bytes() == before
+
+    def test_a_member_name_as_wait_names_the_role_it_holds(self, crewed, capsys):
+        assert go(crewed, "set", "waiting_on=Otto (Q12)") == 1
+        assert "corrected call: board.py set waiting_on=coordinator" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        "argv, corrected",
+        [
+            (["set", "--now", "phase 3", "--state", "ci"], "set 'now=phase 3' state=ci"),
+            (["answer", "Q1", "no", "--session", "a", "--via", "chat"], "answer Q1 deny"),
+            (["answer", "Q1", "accept", "--session", "a", "--via", "board"], "--via chat"),
+        ],
+    )
+    def test_a_flag_form_or_a_wrong_choice_prints_the_corrected_call(
+        self, capsys, argv, corrected
+    ):
+        with pytest.raises(SystemExit):
+            board.main(argv)
+        err = capsys.readouterr().err
+        assert f"corrected call: board.py {argv[0]}" in err and corrected in err
 
     def test_session_states_mirror_the_board_doc(self):
         doc = (HERE.parent / "docs" / "board.md").read_text(encoding="utf-8")
@@ -439,13 +471,22 @@ def ask_argv(**override):
     return ["ask", *[x for k, v in fields.items() if v is not None for x in (k, v)]]
 
 
+def qid_of(out):
+    """The id of the one JSON object `ask` prints on stdout."""
+    return json.loads(out)["id"]
+
+
+def posted(qid):
+    return json.dumps({"id": qid, "outcome": "posted"})
+
+
 def answer_with(state_dir, answer):
     text = answer if isinstance(answer, str) else "Reading it cold.\n" + json.dumps(answer)
     (state_dir / "answer.txt").write_text(text, encoding="utf-8")
 
 
 class TestAsk:
-    @pytest.mark.parametrize("flag", list(ASK))
+    @pytest.mark.parametrize("flag", [f for f in ASK if f != "--session"])
     @pytest.mark.parametrize("value", [None, "  "])
     def test_a_missing_or_blank_field_is_refused_before_the_reader(
         self, crewless, capsys, flag, value
@@ -480,12 +521,14 @@ class TestAsk:
     def test_a_clear_question_is_posted_with_the_next_id(self, crewless, capsys):
         (crewless / "board-answers.jsonl").write_text('{"id": "Q271", "answer": "accept"}\n')
         answer_with(crewless, CLEAR)
-        assert go(crewless, *ask_argv()) == 0
-        assert capsys.readouterr().out.strip() == "posted Q272"
+        # without --session the asker is this session's own name, as `set` finds it
+        assert go(crewless, *ask_argv(**{"--session": None})) == 0
+        assert capsys.readouterr().out.strip() == posted("Q272")
         item = board_of(crewless)["owner_queue"][-1]
         assert item == {
             "id": "Q272",
             "session": "lead-12",
+            "asker_id": "sid-12",
             "key": "PROJ-12",
             "key_title": "Checkout flow",
             "ask": ASK["--ask"],
@@ -504,7 +547,7 @@ class TestAsk:
         answer, so another session read it as open and repeated it (red arm: no verb read both)."""
         answer_with(crewless, CLEAR)
         assert go(crewless, *ask_argv()) == 0
-        qid = capsys.readouterr().out.split()[-1]
+        qid = qid_of(capsys.readouterr().out)
         assert go(crewless, "show", qid) == 0
         shown = json.loads(capsys.readouterr().out)
         assert (shown["id"], shown["status"], shown["answers"]) == (qid, "open", [])
@@ -520,8 +563,99 @@ class TestAsk:
     def test_a_plan_slug_stands_for_a_key_before_the_ticket_exists(self, crewless, capsys):
         answer_with(crewless, CLEAR)
         assert go(crewless, *ask_argv(**{"--key": "onboarding-v2"})) == 0
-        assert capsys.readouterr().out.strip() == f"posted {LIVE_NEXT_Q}"
+        assert capsys.readouterr().out.strip() == posted(LIVE_NEXT_Q)
         assert board_of(crewless)["owner_queue"][-1]["key"] == "onboarding-v2"
+
+    def test_withdraw_of_an_answered_and_pruned_question_names_its_state(self, crewless, capsys):
+        """Red arm: the asker withdrew a question the owner had answered and a write had pruned
+        a second earlier; `no open question` sent it hunting through the queue."""
+        answer_with(crewless, CLEAR)
+        assert go(crewless, *ask_argv()) == 0
+        qid = qid_of(capsys.readouterr().out)
+        line = {"id": qid, "answer": "accept", "ts": "2026-11-03T10:05:00Z", "session": "pane"}
+        (crewless / "board-answers.jsonl").write_text(json.dumps(line) + "\n")
+        assert go(crewless, "prune") == 0
+        assert qid not in [q["id"] for q in board_of(crewless)["owner_queue"]]
+        capsys.readouterr()
+        assert go(crewless, "withdraw", qid, "--reason", "PR merged") == 0
+        out = capsys.readouterr().out
+        assert f"{qid}: nothing to withdraw, it is off the queue (answered: accept, pruned" in out
+        assert go(crewless, "withdraw", "Q999") == 1
+        assert "Q999 was never on" in capsys.readouterr().err
+
+    def test_a_retry_with_the_same_text_returns_the_first_id(self, crewless, capsys):
+        """Red arm: a retry after a success whose output a JSON parser could not read posted
+        the same question twice."""
+        answer_with(crewless, CLEAR)
+        assert go(crewless, *ask_argv()) == 0
+        first = json.loads(capsys.readouterr().out)
+        assert first == {"id": LIVE_NEXT_Q, "outcome": "posted"}
+        calls = (crewless / "reader-calls.jsonl").read_bytes()
+        assert go(crewless, *ask_argv()) == 0
+        out = capsys.readouterr()
+        assert json.loads(out.out) == {"id": LIVE_NEXT_Q, "outcome": "repeat"}
+        assert "nothing new was posted" in out.err
+        assert (crewless / "reader-calls.jsonl").read_bytes() == calls
+        assert [q["id"] for q in board_of(crewless)["owner_queue"]].count(LIVE_NEXT_Q) == 1
+        # another recommendation is another question (here: a refused duplicate on the key)
+        assert go(crewless, *ask_argv(**{"--recommendation": "No, Monday."})) == 1
+        capsys.readouterr()
+        # a re-ask after a withdraw posts anew, not a repeat of the withdrawn one
+        assert go(crewless, "withdraw", LIVE_NEXT_Q, "--reason", "wrong key") == 0
+        capsys.readouterr()
+        assert go(crewless, *ask_argv()) == 0
+        assert json.loads(capsys.readouterr().out)["outcome"] == "posted"
+
+    def test_the_text_comes_from_a_file_or_stdin(self, crewless, capsys, monkeypatch):
+        text = "May `migrate.py` run on prod tonight?"
+        (crewless / "q.txt").write_text(text + "\n", encoding="utf-8")
+        answer_with(crewless, CLEAR)
+        assert (
+            go(crewless, *ask_argv(**{"--ask": None}), "--text-file", str(crewless / "q.txt")) == 0
+        )
+        assert board_of(crewless)["owner_queue"][-1]["ask"] == text
+        monkeypatch.setattr("sys.stdin", io.StringIO("Is `index.ts` ready?"))
+        assert (
+            go(crewless, *ask_argv(**{"--ask": None, "--key": "PROJ-13"}), "--text-file", "-") == 0
+        )
+        assert board_of(crewless)["owner_queue"][-1]["ask"] == "Is `index.ts` ready?"
+        assert go(crewless, *ask_argv(), "--text-file", "-") == 2
+        assert "--ask or --text-file, not both" in capsys.readouterr().err
+
+    def test_a_return_of_shell_mangled_text_names_the_file_input(self, crewless, capsys):
+        answer_with(crewless, {**CLEAR, "on_yes": ""})
+        mangled = {"--ask": "May  run on prod tonight?"}  # `migrate.py` ran in the shell
+        assert go(crewless, *ask_argv(**mangled)) == 1
+        err = capsys.readouterr().err
+        assert "shell-mangled" in err and "--text-file -" in err
+        assert go(crewless, *ask_argv(**{"--ask": "May it run on prod tonight?"})) == 1
+        assert "shell-mangled" not in capsys.readouterr().err
+
+    def test_the_asker_starter_and_answer_to_are_stamped(self, crewless, capsys):
+        work = crewless / "work"
+        subprocess.run(["git", "init", "-q", str(work)], check=True)
+        marker = {"name": "w-1", "starter": "lead-1"}
+        (work / ".git" / "we-worker.json").write_text(json.dumps(marker))
+        (work / ".weside").mkdir()
+        (work / ".weside" / "config.json").write_text(
+            json.dumps({"board": {"answer_to": "asker"}})
+        )
+        answer_with(crewless, CLEAR)
+        assert go(crewless, *ask_argv()) == 0
+        item = board_of(crewless)["owner_queue"][-1]
+        assert (item["asker_id"], item.get("starter"), item["answer_to"]) == (
+            "sid-12",
+            "lead-1",
+            "asker",
+        )
+        # a question asked for another session carries no id or starter of the caller
+        assert go(crewless, *ask_argv(**{"--key": "PROJ-14", "--session": "other"})) == 0
+        item = board_of(crewless)["owner_queue"][-1]
+        assert "asker_id" not in item and "starter" not in item and item["answer_to"] == "asker"
+        (work / ".weside" / "config.json").write_text(json.dumps({"board": {"answer_to": "me"}}))
+        assert go(crewless, *ask_argv(**{"--key": "PROJ-13", "--ask": "Other?"})) == 0
+        assert "answer_to" not in board_of(crewless)["owner_queue"][-1]
+        assert "board.answer_to 'me'" in capsys.readouterr().err
 
 
 # The id `ask` posts on a fresh LIVE board with no logs: one past LIVE's own highest Q.
@@ -538,7 +672,7 @@ class TestSecondCrew:
         other.write_text(json.dumps(LIVE), encoding="utf-8")
         answer_with(crewless, CLEAR)
         assert board.main(["--board", str(other), *ask_argv()], now=NOW) == 0
-        assert capsys.readouterr().out.strip() == f"posted {LIVE_NEXT_Q}"
+        assert capsys.readouterr().out.strip() == posted(LIVE_NEXT_Q)
         [line] = jsonl(crewless / "acme-board-questions.jsonl")
         assert line["id"] == LIVE_NEXT_Q
         assert len(jsonl(crewless / "board-questions.jsonl")) == 1
@@ -563,7 +697,7 @@ class TestSecondCrew:
         before = (crewed / "board.json").read_bytes()
         answer_with(crewed, CLEAR)
         assert board.main(ask_argv(), now=NOW) == 0
-        assert capsys.readouterr().out.strip() == f"posted {LIVE_NEXT_Q}"
+        assert capsys.readouterr().out.strip() == posted(LIVE_NEXT_Q)
         assert (
             json.loads((crewed / "acme-board.json").read_text())["owner_queue"][-1]["id"]
             == LIVE_NEXT_Q
@@ -824,8 +958,8 @@ class TestAskReader:
         answer_with(crewless, CLEAR)
         go(crewless, *ask_argv())
         board.StateDir(crewless / "board.json").write_board(lambda b: b.update(owner_queue=[]))
-        go(crewless, *ask_argv())
-        assert capsys.readouterr().out.split() == ["posted", "Q8", "posted", "Q9"]
+        go(crewless, *ask_argv(**{"--ask": "Should checkout go live for everyone tonight?"}))
+        assert capsys.readouterr().out.splitlines() == [posted("Q8"), posted("Q9")]
 
 
 PR_URL = "https://github.com/o/r/pull/5"
@@ -891,15 +1025,18 @@ class TestMergeQuestion:
         }
         (crewless / "gh.json").write_text(json.dumps(data), encoding="utf-8")
         answer_with(crewless, CLEAR)
-        assert go(crewless, *self.merge_argv("--pr", "o/r#5")) == 0
+        german = "Darf PR 5 nach main, obwohl der Codex-Review noch läuft?"
+        assert go(crewless, *self.merge_argv("--pr", "o/r#5"), "--ask", german) == 0
         item = board_of(crewless)["owner_queue"][-1]
         assert item["checks"] == (
             "required checks: 1 green, 1 red (CI Summary), 1 cancelled (Backend (Test)),"
             " 1 pending (Codex Review)"
         )
-        assert item["ask"].endswith("\n" + item["checks"])
-        read = jsonl(crewless / "reader-calls.jsonl")[-1]
-        assert item["checks"] in json.dumps(read)
+        assert item["ask"] == f"{german}\n{item['checks']}"
+        # The reader judges the asker's text alone: the tool's English checks line made it
+        # return German merge questions, and a reworded retry passed (unstable verdict).
+        read = json.loads(jsonl(crewless / "reader-calls.jsonl")[-1]["stdin"])
+        assert read["ask"] == german
 
     @pytest.mark.usefixtures("merge_gh")
     def test_a_merge_go_on_a_pr_without_required_checks_says_so(self, crewless):
@@ -914,16 +1051,38 @@ class TestMergeQuestion:
         assert "--one-way belongs to a merge-go question" in capsys.readouterr().err
 
     def test_close_merged_drops_the_question_once_its_pr_merged(self, crewless, merge_gh, capsys):
+        """Red arm: close-merged printed none while answered merge questions (an Accept, the
+        owner's "I merge it by hand") had a merged PR, one of them in another repo."""
+        other = "https://github.com/o/infra/pull/9"
         answer_with(crewless, CLEAR)
         go(crewless, *self.merge_argv("--pr", PR_URL, "--one-way", "money"))
+        board.StateDir(crewless / "board.json").write_board(
+            lambda b: b["owner_queue"].extend(
+                [
+                    {"id": "Q20", "cause": "merge-go", "pr_url": PR_URL, "session": "lead-12"},
+                    {"id": "Q21", "cause": "merge-go", "pr_url": other, "session": "lead-12"},
+                ]
+            )
+        )
         go(crewless, "close-merged")
         assert capsys.readouterr().out.strip().endswith("closed: none")
-        assert [q["id"] for q in board_of(crewless)["owner_queue"]] == ["Q7", "Q8"]
+        assert [q["id"] for q in board_of(crewless)["owner_queue"]] == ["Q7", "Q8", "Q20", "Q21"]
+        with (crewless / "board-answers.jsonl").open("a") as fh:  # Q8: "I merge it by hand"
+            for qid in ("Q8", "Q20"):
+                fh.write(json.dumps({"id": qid, "answer": "accept", "ts": "2026-11-03T10:01:00Z"}))
+                fh.write("\n")
         merge_gh("MERGED")
+        data = json.loads((crewless / "gh.json").read_text())
+        data[other] = {"pr": {"state": "MERGED", "url": other}}
+        (crewless / "gh.json").write_text(json.dumps(data), encoding="utf-8")
         assert go(crewless, "close-merged") == 0
-        assert capsys.readouterr().out.strip() == "closed: Q8"
+        assert capsys.readouterr().out.strip().splitlines() == [
+            f"closed Q8: PR MERGED {PR_URL}",
+            f"closed Q20: PR MERGED {PR_URL}",
+            f"closed Q21: PR MERGED {other}",
+        ]
         assert [q["id"] for q in board_of(crewless)["owner_queue"]] == ["Q7"]
-        closed = jsonl(crewless / "board-questions.jsonl")[-1]
+        closed = jsonl(crewless / "board-questions.jsonl")[-3]
         assert (closed["id"], closed["outcome"], closed["reason"]) == ("Q8", "closed", "PR MERGED")
 
     def test_close_merged_leaves_other_causes_and_questions_without_a_pr(self, crewless, merge_gh):
@@ -2965,7 +3124,7 @@ class TestBlocked:
         go(crewed, "blocked", WORKER, "--kind", "permission")
         answer_with(crewed, CLEAR)
         go(crewed, *ask_argv(**{"--session": WORKER, "--cause": "access-click"}))
-        go(crewed, *ask_argv(**{"--session": WORKER, "--cause": "info"}))
+        go(crewed, *ask_argv(**{"--session": WORKER, "--cause": "info", "--ask": "Ship tonight?"}))
         agents(crewed, {**BLOCKED_ROW, "state": "working", "waitingFor": None})
         capsys.readouterr()
         later = datetime(2026, 11, 3, 10, 7, tzinfo=timezone.utc)
@@ -3453,7 +3612,7 @@ def test_ask_owner_by_name_and_an_unknown_owner_is_refused(crewed, capsys):
     answer_with(crewed, CLEAR)
     assert go(crewed, *ask_argv(), "--owner", "ada") == 0
     assert board_of(crewed)["owner_queue"][-1]["owner"] == "Ada"
-    assert go(crewed, *ask_argv(), "--owner", "nobody") == 1
+    assert go(crewed, *ask_argv(**{"--ask": "Ship it tonight?"}), "--owner", "nobody") == 1
     assert "--owner 'nobody' is no crew member" in capsys.readouterr().err
 
 
@@ -3463,10 +3622,12 @@ def test_a_second_question_with_the_same_cause_on_an_open_key_is_refused_before_
     """Red arm: the same question twice in 3 minutes; a warning let the second one through."""
     answer_with(crewless, CLEAR)
     assert go(crewless, *ask_argv()) == 0
-    first = capsys.readouterr().out.strip().split()[-1]
+    first = qid_of(capsys.readouterr().out)
     before = (crewless / "board.json").read_bytes()
     reads = (crewless / "reader-calls.jsonl").read_bytes()
-    assert go(crewless, *ask_argv()) == 1
+    assert (
+        go(crewless, *ask_argv(**{"--ask": "Should checkout go live for everyone tonight?"})) == 1
+    )
     err = capsys.readouterr().err
     assert f"refused: {first} on PROJ-12 (cause prod) is still open" in err
     assert f"--replace {first}" in err
@@ -3477,12 +3638,13 @@ def test_a_second_question_with_the_same_cause_on_an_open_key_is_refused_before_
 def test_another_cause_on_an_open_key_warns_and_replace_takes_the_first_off(crewless, capsys):
     answer_with(crewless, CLEAR)
     assert go(crewless, *ask_argv()) == 0
-    first = capsys.readouterr().out.strip().split()[-1]
-    assert go(crewless, *ask_argv(**{"--cause": "plan"})) == 0
+    first = qid_of(capsys.readouterr().out)
+    plan = {"--cause": "plan", "--ask": "Is the checkout plan ready to build?"}
+    assert go(crewless, *ask_argv(**plan)) == 0
     out = capsys.readouterr()
     assert f"warning: {first} on PROJ-12 is still open" in out.err
-    second = out.out.strip().split()[-1]
-    assert go(crewless, *ask_argv(**{"--cause": "plan"}), "--replace", second) == 0
+    second = qid_of(out.out)
+    assert go(crewless, *ask_argv(**plan), "--replace", second) == 0
     out = capsys.readouterr()
     queue_ids = [q["id"] for q in board_of(crewless)["owner_queue"]]
     assert second not in queue_ids and first in queue_ids
@@ -3502,7 +3664,7 @@ def test_replace_of_a_question_on_another_key_is_refused(crewless, capsys):
     """Claude Review on #201: a mistyped id never drops an unrelated question."""
     answer_with(crewless, CLEAR)
     assert go(crewless, *ask_argv()) == 0
-    first = capsys.readouterr().out.strip().split()[-1]
+    first = qid_of(capsys.readouterr().out)
     assert go(crewless, *ask_argv(**{"--key": "PROJ-13"}), "--replace", first) == 1
     assert f"--replace {first}: that question is on 'PROJ-12', not 'PROJ-13'" in (
         capsys.readouterr().err
@@ -3531,7 +3693,7 @@ def test_distinct_lets_another_question_on_the_same_key_and_cause_through(crewle
     and had to go onto another key."""
     answer_with(crewless, CLEAR)
     assert go(crewless, *ask_argv()) == 0
-    first = capsys.readouterr().out.strip().split()[-1]
+    first = qid_of(capsys.readouterr().out)
     assert go(crewless, *ask_argv(**{"--ask": "Other step: may the delta run tonight?"})) == 1
     assert "add `--distinct`" in capsys.readouterr().err
     assert (
