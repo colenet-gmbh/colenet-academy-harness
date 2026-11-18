@@ -1,0 +1,17 @@
+diff --git a/tests/test_client.py b/tests/test_client.py
+index 4d2a1c0..7b9e3f2 100644
+--- a/tests/test_client.py
++++ b/tests/test_client.py
+@@ -30,6 +30,12 @@ def test_parse_returns_none_for_empty_bodies(status: int) -> None:
+     response = httpx.Response(status, content=b"")
+     assert parse(response) is None
+
++
++def test_parse_returns_none_on_204() -> None:
++    # Review finding: parse() must not dereference the empty body of a 204.
++    response = httpx.Response(204, content=b"")
++    assert parse(response) is None
++
+
+ def test_parse_reads_the_forecast() -> None:
+     response = httpx.Response(200, json={"temp": 21})

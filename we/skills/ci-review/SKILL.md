@@ -34,6 +34,7 @@ A skip is legitimate only when one of these holds:
 - the finding is factually wrong, and you cite the line that falsifies it;
 - the fix would break existing behaviour;
 - the finding is a pre-existing pattern moved 1:1 and fixing it belongs to another story.
+- the finding asks for one more test of a behaviour an existing test already asserts, and you cite that test.
 
 "The framework handles this", with no citation, is not a skip.
 
@@ -134,6 +135,7 @@ Findings table: `| # | Source | Bot? | Severity | File:Line | Issue | Thread ID 
 
 - A fix round starts when all reviews and required checks of the head concluded or are red; a check still running holds the push (§ 4).
 - Collect every fix before the one commit.
+- The proof of a fix is an assertion in the existing test of that behaviour (`${CLAUDE_PLUGIN_ROOT}/references/test-economy.md`); a new test only when no test reaches the behaviour.
 - A finding about lost or stuck state (a draft, a lock, a selection) names one path, and its neighbours fail the same
   way: list every transition of that state (load, reload, save, add, edit, remove, move, cancel, conflict), fix all of
   them in this round, and put the list in the report. Bad: fix the move the review named, the next review finds the

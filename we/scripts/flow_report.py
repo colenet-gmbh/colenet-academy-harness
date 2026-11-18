@@ -27,6 +27,9 @@ Sources (read only; the script holds no credential):
 - The question log ``<board stem>-questions.jsonl`` joined with ``<stem>-answers.jsonl`` by ``id``
   (``docs/board.md`` § Asking), and ``brakes.jsonl`` in the crew's state directory.
 - ``lens_verdict.rounds`` for the Ready rounds of every key in the repo's severity log.
+- The ``Tests:`` line ``test-delta.py`` writes into a PR body: new test functions and cases per
+  merged code PR. An escape is a story's move out of Done in the window; its class comes from the
+  risk labels of the key's merged code PRs (``routine`` without one).
 
 A row whose source is missing prints ``n/a (<source> not found)``, never a zero. Exit 0 whenever a
 table is printed, 2 on a usage error.
@@ -69,7 +72,7 @@ query($q: String!, $after: String) {
     issueCount
     pageInfo { hasNextPage endCursor }
     nodes { ... on PullRequest {
-      number title headRefName state isDraft createdAt mergedAt
+      number title body headRefName state isDraft createdAt mergedAt
       labels(first: 30) { nodes { name } }
       files(first: 100) { totalCount nodes { path } }
       timelineItems(first: 100, itemTypes: [PULL_REQUEST_COMMIT, HEAD_REF_FORCE_PUSHED_EVENT]) {
@@ -307,7 +310,21 @@ def shape_pr(pr: dict, suites: dict) -> dict:
         "labels": [n["name"] for n in (pr.get("labels") or {}).get("nodes") or []],
         "docs_only": docs_only,
         "heads": heads,
+        "tests": tests_line(pr.get("body") or ""),
     }
+
+
+TESTS_LINE = re.compile(
+    r"^Tests: \+(\d+) / -(\d+)(?: functions, \+(\d+) / -(\d+) cases)?", re.MULTILINE
+)
+
+
+def tests_line(body: str) -> tuple | None:
+    """(new functions, new cases or None) from the PR body's `Tests:` line (`test-delta.py`)."""
+    found = TESTS_LINE.search(body)
+    if not found:
+        return None
+    return int(found.group(1)), int(found.group(3)) if found.group(3) else None
 
 
 def story_key(pr: dict, pattern: str) -> str | None:
@@ -438,7 +455,65 @@ def github_rows(prs: list, since: datetime, review_match: str, src: str) -> list
             source=f"{src}: labels T0-T3, one-way, risk*",
         )
     )
+
+    lines = [p["tests"] for p in merged_code if p.get("tests")]
+    funcs = [f for f, _ in lines]
+    cases = [c for _, c in lines if c is not None]
+    rows.append(
+        row(
+            "New tests per code PR",
+            len(funcs),
+            med(funcs),
+            p90(funcs),
+            unit="functions",
+            value=f"cases median {_num(med(cases))}, p90 {_num(p90(cases))} (n {len(cases)})",
+            source=f"{src}: the Tests: line of merged code PRs (test-delta.py)",
+        )
+    )
     return rows
+
+
+def story_class(key: str, prs: list, pattern: str) -> str:
+    """The risk class of a story from its merged code PRs: one-way wins, else the first class
+    label, else `routine`."""
+    found = [
+        risk_class(p["labels"])
+        for p in prs
+        if p["merged"] and not p["docs_only"] and story_key(p, pattern) == key
+    ]
+    found = [c for c in found if c]
+    one_way = [c for c in found if "one-way" in c.lower()]
+    return (one_way or found or ["routine"])[0]
+
+
+def escape_row(transitions: list, prs: list, pattern: str, since, until, src: str) -> dict:
+    """Stories moved out of Done in the window (an escape), per risk class, over the stories
+    that reached Done in it: a rise on routine paths means the test rule is too tight."""
+    by_key: dict = defaultdict(list)
+    for r in transitions:
+        ts = parse_ts(r.get("ts"))
+        if isinstance(r.get("key"), str) and ts and isinstance(r.get("to"), str):
+            by_key[r["key"]].append((ts, r["to"]))
+    escapes: Counter = Counter()
+    done: Counter = Counter()
+    for key, items in by_key.items():
+        items.sort(key=lambda x: x[0])
+        cls = None
+        for i, (ts, to) in enumerate(items):
+            if not (since <= ts <= until):
+                continue
+            cls = cls or story_class(key, prs, pattern)
+            if to == "done":
+                done[cls] += 1
+            elif i and items[i - 1][1] == "done":
+                escapes[cls] += 1
+    order = sorted(set(done) | set(escapes), key=lambda c: (c == "routine", c))
+    return row(
+        "Escapes after Done by risk class",
+        sum(escapes.values()),
+        value=" · ".join(f"{c} {escapes[c]}/{done[c]}" for c in order) or "no Done in the window",
+        source=f"{src}: moves out of Done / Done, class from the key's merged code PRs",
+    )
 
 
 def prs_per_story(prs: list, since: datetime, pattern: str, src: str) -> dict:
@@ -853,6 +928,11 @@ def build(args, now: datetime, cwd: Path, run: Runner | None = None) -> dict:
             board_why = f"{tpath.name} not found"
     if transitions is not None:
         rows += board_rows(transitions, prs, pattern, since, now, tpath.name, gh_why)
+        rows.append(
+            escape_row(transitions, prs, pattern, since, now, f"{tpath.name} + {src}")
+            if prs is not None
+            else na("Escapes after Done by risk class", gh_why or "gh not found")
+        )
     else:
         for name in (
             "Lead time Selected → Done",
@@ -860,6 +940,7 @@ def build(args, now: datetime, cwd: Path, run: Runner | None = None) -> dict:
             "Stock now (age of In Review)",
             "Mismatch: merged PR, story before In Review",
             "Mismatch: In Progress without open PR",
+            "Escapes after Done by risk class",
         ):
             rows.append(na(name, board_why))
 
@@ -874,6 +955,7 @@ def build(args, now: datetime, cwd: Path, run: Runner | None = None) -> dict:
             "Review red per PR",
             "CI cancelled share",
             "Code PRs by risk class",
+            "New tests per code PR",
             "PRs per story",
         ):
             rows.append(na(name, gh_why))

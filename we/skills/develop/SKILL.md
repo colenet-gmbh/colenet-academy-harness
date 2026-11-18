@@ -47,8 +47,10 @@ phase:
 
 1. Tests per the brief's test discipline; brief silent → `test_discipline` in `.weside/config.json`
    (`tdd`: failing test first at each seam · `tests-after`, the default: tests after the code, same
-   change · `off`: no new tests unless the plan asks). No implementation-coupled or tautological
-   tests; mock only at system boundaries.
+   change · `off`: no new tests unless the plan asks). Which tests:
+   `${CLAUDE_PLUGIN_ROOT}/references/test-economy.md` — name the defect no existing test catches,
+   else extend the existing test. No implementation-coupled or tautological tests; mock only at
+   system boundaries.
 2. A new field flows end to end, not only into the model.
 3. Regenerate and commit the generated artifacts the brief lists. Leave gate baselines to the Lead.
 4. Commit the phase by path: `<KEY>: phase <N> — <what>` with the `Co-Authored-By:` trailer of the

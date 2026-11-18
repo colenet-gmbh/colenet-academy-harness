@@ -1,0 +1,8 @@
+{
+  "id": "t2-pr7",
+  "answers": {
+    "product": "No product finding on this diff.\n\n```json\n{\"findings\": []}\n```\n",
+    "architecture": "No architecture finding on this diff.\n\n```json\n{\"findings\": []}\n```\n",
+    "acceptance": "One note on the new test.\n\n```json\n{\"findings\": [{\"severity\": \"NOTE\", \"claim\": \"test_parse_returns_none_on_204 asserts what test_parse_returns_none_for_empty_bodies already asserts for status 204; the finding belongs as an assertion there, or needs nothing.\", \"where\": \"tests/test_client.py:34\", \"question\": \"Does a new test assert what an existing test already asserts?\"}]}\n```\n"
+  }
+}

@@ -329,5 +329,6 @@ code graph: <symbol> → <n> callers … | not needed (<reason>)   (when the bri
 review: code-review high <found> found · <fixed> fixed · <skipped> skipped (<why>) | none (not critical)
 finish sequence: done|not ordered · verification: <oracle + receipt location>|not ordered
 retired: <old test> → <new-seam test> …   (refactor chunks; none|<reason> when nothing retired)
+tests: +<N> new functions, +<C> cases, extended: <k>, slowest new: <test (s)>|n/a   (N and C from `scripts/test-delta.py <base>`; k = existing tests that took the assertion; references/test-economy.md)
 overrides: … · skipped: … · questions: … · blockers: none|<reason>
 ```

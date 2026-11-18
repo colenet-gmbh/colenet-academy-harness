@@ -1,4 +1,5 @@
-"""test-delta.py: the PR body's test line counts definitions from the merge base, moves cancel.
+"""test-delta.py: the PR body's test line counts definitions and cases from the merge base, moves
+cancel; ratio, table and slow marks, and the per-file risk lift.
 
 Run: `python3 -m pytest -q we/scripts/test_test_delta.py`
 """
@@ -6,6 +7,7 @@ Run: `python3 -m pytest -q we/scripts/test_test_delta.py`
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -71,12 +73,105 @@ def test_counts_added_and_removed_and_cancels_moves(tmp_path: Path) -> None:
     )
     out = _run(repo, "main")
     assert out.returncode == 0, out.stderr
-    assert out.stdout.strip() == "Tests: +4 / -1 (net +3)"
+    assert out.stdout.strip() == (
+        "Tests: +4 / -1 functions, +4 / -1 cases, slow new: n/a · ratio n/a (no code lines)"
+        " · risk paths unknown (`git fetch origin main` failed)"
+    )
 
 
-def test_render_signs() -> None:
-    assert delta.render(0, 0) == "Tests: +0 / -0 (net ±0)"
-    assert delta.render(1, 4) == "Tests: +1 / -4 (net -3)"
+def test_render_and_the_ratio_mark() -> None:
+    assert delta.render(0, 0) == "Tests: +0 / -0 functions, +0 / -0 cases, slow new: n/a"
+    assert delta.render(1, 4, 9, 4, "none", ["ratio 0.5"]) == (
+        "Tests: +1 / -4 functions, +9 / -4 cases, slow new: none · ratio 0.5"
+    )
+    assert delta.ratio_part(30, 20, 1.5) == "ratio 1.5"
+    assert delta.ratio_part(31, 20, 1.5) == "ratio 1.6 > 1.5: say why"
+
+
+def test_cases_multiply_tables_and_a_class_table() -> None:
+    src = (
+        "import pytest\n"
+        "@pytest.mark.parametrize('a', [1, 2, 3])\n"
+        "@pytest.mark.parametrize('b', (1, 2))\n"
+        "def test_grid(a, b): pass\n"
+        "@pytest.mark.parametrize('c', CASES)\n"
+        "def test_named(c): pass\n"
+        "@pytest.mark.parametrize('d', [1, 2])\n"
+        "class TestK:\n"
+        "    @pytest.mark.parametrize(argnames='e', argvalues=[1, 2, 3, 4])\n"
+        "    def test_e(self, e): pass\n"
+    )
+    assert delta.cases_of(src) == {"test_grid": (6, 3), "test_named": (1, 1), "test_e": (8, 4)}
+    assert delta.cases_of("def test_x(:\n") is None
+
+
+RULES = "[money]\npath app/billing/**\n"
+TABLE = (
+    "import pytest\n\n\n@pytest.mark.parametrize('n', [{rows}])\n"
+    "def test_{name}(n):\n    assert n\n"
+)
+
+
+def test_risk_files_lift_per_file_and_slow_new_from_junit(tmp_path: Path) -> None:
+    """A risk-path file and a no_cap_paths file leave the ratio and the table mark; the other
+    tests of the same PR stay capped. An excluded path counts nowhere."""
+    origin, repo = tmp_path / "origin.git", tmp_path / "r"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    config = {
+        "tests": {
+            "max_ratio": 1.0,
+            "no_cap_paths": ["tests/auth/**"],
+            "exclude_paths": ["tests/archive/**"],
+        }
+    }
+    _commit(
+        repo,
+        {
+            ".weside/risk-paths": RULES,
+            ".weside/config.json": json.dumps(config),
+            "app/core.py": "x = 1\n",
+        },
+        "base",
+    )
+    subprocess.run(["git", "clone", "-q", "--bare", str(repo), str(origin)], check=True)
+    _git(repo, "remote", "add", "origin", str(origin))
+    _git(repo, "fetch", "-q", "origin")
+    _git(repo, "checkout", "-qb", "feat")
+    rows = ", ".join(str(i) for i in range(8))
+    _commit(
+        repo,
+        {
+            "app/billing/charge.py": "".join(f"a{i} = {i}\n" for i in range(20)),
+            "app/billing/test_charge.py": TABLE.format(rows=rows, name="amounts"),
+            "tests/auth/test_roles.py": TABLE.format(rows=rows, name="roles"),
+            "tests/test_core.py": TABLE.format(rows=rows, name="core"),
+            "tests/archive/test_old.py": TABLE.format(rows=rows, name="old"),
+            "app/core.py": "x = 1\ny = 2\n",
+        },
+        "feat",
+    )
+    junit = tmp_path / "junit.xml"
+    junit.write_text(
+        '<testsuite><testcase classname="tests.test_core" name="test_core[0]" time="2.5"/>'
+        '<testcase classname="tests.test_core" name="test_core[1]" time="0.2"/>'
+        '<testcase classname="app.billing" name="test_amounts[3]" time="0.4"/>'
+        '<testcase classname="tests.test_x" name="test_untouched" time="9"/></testsuite>'
+    )
+    out = subprocess.run(
+        [sys.executable, str(SCRIPT), "origin/main", "--junit", str(junit)],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == (
+        "Tests: +3 / -0 functions, +24 / -0 cases, slow new: test_core (2.5 s)"
+        " · ratio 4.0 > 1: say why · tables > 5: tests/test_core.py::test_core (8): say why"
+        " · risk path: no cap: app/billing/charge.py, app/billing/test_charge.py,"
+        " tests/auth/test_roles.py"
+    )
 
 
 def test_bad_base_fails_with_message(tmp_path: Path) -> None:

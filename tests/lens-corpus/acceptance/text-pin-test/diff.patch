@@ -1,0 +1,19 @@
+diff --git a/tests/test_docs.py b/tests/test_docs.py
+new file mode 100644
+index 0000000..5c1d2e9
+--- /dev/null
++++ b/tests/test_docs.py
+@@ -0,0 +1,13 @@
++"""The client docs stay in step with the client."""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++DOC = Path(__file__).resolve().parents[1] / "docs" / "client.md"
++
++
++def test_retry_doc_mentions_three_attempts() -> None:
++    text = DOC.read_text(encoding="utf-8")
++    assert "retries three times" in text
++    assert "Retry-After" in text

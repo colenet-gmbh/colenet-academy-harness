@@ -83,7 +83,10 @@ Answering the fork deletes the section.>
 
 ## Testing Requirements
 
-- <Per AC, at the repo's `test_discipline` level: the runnable suite, the database, the phase.>
+- <At most one test per AC plus the edge cases the plan names, at the repo's `test_discipline` level
+  and the cheapest stage that can fail (references/test-economy.md): `extend <existing test>` or
+  `new <name>: <the defect no existing test catches>`, its suite, the database, the phase. A file on
+  a risk path names every boundary, role and amount.>
 
 ## Verification
 
@@ -208,7 +211,8 @@ nested bullets and wrapped lines included):
   detail. The first part must start with one; a later part that starts with no class token
   continues the detail before it (`[ci: test_x.py; staging cannot see it]`). Any other token in
   that place is an unknown class.
-- `ci` needs a detail: the test, and why staging cannot see it.
+- `ci` needs a detail: the test, and why staging cannot see it. The test may be an existing one the
+  build extends (`[ci: extend test_x.py::test_y; staging cannot see it]`).
 - `walk` needs a detail whose `·`-separated fields hold the persona and the screen; a field
   `why: <sentence>` says why a person walks a change outside the walk paths.
 - `receipt` may say `boundary` (a server-boundary AC, judged against the mock-bound persona) or
