@@ -739,6 +739,10 @@ def brake_log(cwd: str | Path | None, record: dict) -> Path | None:
       `deny`  (the worker rights gate): `gate`, `item` (the never-list item or the failed right),
               `name`, `key`, `session_id`, `argv0` (the first word of the command; never the
               command itself, which may carry a secret value)
+      `card`  (a card worker's verdict, written by its starter where it posts it; `main` below):
+              `verdict` (`PASS` or `BLOCKING`), `pr`
+      `outcome` (added later by the starter): `kind` (the line's type it judges, e.g. `card`),
+              `pr`, `danger` (`yes`: the danger it is built against was there; `no`: a false alarm)
     One line per event, so a brake's false alarms can be counted.
 
     `WE_STATE_FORBIDDEN` (directories, `os.pathsep`-separated; the test run's `conftest.py` sets
@@ -880,3 +884,52 @@ def worker_env(key: str, environ: Any = None) -> dict:
     if env.get("WE_HUMAN"):
         doc["WE_HUMAN"] = env["WE_HUMAN"]
     return doc
+
+
+# ---------------------------------------------------------------- the brake log CLI
+
+CARD_OVERALL = re.compile(r"^\**Overall:\s*(PASS|BLOCKING)\b", re.MULTILINE)
+
+
+def main(argv: list[str]) -> int:
+    """`worker_rights.py brake card --pr <ref> --file <verdict file>`: one `card` line, the verdict
+    read from the file's last `Overall:` line; `worker_rights.py brake outcome --pr <ref> --kind
+    <type> --danger yes|no`: one `outcome` line. Prints the log's path; exit 2 on a bad call or a
+    file without a verdict, 1 when nothing was written."""
+    import argparse  # noqa: PLC0415
+
+    parser = argparse.ArgumentParser(prog="worker_rights.py")
+    verbs = parser.add_subparsers(dest="noun", required=True)
+    brake = verbs.add_parser("brake").add_subparsers(dest="verb", required=True)
+    card = brake.add_parser("card")
+    card.add_argument("--pr", required=True)
+    card.add_argument("--file", required=True, type=Path)
+    outcome = brake.add_parser("outcome")
+    outcome.add_argument("--pr", required=True)
+    outcome.add_argument("--kind", required=True)
+    outcome.add_argument("--danger", required=True, choices=("yes", "no"))
+    args = parser.parse_args(argv)
+    if args.verb == "card":
+        try:
+            found = CARD_OVERALL.findall(args.file.read_text(encoding="utf-8"))
+        except OSError as exc:
+            print(f"worker_rights: {exc}", file=sys.stderr)
+            return 2
+        if not found:
+            print(
+                f"worker_rights: {args.file} has no `Overall: PASS|BLOCKING` line", file=sys.stderr
+            )
+            return 2
+        record = {"type": "card", "verdict": found[-1], "pr": args.pr}
+    else:
+        record = {"type": "outcome", "kind": args.kind, "pr": args.pr, "danger": args.danger}
+    out = brake_log(None, record)
+    if out is None:
+        print("worker_rights: no line written", file=sys.stderr)
+        return 1
+    print(out)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

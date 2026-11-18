@@ -195,3 +195,21 @@ def test_the_generic_crew_renders_no_security_routing():
     assert "also waits for" not in card
     assert "owns its label" not in l0
     assert "signs `trust-loosening`" not in l0
+
+
+@pytest.mark.parametrize(
+    ("name", "fixture"),
+    [
+        ("card-blocking-after-merge", SECURITY_FIXTURE),
+        ("merge-stop-before-arm", GENERIC_FIXTURE),
+    ],
+)
+def test_the_merge_cases_route_on_a_line_the_rendered_l0_carries(name, fixture):
+    """A card verdict after the merge becomes a fix story; a merge stop on the board holds the arm.
+    Both routes must be satisfiable by the L0 the master reads with the case's crew."""
+    case = REPO / "tests" / "coldstart" / "master" / f"{name}.yaml"
+    top = {k: v.strip() for k, v in TOP.findall(case.read_text(encoding="utf-8"))}
+    assert top["crew"] == fixture
+    [route] = ROUTE.findall(case.read_text(encoding="utf-8"))
+    l0, _ = _rendered(fixture)
+    assert re.search(route, " ".join(l0.split()))

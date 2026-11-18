@@ -2,6 +2,7 @@
 """Close the optimization inbox entries that settled themselves: the first step of `/we:optimize`.
 
 Usage: optimization_close.py [--store <dir>] [--config <file>] [--prs-json <file>] [--today YYYY-MM-DD]
+                             [--expire-all-before YYYY-MM-DD]
 
 For every open entry in `<store>/inbox/` (default `.weside/optimization`; format:
 `references/optimization-store.md` § Inbox entry), in this order:
@@ -14,11 +15,15 @@ For every open entry in `<store>/inbox/` (default `.weside/optimization`; format
            entry's `retro` evidence lines, `after` pending, `review_by` today plus
            `optimization.review_days` (default 30)
   expired  the entry has fewer than two evidence lines and its first-seen date (the file name's) is
-           `optimization.expire_days` (default 14) or more days old: a ledger row `expired`
+           `optimization.expire_days` (default 14) or more days old; with `--expire-all-before`,
+           also every entry first seen before that date, whatever its evidence (the old stock in
+           one run, no review): a ledger row `expired`
   open     anything else: left for the decider
 
-A closed entry's row goes on top of `LEDGER.md`'s table (created with its header when absent) and
-its inbox file is deleted; the caller commits both with the rest of the run. Merged PRs come from
+A closed entry's row goes on top of `LEDGER.md`'s table (created with its header when absent). An
+applied entry's inbox file is deleted; an expired one moves to `inbox/expired/`, where it stays
+readable and `retro_write.py` revives it (back to `inbox/`, open) on a new evidence line under its
+key. The caller commits all of it with the rest of the run. Merged PRs come from
 `gh pr list --state merged --limit 200 --json number,title,body,url,mergedAt,files` run in the store's repo, or
 from `--prs-json` (the same JSON). Prints one line per closed entry (`applied <key> · <url>`,
 `expired <key> · <n> days, <m> evidence line(s)`) and a final `closed <a> applied, <e> expired,
@@ -41,6 +46,7 @@ HEADER = (
 )
 EXPIRE_DAYS = 14
 REVIEW_DAYS = 30
+EXPIRED = "expired"  # the inbox subfolder of expired entries; retro_write.py revives from it
 _NAME = re.compile(r"^(\d{4}-\d{2}-\d{2})-(.+)\.md$")
 _FIELD = re.compile(r"^(?P<k>[a-z_]+):\s*(?P<v>.*?)\s*(?:#.*)?$")
 
@@ -159,7 +165,12 @@ def add_rows(ledger: Path, rows: list[str]) -> None:
 
 
 def close(
-    store: Path, prs: list[dict], today: datetime.date, expire_days: int, review_days: int
+    store: Path,
+    prs: list[dict],
+    today: datetime.date,
+    expire_days: int,
+    review_days: int,
+    expire_before: datetime.date | None = None,
 ) -> list[str]:
     inbox = store / "inbox"
     if not inbox.is_dir():
@@ -199,7 +210,8 @@ def close(
             path.unlink()
             continue
         age = (today - seen).days if seen else None
-        if seen is not None and len(lines) < 2 and age >= expire_days:
+        stock = seen is not None and expire_before is not None and seen < expire_before
+        if stock or (seen is not None and len(lines) < 2 and age >= expire_days):
             rows.append(
                 row(
                     today,
@@ -215,7 +227,8 @@ def close(
             )
             out.append(f"expired {key} · {age} days, {len(lines)} evidence line(s)")
             counts["expired"] += 1
-            path.unlink()
+            (inbox / EXPIRED).mkdir(exist_ok=True)
+            path.replace(inbox / EXPIRED / path.name)
             continue
         counts["open"] += 1
     if rows:
@@ -232,6 +245,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", type=Path)
     parser.add_argument("--prs-json", type=Path)
     parser.add_argument("--today")
+    parser.add_argument("--expire-all-before", metavar="YYYY-MM-DD")
     args = parser.parse_args(argv)
     try:
         today = (
@@ -244,7 +258,10 @@ def main(argv: list[str] | None = None) -> int:
         if not (args.store / "inbox").is_dir():
             raise CloseError(f"{args.store / 'inbox'}: no inbox")
         prs = merged_prs(args.store, args.prs_json)
-        for line in close(args.store, prs, today, expire_days, review_days):
+        before = (
+            datetime.date.fromisoformat(args.expire_all_before) if args.expire_all_before else None
+        )
+        for line in close(args.store, prs, today, expire_days, review_days, before):
             print(line)
     except (CloseError, ValueError, OSError) as exc:
         print(f"optimization_close: {exc}", file=sys.stderr)
