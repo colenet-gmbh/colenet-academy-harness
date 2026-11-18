@@ -13,6 +13,7 @@
 # A merged or closed PR leaves the set silently. Re-arm after the owner pushed the merge.
 # The repo is resolved once and the loop runs from the repo's main checkout (gh_anchor.sh: a removed
 # worktree does not break it, a per-directory gh account holds).
+# Start it from the main checkout as well (references/session-traps.md § CI and checks).
 # Env: WATCH_INTERVAL (s, default 180), WATCH_MAX_ERRORS (default 10), WATCH_MAX_LIFETIME (s,
 # default 21600 = 6 h).
 set -uo pipefail

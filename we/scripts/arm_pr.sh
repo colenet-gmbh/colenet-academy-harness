@@ -22,8 +22,10 @@
 # it. Anywhere else a stderr note says it was not classified: the caller's class (`/we:master`
 # § Close the run) stays the one-way gate.
 #
-# One final line and its exit code:
+# One verdict line and its exit code:
 #   armed: auto-merge on <sha> (<method>)                                        exit 0
+#     then one more line, what the merge waits for: `pending: <names>` (the head's required checks
+#     still running or not yet registered), `pending: none`, or `pending: unknown (<error>)`
 #   gh failed: <error>                                                           exit 2  (also usage)
 #   ready: all required checks green on <sha> — merge: gh pr merge <PR> --<method> --match-head-commit <sha>
 #                                                                                exit 3
@@ -111,10 +113,28 @@ required_names() {  # the base branch's required check names (required_checks.sh
   REQUIRED=$("$HERE/required_checks.sh" --repo "$REPO" "$BASE") || { echo "$REQUIRED"; exit 2; }
 }
 
+pending_line() {  # after `armed:`: the head's required checks still pending, by name; never exits
+  local names name v req pending=""
+  names=$REQUIRED
+  if [ -z "$names" ]; then
+    names=$("$HERE/required_checks.sh" --repo "$REPO" "$BASE") || { echo "pending: unknown (${names#gh failed: })"; return 0; }
+  fi
+  while IFS=$'\t' read -r v req name; do  # a check GitHub marks required for this PR counts too
+    [ "$req" = true ] && [ -n "${name:-}" ] && names="$names"$'\n'"$name"
+  done <<<"$CHECKS"
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    v=$(awk -F'\t' -v n="$name" '$3 == n { print $1 }' <<<"$CHECKS")
+    case "$v" in ""|*pending*) pending="$pending, $name" ;; esac
+  done < <(sed '/^$/d' <<<"$names" | sort -u)
+  pending=${pending#, }
+  echo "pending: ${pending:-none}"
+}
+
 arm() {  # 0 armed (exits), 1 GitHub calls the PR clean, exits on any other answer
   local out
   if out=$(gh api graphql -f query="$ARM" -f id="$ID" -f sha="$SHA" -f method="$(tr "[:lower:]" "[:upper:]" <<<"$METHOD")" 2>&1); then
-    echo "armed: auto-merge on $SHA ($METHOD)"; exit 0
+    echo "armed: auto-merge on $SHA ($METHOD)"; pending_line; exit 0
   fi
   if grep -qiE 'is in (clean|unstable) status' <<<"$out"; then return 1; fi
   read_pr  # a head that moved since the read refuses here, with both SHAs

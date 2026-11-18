@@ -10,6 +10,7 @@ from pathlib import Path
 
 import context_load as cl
 import crew as crewlib
+import pytest
 import render_process
 
 HERE = Path(__file__).parent
@@ -95,6 +96,28 @@ def test_worker_table_sums_the_gate_count_plus_memory_and_transcript_sizes(
     assert "transcript: s1.jsonl" in out
     for text in ("MEMORY-TEXT", "SYSTEM-TEXT", "TOOL-TEXT", "SSSS"):
         assert text not in out, text
+
+
+@pytest.mark.parametrize(
+    "context, cells",
+    [
+        ({"auto_memory": "off"}, [cl.MEMORY_OFF, "0"]),
+        ({}, [cl.MEMORY_OFF, "0"]),  # the launcher's default inside the block
+        ({"auto_memory": "own"}, [cl.MEMORY_OWN, "n/a"]),
+        (None, ["disk", f"{len('MEMORY-TEXT') + len(FROM_MEMORY) + 2:,}"]),
+    ],
+)
+def test_worker_memory_row_follows_workers_context(tmp_path, monkeypatch, capsys, context, cells):
+    """A worker started with auto-memory off loads no MEMORY.md: the row must not count its size."""
+    repo, home = world(tmp_path, monkeypatch)
+    if context is not None:
+        (repo / ".weside" / "config.json").write_text(
+            json.dumps({"workers": {"context": context}})
+        )
+    out = run(repo, home, capsys).out
+    [row] = [x for x in out.splitlines() if x.startswith("MEMORY.md ")]
+    assert [c.strip() for c in row.split("  ") if c.strip()][1:3] == cells, row
+    assert out.rstrip().endswith(cl.FOOTER)
 
 
 def test_without_a_transcript_the_parts_read_na_and_the_sum_is_a_floor(

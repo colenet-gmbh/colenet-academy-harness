@@ -120,6 +120,11 @@ and an optional `{report}`, or `"none"` (`${CLAUDE_PLUGIN_ROOT}/scripts/plan_pus
 `plans.short_max_files` (default 3) caps the files of a short-form plan (`${CLAUDE_PLUGIN_ROOT}/references/story-plan.md`
 § Short form); write it only when the user names another limit.
 
+`flow.construction_checks` (a list, default empty) names required checks that are red by construction until a release
+commit (a version check); `${CLAUDE_PLUGIN_ROOT}/scripts/flow_report.py` shows them on a row of
+their own, outside the red-head totals. Write it only when the repo has such a check. The crew's
+`flow` block (log, sampler) is another file's (`${CLAUDE_PLUGIN_ROOT}/scripts/crew.py`).
+
 `agents.worker_launch` is a command template that starts each dev worker as a session of its own
 (`${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md` § Worker launch backend), for a repo without a
 crew; `"subagent"` (shown above) is its default. A repo with a crew gets one in the crew's

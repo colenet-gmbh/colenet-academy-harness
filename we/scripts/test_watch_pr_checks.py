@@ -85,6 +85,7 @@ def run(
         + _queue(tmp_path, "comments", list(comments))
         + "; else "
         + _queue(tmp_path, "views", answers)
+        + '; [ -n "$GH_RM_ON_MERGED" ] && grep -q MERGED "$f" && rm -rf "$GH_RM_ON_MERGED"'
         + "; fi\n"
         '[ "$(cat "$f")" = FAIL ] && { echo "GraphQL: Could not resolve to a PullRequest" >&2; exit 1; }\n'
         # gh's --jq is jq; the stub delegates to the jq binary.
@@ -326,6 +327,17 @@ def test_from_a_worktree_gh_runs_in_the_main_checkout(tmp_path):
     assert calls[0] == f"{main} | repo view ", calls
     assert all(c.startswith(f"{main} | ") for c in calls[1:]), calls
     assert all(" -R o/r " in c for c in calls[1:] if " api rate_limit " not in c), calls
+
+
+def test_a_merge_that_removes_the_start_worktree_still_exits_0(tmp_path):
+    """`/we:merged` removes the tree the watcher started in: the merge stays the good end."""
+    _, wt = make_worktree(tmp_path, "git@github.com:acme/app.git")
+    merged = {**_green(), "state": "MERGED"}
+    code, out = run(
+        tmp_path, [_pending(_green()), merged], cwd=wt, env_extra={"GH_RM_ON_MERGED": str(wt)}
+    )
+    assert not wt.exists()
+    assert (code, out) == (0, [f"final {SHA}: merged"])
 
 
 @pytest.mark.parametrize(

@@ -423,7 +423,8 @@ def test_story_key_prefers_the_title_and_upper_cases_a_branch_key():
 
 
 def test_required_checks_red_heads_by_outcome(tmp_path):
-    rows, _ = report(repo(tmp_path))
+    root = repo(tmp_path)
+    rows, _ = report(root)
     r = rows["Required checks: red heads"]
     # Lint: #1 a1 fixed on a2, #3 c1 (timed out) fixed on c2, #4 d1 open; b1's cancel is no red.
     # Claude Review: #1 a1 rerun green on a1, #5 e1 a red status open; Docs is not required.
@@ -435,6 +436,20 @@ def test_required_checks_red_heads_by_outcome(tmp_path):
     assert r["value"] == (
         "Claude Review 2 (fixed 0, rerun green 1, open 1) · Lint 3 (fixed 2, rerun green 0, open 1)"
     )
+    assert fr.CONSTRUCTION_ROW not in rows
+
+    # A check red by construction (a version check) gets its own row, outside the totals.
+    (root / ".weside").mkdir(exist_ok=True)
+    (root / ".weside" / "config.json").write_text(
+        json.dumps({"flow": {"construction_checks": ["Lint", "Not Required"]}}), encoding="utf-8"
+    )
+    rows, out = report(root)
+    r = rows["Required checks: red heads"]
+    assert (r["n"], r["checks"]) == (2, {"Claude Review": {"rerun green": 1, "open": 1}})
+    built = rows[fr.CONSTRUCTION_ROW]
+    assert (built["n"], built["value"]) == (3, "Lint 3 by construction")
+    names = [x["row"] for x in out["rows"]]
+    assert names.index(fr.CONSTRUCTION_ROW) == names.index("Required checks: red heads") + 1
 
 
 def test_required_checks_na_without_required_checks_or_reader(tmp_path):
