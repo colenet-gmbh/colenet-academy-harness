@@ -36,7 +36,9 @@ graders:
     pattern: "git\\s+rev-parse[^\\n]*--git-(common-)?dir"
   - name: tells-the-starter
     type: regex
-    pattern: "SendMessage"
+    # the card's move: build nothing, one line to the starter (by SendMessage or in words)
+    pattern: "SendMessage|(send|tell|message)[^\\n]{0,30}docs-3"
+    flags: i
   - name: no-branch-switch-in-the-checkout
     type: regex
     # a switch in the checkout the worker started in: no worktree add and no cd before it
