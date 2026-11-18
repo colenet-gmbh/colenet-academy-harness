@@ -163,7 +163,10 @@ file stays rights and `env` only. Keys (`worker_launch.py apply_context` owns th
 A brief that needs a tool says so in one line, `Needs: <plugin or MCP server>, …`; when
 `disable_plugins` (by id or bare name) or `deny_mcp_servers` turns one of them off, the start
 refuses (exit 2) and names it, instead of a worker that silently lacks it (`worker_launch.py
-needs`).
+needs`). The same holds for every `/we:<skill>` the brief names: a skill declares its needs in its
+frontmatter (`needs: [<plugin or MCP server>, …]`; `ticketing` is the project's ticketing plugin,
+`references/ticketing.md`), and the refusal names the skill and the plugin. A brief needs no
+`Needs:` line for what its skills declare.
 
 Every variable the launcher decides stands in the file's `env`, a cleared one as `""`
 (`worker_rights.worker_env`): a `--bg` session inherits the daemon's environment, never the

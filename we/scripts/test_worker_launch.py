@@ -951,3 +951,121 @@ def test_capacity_counts_busy_background_sessions_only(cap, env):
     env["state"].write_text(json.dumps([*rows, *rows[5:9], win]))  # 5 companions, 9 + 1 workers
     out = _run("capacity", "--repo", str(env["wt"]), "--prefix", "we-worker")
     assert out.returncode == 3 and "10 workers busy" in out.stderr, out.stderr
+
+
+# --- needs: a skill's frontmatter `needs:` against workers.context ------------------------------
+
+
+def _needs(repo, brief, *extra):
+    return subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "needs",
+            "--repo",
+            str(repo),
+            "--prefix",
+            "we-worker",
+            *extra,
+        ],
+        input=brief,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _config(repo, ticketing=None, disable=(), deny=()):
+    (repo / ".weside").mkdir(exist_ok=True)
+    cfg = {
+        "workers": {"context": {"disable_plugins": list(disable), "deny_mcp_servers": list(deny)}}
+    }
+    if ticketing is not None:
+        cfg["ticketing"] = ticketing
+    (repo / ".weside" / "config.json").write_text(json.dumps(cfg))
+
+
+def test_brief_skills_reads_every_form_once():
+    brief = 'Skill("we:plan-story")\n/we:plan-story then /we:develop; agent we:dev-medium\n'
+    assert wl.brief_skills(brief) == ["plan-story", "develop", "dev-medium"]
+    assert wl.brief_skills("see https://example.org/x/we:pr and wewe:pr") == []
+
+
+def test_the_ticketing_skills_declare_the_need():
+    for skill in ("plan-story", "develop", "merged", "pr", "epic", "master"):
+        assert wl.skill_needs(skill) == ["ticketing"], skill
+    assert wl.skill_needs("grill") == []
+    assert wl.skill_needs("no-such-skill") == []
+
+
+def test_a_named_skill_whose_ticketing_plugin_is_disabled_refuses(env):
+    # key absent, tool mapped (jira → atlassian), the plugin disabled by its id
+    _config(env["wt"], {"tool": "jira"}, disable=["atlassian@claude-plugins-official"])
+    proc = _needs(env["wt"], 'Run Skill("we:plan-story") for KEY-1.\n')
+    assert proc.returncode == 2
+    assert (
+        "/we:plan-story" in proc.stderr
+        and "atlassian (the project's ticketing plugin)" in proc.stderr
+    )
+    assert "disable_plugins turns it off (atlassian@claude-plugins-official)" in proc.stderr
+    assert proc.stderr.startswith("we-worker: ") and "no worker started" in proc.stderr
+
+
+def test_ticketing_plugin_overrides_the_default_map(env):
+    _config(
+        env["wt"],
+        {"tool": "jira", "plugin": "tracker"},
+        disable=["atlassian@claude-plugins-official"],
+    )
+    assert _needs(env["wt"], "/we:develop KEY-1\n").returncode == 0  # the map is not consulted
+    _config(env["wt"], {"tool": "jira", "plugin": ["tracker"]}, disable=["tracker@market"])
+    proc = _needs(env["wt"], "/we:develop KEY-1\n")
+    assert proc.returncode == 2 and "turns it off (tracker@market)" in proc.stderr
+
+
+def test_a_ticketing_server_the_context_denies_refuses(env):
+    _config(env["wt"], {"tool": "jira", "plugin": "tickets"}, deny=["tickets"])
+    proc = _needs(env["wt"], "/we:merged\n")
+    assert proc.returncode == 2
+    assert "deny_mcp_servers turns it off (tickets)" in proc.stderr and "/we:merged" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "ticketing",
+    [{"tool": "github-issues"}, {"tool": "none"}, None],  # unmapped tool, no ticketing, no block
+)
+def test_an_unmapped_ticketing_tool_needs_nothing(env, ticketing):
+    _config(env["wt"], ticketing, disable=["atlassian@claude-plugins-official"])
+    assert _needs(env["wt"], "/we:plan-story\n").returncode == 0
+
+
+def test_a_skill_without_needs_and_a_repo_without_context_pass(env):
+    _config(env["wt"], {"tool": "jira"}, disable=["atlassian@claude-plugins-official"])
+    assert _needs(env["wt"], "/we:grill the plan\n").returncode == 0
+    (env["wt"] / ".weside" / "config.json").write_text(json.dumps({"ticketing": {"tool": "jira"}}))
+    assert _needs(env["wt"], "/we:plan-story\n").returncode == 0
+
+
+def test_a_skill_naming_a_plugin_itself_refuses(env, tmp_path, monkeypatch):
+    skills = tmp_path / "skills"
+    (skills / "grill").mkdir(parents=True)
+    (skills / "grill" / "SKILL.md").write_text(
+        "---\nname: grill\ndescription: x\nneeds: [sentry, 'ticketing']\n---\n# grill\n"
+    )
+    monkeypatch.setattr(wl, "SKILLS_DIR", skills)
+    assert wl.skill_needs("grill", skills) == ["sentry", "ticketing"]
+    _config(env["wt"], deny=["sentry"])
+    with pytest.raises(wl.LaunchError) as refused:
+        wl.check_needs("/we:grill\n", env["wt"])
+    assert refused.value.code == 2 and "/we:grill, which needs sentry," in str(refused.value)
+
+
+def test_needs_all_lists_every_skill_the_context_starves(env):
+    _config(env["wt"], {"tool": "jira"}, disable=["atlassian"])
+    proc = _needs(env["wt"], "", "--all")
+    assert proc.returncode == 2
+    named = {line.split("/we:")[1].split(",")[0] for line in proc.stdout.splitlines()}
+    assert {"plan-story", "develop", "merged", "pr", "epic"} <= named
+    _config(env["wt"], {"tool": "github-issues"}, disable=["atlassian"])
+    proc = _needs(env["wt"], "", "--all")
+    assert (proc.returncode, proc.stdout) == (0, "")

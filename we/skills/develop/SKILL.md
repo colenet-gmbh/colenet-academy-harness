@@ -5,6 +5,7 @@ description: >
   stops — no PR, no CI, no ticket; pushes only on the brief's word. Triggers: "/we:develop",
   "implement only", "dev worker".
 argument-hint: '[<ticket-key> | <plan-path>] [--phases <N,M>]'
+needs: [ticketing]
 ---
 
 # /we:develop

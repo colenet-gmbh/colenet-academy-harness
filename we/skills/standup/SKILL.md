@@ -3,6 +3,7 @@ name: standup
 description: >
   Picks you back up: what we work on, where it stands, what you must do next; read-only.
   Triggers: "/we:standup", "where am I", "status" as the whole message.
+needs: [ticketing]
 ---
 
 # /we:standup

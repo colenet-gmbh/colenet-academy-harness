@@ -1,0 +1,179 @@
+{
+ "a1": {
+  "checkSuites": {
+   "nodes": [
+    {
+     "checkRuns": {
+      "nodes": [
+       {
+        "name": "Lint",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "completedAt": "2026-11-02T10:05:00Z"
+       },
+       {
+        "name": "Claude Review",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "completedAt": "2026-11-02T10:06:00Z"
+       },
+       {
+        "name": "Claude Review",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS",
+        "completedAt": "2026-11-02T10:30:00Z"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  "status": null
+ },
+ "a2": {
+  "checkSuites": {
+   "nodes": [
+    {
+     "checkRuns": {
+      "nodes": [
+       {
+        "name": "Lint",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS",
+        "completedAt": "2026-11-02T11:05:00Z"
+       },
+       {
+        "name": "Claude Review",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS",
+        "completedAt": "2026-11-02T11:06:00Z"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  "status": null
+ },
+ "b1": {
+  "checkSuites": {
+   "nodes": [
+    {
+     "checkRuns": {
+      "nodes": [
+       {
+        "name": "Lint",
+        "status": "COMPLETED",
+        "conclusion": "CANCELLED",
+        "completedAt": "2026-11-01T09:02:00Z"
+       },
+       {
+        "name": "Lint",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS",
+        "completedAt": "2026-11-01T09:05:00Z"
+       },
+       {
+        "name": "Docs",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "completedAt": "2026-11-01T09:05:00Z"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  "status": null
+ },
+ "c1": {
+  "checkSuites": {
+   "nodes": [
+    {
+     "checkRuns": {
+      "nodes": [
+       {
+        "name": "Lint",
+        "status": "COMPLETED",
+        "conclusion": "TIMED_OUT",
+        "completedAt": "2026-11-03T08:05:00Z"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  "status": null
+ },
+ "c2": {
+  "checkSuites": {
+   "nodes": [
+    {
+     "checkRuns": {
+      "nodes": [
+       {
+        "name": "Lint",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS",
+        "completedAt": "2026-11-03T09:05:00Z"
+       },
+       {
+        "name": "Claude Review",
+        "status": "IN_PROGRESS",
+        "conclusion": null,
+        "completedAt": null
+       }
+      ]
+     }
+    }
+   ]
+  },
+  "status": null
+ },
+ "d1": {
+  "checkSuites": {
+   "nodes": [
+    {
+     "checkRuns": {
+      "nodes": [
+       {
+        "name": "Lint",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "completedAt": "2026-11-09T10:05:00Z"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  "status": null
+ },
+ "e1": {
+  "checkSuites": {
+   "nodes": [
+    {
+     "checkRuns": {
+      "nodes": [
+       {
+        "name": "Lint",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS",
+        "completedAt": "2026-11-05T10:05:00Z"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  "status": {
+   "contexts": [
+    {
+     "context": "Claude Review",
+     "state": "ERROR",
+     "createdAt": "2026-11-05T10:06:00Z"
+    }
+   ]
+  }
+ }
+}

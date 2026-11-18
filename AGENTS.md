@@ -60,7 +60,8 @@ we/                               plugin root
                                   loop's numbers from gh and the board logs), context_load.py (what a cold
                                   start loads per role)
     PR and plan                   pr-body-receipt.py, plan_push.py (plans land by push), arm_pr.sh (arms
-                                  auto-merge, never merges), test-delta.py,
+                                  auto-merge, never merges), required_checks.sh (a branch's required checks,
+                                  read by arm_pr.sh and flow_report.py), test-delta.py,
                                   session_tokens.py, retro_claim.sh, retro_write.py, optimization_close.py
     statusline                    statusline.js, install_statusline.py
     hook state                    state_prune.py (ages out per-session hook files), claude_home.py (Claude Code's config dir)

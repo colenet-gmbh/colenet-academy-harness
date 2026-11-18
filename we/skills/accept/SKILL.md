@@ -3,6 +3,7 @@ name: accept
 description: >
   Carries a receipts job's verdict onto the board: green stories to Done with their generated comment,
   walks queued, red findings routed. Triggers: "/we:accept [run-id]", "accept the RC".
+needs: [ticketing]
 ---
 
 # /we:accept

@@ -3,6 +3,7 @@ name: ac-review
 description: >
   Checks a branch against its story's acceptance criteria and the repo DoD: one evidence row per
   AC and DoD item, verdict PASS/BLOCKING. Hunts no bugs. Triggers: "/we:ac-review", "are the ACs met".
+needs: [ticketing]
 ---
 
 # /we:ac-review

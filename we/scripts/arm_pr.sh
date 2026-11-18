@@ -107,15 +107,8 @@ one_way() {  # refuses a one-way class when this checkout is the PR head; a stde
 }
 
 REQUIRED=""
-required_names() {  # the base branch's required check names: its rulesets and its branch protection
-  local rules prot
-  rules=$(gh api "repos/$REPO/rules/branches/$BASE" \
-    --jq '.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context' 2>&1) \
-    || { echo "gh failed: $(tail -n 1 <<<"$rules")"; exit 2; }
-  prot=$(gh api "repos/$REPO/branches/$BASE" \
-    --jq '(.protection.required_status_checks.contexts // [])[]' 2>&1) \
-    || { echo "gh failed: $(tail -n 1 <<<"$prot")"; exit 2; }
-  REQUIRED=$(printf '%s\n%s\n' "$rules" "$prot" | sed '/^$/d' | sort -u)
+required_names() {  # the base branch's required check names (required_checks.sh, the one reader)
+  REQUIRED=$("$HERE/required_checks.sh" --repo "$REPO" "$BASE") || { echo "$REQUIRED"; exit 2; }
 }
 
 arm() {  # 0 armed (exits), 1 GitHub calls the PR clean, exits on any other answer

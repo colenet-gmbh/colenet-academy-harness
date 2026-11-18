@@ -36,16 +36,32 @@ def load(name):
     return json.loads((FIX / name).read_text(encoding="utf-8"))
 
 
+REQUIRED = ["Lint", "Claude Review"]
+
+
+def recorded_required(_repo):
+    return list(REQUIRED)
+
+
+def no_required(_repo):
+    return []
+
+
 class FakeGh:
-    """Answers like `gh api graphql`: the recorded search pages and check suites per commit."""
+    """Answers like `gh api graphql`: the recorded search pages, check suites and check runs per
+    commit."""
 
     def __init__(self):
         self.bodies = []
         self.suites = load("suites.json")
+        self.checks = load("checks.json")
 
     def __call__(self, body):
         self.bodies.append(body)
         variables = body["variables"]
+        if "ids" in variables and "checkRuns" in body["query"]:
+            nodes = [dict(self.checks.get(i[2:], {}), oid=i[2:]) for i in variables["ids"]]
+            return {"data": {"nodes": nodes}}
         if "ids" in variables:
             nodes = [
                 {"oid": i[2:], "checkSuites": {"nodes": self.suites.get(i[2:], [])}}
@@ -193,13 +209,13 @@ def repo(tmp_path, crew=True, board=True):
     return root
 
 
-def report(root, *argv, run=None):
+def report(root, *argv, run=None, required=recorded_required):
     args = fr.argparse.Namespace(
         since="10d", repo=None, board=None, gh_cache=None, review_match="review"
     )
     for flag, value in zip(argv[::2], argv[1::2]):
         setattr(args, flag, value)
-    out = fr.build(args, NOW, root, run or FakeGh())
+    out = fr.build(args, NOW, root, run or FakeGh(), required)
     return {r["row"]: r for r in out["rows"]}, out
 
 
@@ -297,7 +313,10 @@ def test_no_crew_no_board_prints_github_rows_and_na(tmp_path, capsys, monkeypatc
         assert rows[name]["n"] is None
     assert out["writers"] is None
     monkeypatch.chdir(root)
-    assert fr.main(["--since", "10d"], now=NOW, cwd=root, run=FakeGh()) == 0
+    assert (
+        fr.main(["--since", "10d"], now=NOW, cwd=root, run=FakeGh(), required=recorded_required)
+        == 0
+    )
     text = capsys.readouterr().out
     assert "n/a (board log not found: no crew file)" in text
     assert "Heads per code PR" in text
@@ -348,24 +367,26 @@ def test_the_gh_cache_answers_a_second_run(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     root = repo(tmp_path)
     cache = tmp_path / "cache"
-    report(root, run=fr.gh_runner(cache, "w1"))
+    report(root, run=fr.gh_runner(cache, "w1"), required=no_required)
     first = len(calls.read_text().splitlines())
     assert first == 11  # ten day chunks and the open PRs, no commits to ask about
-    rows, _ = report(root, run=fr.gh_runner(cache, "w1"))
+    rows, _ = report(root, run=fr.gh_runner(cache, "w1"), required=no_required)
     assert len(calls.read_text().splitlines()) == first
     assert rows["Docs-PR share"]["n"] == 0
-    report(root, run=fr.gh_runner(cache, "w2"))  # another window asks again, open PRs too
+    report(
+        root, run=fr.gh_runner(cache, "w2"), required=no_required
+    )  # another window asks again, open PRs too
     assert len(calls.read_text().splitlines()) == 2 * first
 
 
 def test_md_writes_into_the_store_or_says_why_not(tmp_path, capsys):
     root = repo(tmp_path)
-    assert fr.main(["--md"], now=NOW, cwd=root, run=FakeGh()) == 0
+    assert fr.main(["--md"], now=NOW, cwd=root, run=FakeGh(), required=recorded_required) == 0
     captured = capsys.readouterr()
     assert "nothing written" in captured.err
     assert captured.out.startswith("# Flow report acme/app")
     (root / ".weside" / "optimization").mkdir()
-    assert fr.main(["--md"], now=NOW, cwd=root, run=FakeGh()) == 0
+    assert fr.main(["--md"], now=NOW, cwd=root, run=FakeGh(), required=recorded_required) == 0
     target = root / ".weside" / "optimization" / "reports" / "flow-2026-11-10.md"
     text = target.read_text(encoding="utf-8")
     assert "| Heads per code PR | 3 | 2 | 2 | one head 33 % |" in text
@@ -374,12 +395,21 @@ def test_md_writes_into_the_store_or_says_why_not(tmp_path, capsys):
 
 def test_json_and_since_forms(tmp_path, capsys):
     root = repo(tmp_path)
-    assert fr.main(["--json", "--since", "2026-11-08"], now=NOW, cwd=root, run=FakeGh()) == 0
+    assert (
+        fr.main(
+            ["--json", "--since", "2026-11-08"],
+            now=NOW,
+            cwd=root,
+            run=FakeGh(),
+            required=recorded_required,
+        )
+        == 0
+    )
     out = json.loads(capsys.readouterr().out)
     assert out["since"] == "2026-11-08T00:00Z"
     assert out["until"] == "2026-11-10T12:00Z"
     with pytest.raises(SystemExit) as stop:
-        fr.main(["--since", "soon"], now=NOW, cwd=root, run=FakeGh())
+        fr.main(["--since", "soon"], now=NOW, cwd=root, run=FakeGh(), required=no_required)
     assert stop.value.code == 2
 
 
@@ -388,3 +418,60 @@ def test_story_key_prefers_the_title_and_upper_cases_a_branch_key():
     assert fr.story_key(pr, "[A-Z]+-\\d+") == "PROJ-7"
     assert fr.story_key({"title": "fix", "branch": "fix/proj-8-x"}, "[A-Z]+-\\d+") == "PROJ-8"
     assert fr.story_key({"title": "chore", "branch": "renovate/deps"}, "[A-Z]+-\\d+") is None
+
+
+def test_required_checks_red_heads_by_outcome(tmp_path):
+    rows, _ = report(repo(tmp_path))
+    r = rows["Required checks: red heads"]
+    # Lint: #1 a1 fixed on a2, #3 c1 (timed out) fixed on c2, #4 d1 open; b1's cancel is no red.
+    # Claude Review: #1 a1 rerun green on a1, #5 e1 a red status open; Docs is not required.
+    assert r["n"] == 5
+    assert r["checks"] == {
+        "Claude Review": {"rerun green": 1, "open": 1},
+        "Lint": {"fixed": 2, "open": 1},
+    }
+    assert r["value"] == (
+        "Claude Review 2 (fixed 0, rerun green 1, open 1) · Lint 3 (fixed 2, rerun green 0, open 1)"
+    )
+
+
+def test_required_checks_na_without_required_checks_or_reader(tmp_path):
+    root = repo(tmp_path)
+    fake = FakeGh()
+    rows, _ = report(root, run=fake, required=no_required)
+    r = rows["Required checks: red heads"]
+    assert r["value"] == "n/a (no required checks on the default branch)"
+    assert not any("checkRuns" in b["query"] for b in fake.bodies)  # no check runs asked for
+
+    def broken(repo):
+        raise fr.SourceMissingError("gh: HTTP 404")
+
+    rows, _ = report(root, required=broken)
+    assert rows["Required checks: red heads"]["value"] == "n/a (gh: HTTP 404)"
+    assert rows["Heads per code PR"]["n"] == 3  # the other GitHub rows stand
+
+
+def test_required_checks_reads_through_the_shared_reader(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "calls"
+    fake = bin_dir / "gh"
+    fake.write_text(
+        "#!/bin/sh\n"
+        f'echo "$@" >> {calls}\n'
+        'case "$2" in\n'
+        "  */rules/branches/*) printf 'Lint\\nClaude Review\\n' ;;\n"
+        "  */branches/*) printf 'Lint\\n' ;;\n"
+        "  *) echo main ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    assert fr.required_checks("acme/app") == ["Claude Review", "Lint"]
+    asked = calls.read_text().splitlines()
+    assert asked[0].startswith("api repos/acme/app --jq")  # the default branch first
+    assert asked[1].startswith("api repos/acme/app/rules/branches/main")
+    fake.write_text("#!/bin/sh\necho 'HTTP 403: forbidden' >&2\nexit 1\n", encoding="utf-8")
+    with pytest.raises(fr.SourceMissingError, match="gh: HTTP 403: forbidden"):
+        fr.required_checks("acme/app")
