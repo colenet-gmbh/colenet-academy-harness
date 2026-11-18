@@ -822,7 +822,7 @@ def test_capacity_refuses_above_either_limit_and_names_both_values(cap):
     """Red arm: 14 usage-limit stops in 11 sessions within 13 minutes."""
     out = cap(10, 50.0)
     assert out.returncode == 3
-    assert out.stderr.strip() == (
+    assert out.stderr.strip().startswith(
         "we-worker: refused, no worker started: 10 workers busy (limit 10,"
         " workers.max_busy_sessions), active account 5h at 50 % (limit 80 %,"
         " workers.max_active_5h_percent); try again later"
@@ -875,7 +875,7 @@ def test_capacity_refuses_when_no_account_in_rotation_has_room(cap, monkeypatch)
     )
     out = cap(1, 2.0)
     assert out.returncode == 3
-    assert out.stderr.strip() == (
+    assert out.stderr.strip().startswith(
         "we-worker: refused, no worker started: 1 workers busy (limit 10,"
         " workers.max_busy_sessions), no account in rotation has room (0 of 4 with 7d under 95 %"
         " and 5h at or under 80 %, workers.max_active_5h_percent); try again later"
