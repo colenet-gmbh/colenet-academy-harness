@@ -67,7 +67,7 @@ code (`${CLAUDE_PLUGIN_ROOT}/references/code-notes.md`): the next agent reads th
 Run the commands yourself; they are deterministic. Scope and exceptions are in the contract:
 affected tests only, service-bound tests skipped and listed, the named integration suite for a
 critical chunk. A gate failure: fix, commit, re-run. The same gate red three times: stop. A gate run
-that ended without a verdict: `references/session-traps.md`.
+that ended without a verdict: `worker-dispatch.md` § Dev-only worker contract.
 
 ## 5. Finish, when the brief makes you the last writer
 
