@@ -14,10 +14,13 @@
 # When GitHub answers that the PR is already in a clean (or unstable) state, the helper does not
 # merge: it waits until check runs of the head are registered, re-reads, arms if a required check is
 # still pending, and reports `ready` once every required check of the base branch is green on that
-# head. The caller then merges as a separate, explicit command with `--match-head-commit <sha>`.
+# head, GitHub calls the PR CLEAN and no required review is missing. The caller then merges as a
+# separate, explicit command with `--match-head-commit <sha>`.
 #
-# Before the arm, in a checkout whose HEAD is the PR head, the risk classifier (`risk_paths.py` over
-# `origin/<base>:.weside/risk-paths`) runs; a one-way class is refused: only the human merges it.
+# Before the arm, only in a checkout whose HEAD is the PR head, the risk classifier (`risk_paths.py`
+# over `origin/<base>:.weside/risk-paths`) runs; a one-way class is refused: only the human merges
+# it. Anywhere else a stderr note says it was not classified: the caller's class (`/we:master`
+# § Close the run) stays the one-way gate.
 #
 # One final line and its exit code:
 #   armed: auto-merge on <sha> (<method>)                                        exit 0
@@ -29,7 +32,7 @@
 #   refused: one-way <class> — only the human merges it                          exit 6
 #   red: <names> on <sha> — not armed                                            exit 7
 #   no checks on <sha> after <n>s — not armed, run again                         exit 8
-#   still clean with pending checks on <sha> after <n>s — not armed, run again   exit 8
+#   not armed on <sha> after <n>s (<mergeStateStatus>, review <decision>) — run again   exit 8
 #
 # Env: ARM_INTERVAL (seconds between reads, default 10), ARM_REGISTER_TIMEOUT (default 300).
 set -uo pipefail
@@ -41,7 +44,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --method) METHOD=${2:-}; shift 2 || usage ;;
     --repo|-R) REPO=${2:-}; shift 2 || usage ;;
-    -h|--help) sed -n '3,33p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,/^set -uo/p' "$0" | sed '$d'; exit 0 ;;
     -*) usage ;;
     *) [ -z "$PR" ] || usage; PR=$1; shift ;;
   esac
@@ -57,16 +60,18 @@ if [ -z "$REPO" ]; then
 fi
 OWNER=${REPO%%/*} NAME=${REPO#*/}
 
-# Line 1: id, state, isDraft, head, base. Then one line per check on the head:
+# Line 1: id, state, isDraft, head, base, mergeStateStatus, reviewDecision (NONE when the repo
+# requires no review). Then one line per check on the head:
 # <pending|pass|fail>\t<required by the PR: true|false>\t<name>. Checks of another commit (the
 # last commit lagging behind the head) are not listed.
 READ='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){
-  id state isDraft headRefOid baseRefName
+  id state isDraft headRefOid baseRefName mergeStateStatus reviewDecision
   commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){nodes{__typename
     ... on CheckRun{name status conclusion isRequired(pullRequestNumber:$number)}
     ... on StatusContext{context state isRequired(pullRequestNumber:$number)}}}}}}}}}}'
 JQ='.data.repository.pullRequest as $p
-  | ([$p.id, $p.state, ($p.isDraft|tostring), $p.headRefOid, $p.baseRefName] | @tsv),
+  | ([$p.id, $p.state, ($p.isDraft|tostring), $p.headRefOid, $p.baseRefName,
+      ($p.mergeStateStatus // "UNKNOWN"), ($p.reviewDecision // "NONE")] | @tsv),
     ($p.commits.nodes[0].commit // {} | select(.oid == $p.headRefOid)
      | (.statusCheckRollup.contexts.nodes // [])[]
      | [(if .__typename == "StatusContext" then
@@ -80,11 +85,11 @@ ARM='mutation($id:ID!,$sha:GitObjectID!,$method:PullRequestMergeMethod!){
     pullRequest{autoMergeRequest{enabledAt}}}}'
 
 SHA=""
-read_pr() {  # sets ID STATE DRAFT HEAD BASE CHECKS; exits on a gh failure or a moved head
+read_pr() {  # sets ID STATE DRAFT HEAD BASE MSTATE REVIEW CHECKS; exits on a gh failure or a moved head
   local out
   out=$(gh api graphql -f query="$READ" -f owner="$OWNER" -f name="$NAME" -F number="$PR" --jq "$JQ" 2>&1) \
     || { echo "gh failed: $(tail -n 1 <<<"$out")"; exit 2; }
-  IFS=$'\t' read -r ID STATE DRAFT HEAD BASE <<<"$(head -n 1 <<<"$out")"
+  IFS=$'\t' read -r ID STATE DRAFT HEAD BASE MSTATE REVIEW <<<"$(head -n 1 <<<"$out")"
   CHECKS=$(tail -n +2 <<<"$out")
   [ -n "${HEAD:-}" ] || { echo "gh failed: no PR $PR in $REPO"; exit 2; }
   [ "$STATE" = OPEN ] || { echo "refused: $(tr "[:upper:]" "[:lower:]" <<<"$STATE")"; exit 4; }
@@ -93,9 +98,9 @@ read_pr() {  # sets ID STATE DRAFT HEAD BASE CHECKS; exits on a gh failure or a 
   SHA=$HEAD
 }
 
-one_way() {  # refuses a one-way class when this checkout is the PR head; silent otherwise
-  local line
-  [ "$(git rev-parse HEAD 2>/dev/null)" = "$SHA" ] || return 0
+one_way() {  # refuses a one-way class when this checkout is the PR head; a stderr note otherwise
+  local line skip="one-way: not classified here (this checkout is not the PR head) — the class is the caller's"
+  [ "$(git rev-parse HEAD 2>/dev/null)" = "$SHA" ] || { echo "$skip" >&2; return 0; }
   git cat-file -e "origin/$BASE:.weside/risk-paths" 2>/dev/null || return 0
   line=$(python3 "$HERE/risk_paths.py" "origin/$BASE" 2>/dev/null | head -n 1) || return 0
   case "$line" in "T2 one-way "*) echo "refused: one-way ${line#T2 one-way } — only the human merges it"; exit 6 ;; esac
@@ -158,7 +163,7 @@ start=$(date +%s)
 while :; do
   if [ $(($(date +%s) - start)) -ge "$TIMEOUT" ]; then
     if [ -z "${CHECKS:-}" ]; then echo "no checks on $SHA after ${TIMEOUT}s — not armed, run again"
-    else echo "still clean with pending checks on $SHA after ${TIMEOUT}s — not armed, run again"; fi
+    else echo "not armed on $SHA after ${TIMEOUT}s ($MSTATE, review $REVIEW) — run again"; fi
     exit 8
   fi
   sleep "$INTERVAL"
@@ -169,6 +174,9 @@ while :; do
     fail:*) echo "red: ${v#fail:} on $SHA — not armed"; exit 7 ;;
     pending) arm ;;  # a required check runs: GitHub can wait for it now
     pass)
+      # Green checks are not every requirement: a review or another rule GitHub still waits for
+      # leaves the PR not CLEAN, and then it is armed instead.
+      [ "$MSTATE" = CLEAN ] && [ "$REVIEW" != REVIEW_REQUIRED ] && [ "$REVIEW" != CHANGES_REQUESTED ] || { arm; continue; }
       echo "ready: all required checks green on $SHA — merge: gh pr merge $PR --$METHOD --match-head-commit $SHA"
       exit 3 ;;
   esac

@@ -55,6 +55,7 @@ if args[:2] == ["api", "graphql"]:
     out({"data": {"repository": {"pullRequest": {
         "id": "PR_1", "state": s.get("state", "OPEN"), "isDraft": s.get("draft", False),
         "headRefOid": s["head"], "baseRefName": "main",
+        "mergeStateStatus": s.get("merge", "CLEAN"), "reviewDecision": s.get("review"),
         "commits": {"nodes": [{"commit": {"oid": s.get("commit", s["head"]),
             "statusCheckRollup": {"contexts": {"nodes": nodes}}}}]}}}}})
 if args[0] == "api" and "/rules/branches/" in args[1]:
@@ -126,12 +127,27 @@ def test_a_blocked_pr_is_armed_on_the_head_it_read(tmp_path):
         ([check("lint")], [CLEAN, CLEAN], 8, None),
         ([check("lint"), check("Claude Review", conclusion="FAILURE")], [CLEAN], 7, None),
         (GREEN, [CLEAN], 3, None),
+        # Green checks, but a required review is missing: GitHub waits for it, so it is armed.
+        (
+            {"checks": GREEN, "merge": "BLOCKED", "review": "REVIEW_REQUIRED"},
+            [CLEAN, "ok"],
+            0,
+            None,
+        ),
     ],
-    ids=["no-checks", "then-pending", "required-absent", "required-red", "all-green"],
+    ids=[
+        "no-checks",
+        "then-pending",
+        "required-absent",
+        "required-red",
+        "all-green",
+        "review-missing",
+    ],
 )
 def test_a_clean_answer_never_merges(tmp_path, later, arms, code, line):
     first = {"head": NEW, "commit": OLD, "checks": GREEN}  # the rollup still shows the old head
-    reads = [first, {"head": NEW}, {"head": NEW}, {"head": NEW, "checks": later}]
+    last = later if isinstance(later, dict) else {"checks": later}
+    reads = [first, {"head": NEW}, {"head": NEW}, {"head": NEW, **last}]
     got, out, _ = run(tmp_path, reads, arms)
     assert got == code, out
     assert not any(o.startswith("ready") for o in out) or code == 3
