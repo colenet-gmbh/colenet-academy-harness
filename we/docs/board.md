@@ -472,6 +472,9 @@ asker's open question `<Q>` on the same `--key`: once the new one is posted, `<Q
 another key, is refused. An asker who takes a question back without a new one runs
 `board.py withdraw <Q>` (§ Several humans).
 
+**An answer worth keeping** is written where the next agent works (`references/code-notes.md`), by
+the asker, in the commit it makes anyway: the board is pruned, the code stays.
+
 Every `ask` past the field check appends one line to `board-questions.jsonl`:
 `{id?, ts, session, key, key_title, ask, recommendation, cause, outcome, reason?, reader?}`, with
 `outcome` `posted` (only then `id`), `returned`, `reader-error`, `duplicate` (with `of`), `replaced` (with `by`), `repeat` (with the first `id`), `closed` (`close-merged`) or `pruned` (§ Pruning), and `reader` the reader's raw
@@ -564,7 +567,7 @@ writes, `bundle` runs `escalation route`; each open record at stage `bundle` add
 
 ## Escalations
 
-`board.py escalation` holds the decision story between two role holders (skill `/we:decide`). It
+`board.py escalation` holds the decision story between two role holders. It
 appends events to `board-escalations.jsonl` beside the board (`O_APPEND`, only grows); a record is
 the fold of its events by `id` in log order (`fold_escalations`). A party opens one with
 `escalation open --key <KEY> --parties <role>,<role> --question "<q>" --a "<option>" --a-cost "<cost>"

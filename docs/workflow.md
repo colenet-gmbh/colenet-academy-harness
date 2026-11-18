@@ -29,7 +29,7 @@ flowchart TD
         O4("phases: tests + code + commit<br/>local deterministic gates")
         O5("finish: code-review only on<br/>money · auth · tenant · migration<br/>verification · plan deviations")
         O6{"report gate (Stop for a process worker,<br/>SubagentStop for a subagent):<br/>report present?"}
-        O7("Lead checks report<br/>runs named tests · AC → evidence · DoD")
+        O7("Lead checks report<br/>runs named tests · AC → evidence · verification")
         O8("integration worktree<br/>merge each lane + after-merge checks")
         O9("merge origin/main + after-merge check<br/>push once · one PR per story, ready, linked")
         O1 --> O2
@@ -99,7 +99,6 @@ tests); the only local LLM review is one `code-review` at `high` for money, auth
 or a migration, because CI runs the Claude and Codex reviews on the PR. The Lead checks the report,
 merges the base, pushes once, opens the story's PR (`/we:pr` does the same by hand) and runs
 `/we:ci-review` after CI concludes, up to three rounds.
-`/we:ac-review` checks a branch against its acceptance criteria and the DoD on demand.
 
 The dispatch contract: [we/references/worker-dispatch.md](../we/references/worker-dispatch.md).
 With a crew, its `launch.worker` is the command that starts each worker

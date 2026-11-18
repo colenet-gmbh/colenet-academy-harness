@@ -21,8 +21,6 @@ never commit yourself.
 - Tools, each by a check that actually runs, never by a path on disk:
   - `gh auth status` exits 0 (PRs, CI, review threads);
   - graphify: `python3 -c "import graphify"` (code graph for `/we:plan-story` and the build workers);
-  - TurboVault: call `mcp__turbovault__list_vaults`; absent = not registered, error or hang =
-    degraded (semantic doc search);
   - weside MCP: `mcp__plugin_we_weside-mcp__get_companion_identity` is listed (materialize,
     Companion-backed council).
   A missing tool is reported with its install command and never blocks.
@@ -64,9 +62,9 @@ CodeRabbit or Greptile app. The ids go to `review.available`; `/we:ci-review` co
 exactly these. Default `["claude"]`. A Codex job named other than `Codex Review` goes to
 `review.codex_check`; the merge waits for it only where the base branch requires that check.
 
-Offer once: additive repo checks on top of the plugin's → `.weside/dor.md` and/or `.weside/dod.md`,
-seeded with the user's concrete check. `/we:plan-story` reads the DoR file, `/we:master` the DoD
-rows. Additive, never a replacement.
+Offer once: additive repo checks on top of the plugin's → `.weside/dor.md`, seeded with the user's
+concrete check; `/we:plan-story` reads it. Additive, never a replacement. A `.weside/dod.md` says
+only when a story is Done and who sets it.
 
 ## 3. `.weside/config.json`
 
@@ -77,7 +75,7 @@ Written always, also when step 4 is declined. Only keys a verb reads:
   "ticketing": { "tool": "jira|github-issues|none", "project_key": "<KEY or null>",
                  "plugin": "<plugin or MCP server serving the tool, or null>" },
   "stack": ["python", "node"],
-  "tools": { "graphify": false, "turbovault": false },
+  "tools": { "graphify": false },
   "test_discipline": "tests-after",
   "verification": { "required": true,
                     "pre_merge_receipt": "<command with {KEY}: prints report:/skip:/not-run:, exit 0 green, 1 red>" },
@@ -138,12 +136,8 @@ block (stack, ticketing, goals, test discipline, verification, review gates, wor
 "Set up this repo's council now? `/we:council` convenes it; without a weside account
 every lens is generic and still works." On yes:
 
-1. Extend `config.json` (never re-emit its keys) with `vault` and the
-   roster `/we:council` reads: `"council": {"default": ["product_owner","architect","scrum_master"]}`.
-2. TurboVault: check whether this repo's vault is in `list_vaults` by name (another repo's vault
-   passing a loose "any vault" check leaves every later search answering from the wrong tree).
-   Missing → `add_vault(name=<basename>, path=<root>)` and `set_active_vault`; write `vault` only
-   after both succeeded. A small repo may want no vault: `vault: null` is valid.
+Extend `config.json` (never re-emit its keys) with the roster `/we:council` reads:
+`"council": {"default": ["product_owner","architect","scrum_master"]}`.
 
 ## 4a. Crew (optional, ask once)
 

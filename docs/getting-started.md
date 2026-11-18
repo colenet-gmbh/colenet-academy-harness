@@ -33,7 +33,7 @@ The statusline can also feed claude-swap usage: [Statusline usage feed for claud
    `## Sequencing`.
 2. `/we:master <epic>` — the epic's master starts a refiner worker (`/we:plan-story`) that writes the
    story plan at `docs/plans/<KEY>-story.md`, then one `we:dev-medium` worker in its own worktree,
-   checks the report against the acceptance criteria and the DoD, pushes once, opens the story's PR
+   checks the report against the acceptance criteria and the plan's verification, pushes once, opens the story's PR
    and runs `/we:ci-review` when CI concludes.
 3. `/flow <KEY>` — watch it: a pane with one light per step (plan, approval, build, PR, CI,
    review, merge), refreshed from git and GitHub. Its **Standup** button runs `/we:standup`.
