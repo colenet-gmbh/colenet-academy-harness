@@ -1,169 +1,169 @@
 {
-  "data": {
-    "search": {
-      "issueCount": 4,
-      "pageInfo": {
-        "hasNextPage": false,
-        "endCursor": null
-      },
+ "data": {
+  "search": {
+   "issueCount": 4,
+   "pageInfo": {
+    "hasNextPage": false,
+    "endCursor": null
+   },
+   "nodes": [
+    {
+     "number": 1,
+     "title": "feat(PROJ-1): add the export",
+     "headRefName": "feat/PROJ-1-export",
+     "state": "MERGED",
+     "isDraft": false,
+     "createdAt": "2026-11-02T10:00:00Z",
+     "mergedAt": "2026-11-02T14:00:00Z",
+     "labels": {
+      "nodes": []
+     },
+     "files": {
+      "totalCount": 2,
       "nodes": [
-        {
-          "number": 1,
-          "title": "feat(PROJ-1): add the export",
-          "headRefName": "feat/PROJ-1-export",
-          "state": "MERGED",
-          "isDraft": false,
-          "createdAt": "2026-11-02T10:00:00Z",
-          "mergedAt": "2026-11-02T14:00:00Z",
-          "labels": {
-            "nodes": []
-          },
-          "files": {
-            "totalCount": 2,
-            "nodes": [
-              {
-                "path": "app/export.py"
-              },
-              {
-                "path": "tests/test_export.py"
-              }
-            ]
-          },
-          "timelineItems": {
-            "nodes": [
-              {
-                "__typename": "PullRequestCommit",
-                "commit": {
-                  "id": "C_a1",
-                  "oid": "a1"
-                }
-              },
-              {
-                "__typename": "PullRequestCommit",
-                "commit": {
-                  "id": "C_a2",
-                  "oid": "a2"
-                }
-              }
-            ]
-          },
-          "body": "Closes PROJ-1.\n\nTests: +2 / -0 functions, +5 / -1 cases, slow new: n/a \u00b7 ratio 0.8\n"
-        },
-        {
-          "number": 2,
-          "title": "docs(PROJ-1): story plan",
-          "headRefName": "docs/proj-1-plan",
-          "state": "MERGED",
-          "isDraft": false,
-          "createdAt": "2026-11-01T09:00:00Z",
-          "mergedAt": "2026-11-01T09:30:00Z",
-          "labels": {
-            "nodes": []
-          },
-          "files": {
-            "totalCount": 1,
-            "nodes": [
-              {
-                "path": "docs/plans/PROJ-1-story.md"
-              }
-            ]
-          },
-          "timelineItems": {
-            "nodes": [
-              {
-                "__typename": "PullRequestCommit",
-                "commit": {
-                  "id": "C_b1",
-                  "oid": "b1"
-                }
-              }
-            ]
-          },
-          "body": ""
-        },
-        {
-          "number": 3,
-          "title": "fix: the import guard",
-          "headRefName": "fix/proj-2-guard",
-          "state": "MERGED",
-          "isDraft": false,
-          "createdAt": "2026-11-03T08:00:00Z",
-          "mergedAt": "2026-11-04T08:00:00Z",
-          "labels": {
-            "nodes": [
-              {
-                "name": "one-way"
-              },
-              {
-                "name": "backend"
-              }
-            ]
-          },
-          "files": {
-            "totalCount": 1,
-            "nodes": [
-              {
-                "path": "app/guard.py"
-              }
-            ]
-          },
-          "timelineItems": {
-            "nodes": [
-              {
-                "__typename": "PullRequestCommit",
-                "commit": {
-                  "id": "C_c2",
-                  "oid": "c2"
-                }
-              },
-              {
-                "__typename": "HeadRefForcePushedEvent",
-                "beforeCommit": {
-                  "id": "C_c1",
-                  "oid": "c1"
-                },
-                "afterCommit": {
-                  "id": "C_c2",
-                  "oid": "c2"
-                }
-              }
-            ]
-          },
-          "body": "Tests: +1 / -0 (net +1)\n"
-        },
-        {
-          "number": 5,
-          "title": "chore: bump deps",
-          "headRefName": "renovate/deps",
-          "state": "MERGED",
-          "isDraft": false,
-          "createdAt": "2026-11-05T10:00:00Z",
-          "mergedAt": "2026-11-05T11:00:00Z",
-          "labels": {
-            "nodes": []
-          },
-          "files": {
-            "totalCount": 1,
-            "nodes": [
-              {
-                "path": "package.json"
-              }
-            ]
-          },
-          "timelineItems": {
-            "nodes": [
-              {
-                "__typename": "PullRequestCommit",
-                "commit": {
-                  "id": "C_e1",
-                  "oid": "e1"
-                }
-              }
-            ]
-          },
-          "body": ""
-        }
+       {
+        "path": "app/export.py"
+       },
+       {
+        "path": "tests/test_export.py"
+       }
       ]
+     },
+     "timelineItems": {
+      "nodes": [
+       {
+        "__typename": "PullRequestCommit",
+        "commit": {
+         "id": "C_a1",
+         "oid": "a1"
+        }
+       },
+       {
+        "__typename": "PullRequestCommit",
+        "commit": {
+         "id": "C_a2",
+         "oid": "a2"
+        }
+       }
+      ]
+     },
+     "body": "Closes PROJ-1.\n\nTests: +2 / -0 functions, +5 / -1 cases, slow new: n/a \u00b7 ratio 0.8\n"
+    },
+    {
+     "number": 2,
+     "title": "docs(PROJ-1): story plan",
+     "headRefName": "docs/proj-1-plan",
+     "state": "MERGED",
+     "isDraft": false,
+     "createdAt": "2026-11-01T09:00:00Z",
+     "mergedAt": "2026-11-01T09:30:00Z",
+     "labels": {
+      "nodes": []
+     },
+     "files": {
+      "totalCount": 1,
+      "nodes": [
+       {
+        "path": "docs/plans/PROJ-1-story.md"
+       }
+      ]
+     },
+     "timelineItems": {
+      "nodes": [
+       {
+        "__typename": "PullRequestCommit",
+        "commit": {
+         "id": "C_b1",
+         "oid": "b1"
+        }
+       }
+      ]
+     },
+     "body": ""
+    },
+    {
+     "number": 3,
+     "title": "fix: the import guard",
+     "headRefName": "fix/proj-2-guard",
+     "state": "MERGED",
+     "isDraft": false,
+     "createdAt": "2026-11-03T08:00:00Z",
+     "mergedAt": "2026-11-04T08:00:00Z",
+     "labels": {
+      "nodes": [
+       {
+        "name": "one-way"
+       },
+       {
+        "name": "backend"
+       }
+      ]
+     },
+     "files": {
+      "totalCount": 1,
+      "nodes": [
+       {
+        "path": "app/guard.py"
+       }
+      ]
+     },
+     "timelineItems": {
+      "nodes": [
+       {
+        "__typename": "PullRequestCommit",
+        "commit": {
+         "id": "C_c2",
+         "oid": "c2"
+        }
+       },
+       {
+        "__typename": "HeadRefForcePushedEvent",
+        "beforeCommit": {
+         "id": "C_c1",
+         "oid": "c1"
+        },
+        "afterCommit": {
+         "id": "C_c2",
+         "oid": "c2"
+        }
+       }
+      ]
+     },
+     "body": "Tests: +1 / -0 (net +1)\n"
+    },
+    {
+     "number": 5,
+     "title": "chore: bump deps",
+     "headRefName": "renovate/deps",
+     "state": "MERGED",
+     "isDraft": false,
+     "createdAt": "2026-11-05T10:00:00Z",
+     "mergedAt": "2026-11-05T11:00:00Z",
+     "labels": {
+      "nodes": []
+     },
+     "files": {
+      "totalCount": 1,
+      "nodes": [
+       {
+        "path": "package.json"
+       }
+      ]
+     },
+     "timelineItems": {
+      "nodes": [
+       {
+        "__typename": "PullRequestCommit",
+        "commit": {
+         "id": "C_e1",
+         "oid": "e1"
+        }
+       }
+      ]
+     },
+     "body": ""
     }
+   ]
   }
+ }
 }
