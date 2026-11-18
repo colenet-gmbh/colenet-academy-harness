@@ -50,7 +50,6 @@ Requirements: Claude Code (2.1.302 or later for the `/flow` pane), Git, Python 3
 - `/we:develop` — dev-only worker: implements its chunk, runs local gates, commits, reports.
 - `/we:pr` — opens the PR: merges the base, pushes once, writes the body with AC evidence and the net test delta.
 - `/we:ci-review` — collects every CI and review finding, fixes by severity, resolves threads, pushes once.
-- `/we:ac-review` — checks a branch against its story's acceptance criteria and the DoD.
 - `/we:lens` — the lens panel: fresh lens agents (product, architecture, acceptance, and security where the crew defines that lens) judge a plan (`ready`) or a PR diff (`t2`) in parallel; one verdict file per subject, green only with every lens and no standing BLOCKING or WARNING.
 - `/we:merged` — after your merge: tears down worktrees and branches, moves each landed story to In Review once its PR is linked; Done follows acceptance.
 
@@ -60,7 +59,6 @@ Requirements: Claude Code (2.1.302 or later for the `/flow` pane), Git, Python 3
 - `/board` — a pane with the workspace board the crew's coordinator keeps (the crew's `board.file`, else `board.json` in its state folder, `~/.claude/we-state` by default): what waits for the owner, which sessions run and on what, with live and start-mode lamps. [we/docs/board.md](we/docs/board.md)
 - `/we:setup` — per-repo configuration, council rosters, the crew and its humans, rule bridge, statusline.
 - `/we:accept` — carries a receipts job's verdict for one release candidate: green stories to Done with a generated comment, walks queued for an acceptance worker, red findings routed to their owner.
-- `/we:decide` — escalation as one decision story: both owners' positions and costs, settled by the parties within the SLA, else routed to the escalation role or the human's bundle.
 - `/we:standup` — picks you back up: what we work on, where it stands, what you must do next; read-only (`--branch` for the branch view).
 - `/we:retro` — retrospective on a session or PR cycle; findings go to the optimization inbox.
 - `/we:instruction-audit` — audits rules, skills and AGENTS.md against fresh Anthropic sources and a budget gate.
@@ -69,8 +67,6 @@ Requirements: Claude Code (2.1.302 or later for the `/flow` pane), Git, Python 3
 - `/we:pin` — which account bills this master session; `on`/`off` restarts it on a fixed account or on the global login. [docs/companion.md](docs/companion.md)
 - `/we:start` — the crew's main companion after `wclaude --start`: checks human, companion, role and pin against `crew.json`, offers the crew restore after a crash and the start of the rest of your crew (default no), opens the board. [docs/companion.md](docs/companion.md)
 - `/we:sideload` — works in a neighbour repo from here.
-- `/we:find-dead-code` — finds and removes dead code in Python backends.
-- `/we:codex-task` — sends one task to Codex; ends with the Codex subscription.
 - `/we:materialize` — loads your weside Companion's identity (needs a weside.ai account).
 
 ## The effort rule
