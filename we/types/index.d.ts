@@ -60,6 +60,12 @@ export type BoardQueueItem = {
   to?: string | null
   to_name?: string | null
   label?: string | null
+  // Who receives the answer (`board.py ask`): `answer_to: asker` (the asker's repo sets
+  // `board.answer_to`) sends it to the asker directly and the coordinator a one-line copy; `starter`
+  // takes it when the asker is gone; `asker_id` is the asking session's id.
+  answer_to?: string | null
+  starter?: string | null
+  asker_id?: string | null
 }
 
 export type BoardSession = {
@@ -221,7 +227,7 @@ export type BoardAnswer = {
 // One row of <stem>-deliveries.jsonl beside the answers file (docs/board.md § Answers): whether one
 // answer line reached one recipient. Readers fold the rows of one key (id, answer_ts, role) to the
 // newest by `ts`. The first row the deliverer ever writes is `{ "epoch": ts }` instead.
-export type BoardDeliveryRole = 'coordinator' | 'asker' | 'owner' | 'route'
+export type BoardDeliveryRole = 'coordinator' | 'asker' | 'owner' | 'starter' | 'route'
 
 export type BoardDelivery = {
   id: string

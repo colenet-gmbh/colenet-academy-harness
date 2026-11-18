@@ -17,7 +17,7 @@ import {
 } from './board'
 import type { Lamp, Liveness, SessionGroup, StartMode } from './board'
 import {
-  NOTICE, REBUILD_ID, RESUBMITTED, STUCK_MS, answerLines, stuckAnswers, askerText, ownerText, deliveryLine, isMissed, keyOf, ledgerState, markerRows, noticeMatches, pendingLines, promptTextOf, rebuildWaits, rowOf,
+  NOTICE, REBUILD_ID, RESUBMITTED, STUCK_MS, answerLines, stuckAnswers, askerText, ownerText, starterText, deliveryLine, isMissed, keyOf, ledgerState, markerRows, noticeMatches, pendingLines, promptTextOf, rebuildWaits, rowOf,
   storedHits, versionAtLeast,
 } from './deliver'
 import type { Awaiting, Delivery, Ledger } from './deliver'
@@ -319,18 +319,26 @@ async function submitAwaited($: $, ledgerPath: string, d: Delivery, text: string
 // One recipient of one line: the asker by peer message, a refusal answered with the routing line to
 // the coordinator; the coordinator and the routing line by prompt.
 async function deliverOne($: $, ledgerPath: string, coordinator: string, d: Delivery, prompts: Prompts) {
-  if (d.role !== 'asker' && d.role !== 'owner') return submitAwaited($, ledgerPath, d, promptTextOf(d, prompts), 1)
+  if (d.role !== 'asker' && d.role !== 'owner' && d.role !== 'starter') return submitAwaited($, ledgerPath, d, promptTextOf(d, prompts), 1)
   const key = keyOf(d.line.id, d.line.ts, d.role)
   delivery.sending.add(key)
   try {
     let sent: { isDelivered: boolean; reason?: string }
     try {
-      sent = await $.session.send({ to: d.to, text: d.role === 'owner' ? ownerText(d.line, prompts, d.accept) : askerText(d.line, prompts, d.accept) })
+      const text =
+        d.role === 'owner'
+          ? ownerText(d.line, prompts, d.accept)
+          : d.role === 'starter'
+            ? starterText(d.line, d.asker ?? '?', prompts, d.accept)
+            : askerText(d.line, prompts, d.accept)
+      sent = await $.session.send({ to: d.to, text })
     } catch (err) {
       sent = { isDelivered: false, reason: err instanceof Error ? err.message : String(err) }
     }
     const row = rowOf(d, isoOf(await $.clock.now()), sent.isDelivered, sent.isDelivered ? undefined : sent.reason || 'not delivered')
     if (!(await appendRows($, ledgerPath, [row])) || row.delivered || d.role === 'owner') return
+    // A refused asker with a starter waits for the starter's turn (pendingLines) before any route.
+    if (d.role === 'asker' && d.hasStarter) return
     const route: Delivery = { role: 'route', to: coordinator, line: d.line, about: row }
     if (!isInFlight(keyOf(d.line.id, d.line.ts, 'route'))) await submitAwaited($, ledgerPath, route, promptTextOf(route, prompts), 1)
   } finally {
@@ -387,12 +395,16 @@ async function deliverTick($: $, file: string) {
     })
     const askerOf = (id: string) => c.board.queue.find(q => q.id === id)?.session ?? undefined
     const ownerOf = (id: string) => c.board.queue.find(q => q.id === id)?.owner ?? undefined
+    const routeOf = (id: string) => {
+      const q = c.board.queue.find(x => x.id === id)
+      return q?.answer_to === 'asker' ? { answerTo: 'asker' as const, ...(q.starter ? { starter: q.starter } : {}) } : undefined
+    }
     const acceptOf = (id: string) => {
       const q = c.board.queue.find(x => x.id === id)
       const as = acceptVariantOf(q)
       return as ? { as, ...(q?.pr_url ? { pr: q.pr_url } : {}) } : undefined
     }
-    for (const d of pendingLines(lines, ledger, c.name, askerOf, ownerOf, await $.clock.now(), acceptOf)) {
+    for (const d of pendingLines(lines, ledger, c.name, askerOf, ownerOf, await $.clock.now(), acceptOf, routeOf)) {
       if (!isInFlight(keyOf(d.line.id, d.line.ts, d.role))) await deliverOne($, c.ledgerPath, c.name, d, c.board.answerPrompts)
     }
     await checkAwaiting($)
@@ -413,6 +425,9 @@ async function heldNotice($: $, file: string, text: string) {
   if (!hit || !line) return
   const row: BoardDelivery = { ...hit, ts: isoOf(await $.clock.now()), delivered: false, reason: 'held' }
   if (!(await appendRows($, c.ledgerPath, [row]))) return
+  // The asker's starter takes a held answer first on the next pass (deliver.ts pendingLines).
+  const q = c.board.queue.find(x => x.id === line.id)
+  if (q?.answer_to === 'asker' && q.starter && q.starter !== c.name && q.starter !== q.session) return
   const route: Delivery = { role: 'route', to: c.name, line, about: row }
   if (!isInFlight(keyOf(line.id, line.ts, 'route'))) await submitAwaited($, c.ledgerPath, route, promptTextOf(route, c.board.answerPrompts), 1)
 }

@@ -4,7 +4,6 @@ reply read back (docs/board.md § Several humans)."""
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from datetime import timedelta
 
@@ -319,7 +318,7 @@ class TestAskTo:
         answer_with(crewed, CLEAR)
         as_(monkeypatch, "alice", "Otto")
         assert act(crewed, *ask_argv(), "--to", "bob") == 0
-        ops = carry_of(capsys.readouterr().out)
+        ops = json.loads(capsys.readouterr().out)["carry"]
         assert [o["op"] for o in ops] == ["comment", "label"]
         assert ops[1] == {"op": "label", "key": "PROJ-12", "add": "ask-bob"}
 
@@ -508,7 +507,7 @@ class TestAskTo:
         assert act(crewed, *ask_argv(), "--to", "alice", adapter=adapter) == 0
         item = board_of(crewed)["owner_queue"][-1]
         assert "to" not in item and adapter.calls == []
-        assert re.match(r"posted Q\d+", capsys.readouterr().out)
+        assert json.loads(capsys.readouterr().out)["outcome"] == "posted"
 
 
 def test_a_read_without_labels_is_no_removed_label(crewed, monkeypatch, tmp_path, capsys):
@@ -815,7 +814,8 @@ class TestInboxReplyWithdraw:
         as_(monkeypatch, "alice", "Otto")
         adapter = ticket_adapter.FakeAdapter()
         assert act(crewed, *ask_argv(), "--to", "bob", adapter=adapter) == 0
-        later = ask_argv(**{"--cause": "plan"})  # the same cause would be a refused duplicate
+        # the same cause would be a refused duplicate, the same text a repeat of the first
+        later = ask_argv(**{"--cause": "plan", "--ask": "Is the checkout plan ready?"})
         assert act(crewed, *later, "--to", "bob", adapter=adapter) == 0
         first, second = [q["id"] for q in board_of(crewed)["owner_queue"]][-2:]
         adapter = ticket_adapter.FakeAdapter()
@@ -827,7 +827,7 @@ class TestInboxReplyWithdraw:
         outcomes = [(q["id"], q["outcome"]) for q in jsonl(crewed / "board-questions.jsonl")]
         assert (first, "superseded") in outcomes and (second, "withdrawn") in outcomes
 
-    def test_the_same_question_to_another_human_is_no_duplicate(self, crewed, monkeypatch):
+    def test_the_same_question_to_another_human_is_no_duplicate(self, crewed, monkeypatch, capsys):
         """Claude Review on #229: one key, one cause, two different humans asked."""
         with_humans(crewed)
         answer_with(crewed, CLEAR)
@@ -835,7 +835,11 @@ class TestInboxReplyWithdraw:
         adapter = ticket_adapter.FakeAdapter()
         assert act(crewed, *ask_argv(), "--to", "bob", adapter=adapter) == 0
         assert act(crewed, *ask_argv(), adapter=adapter) == 0
-        assert act(crewed, *ask_argv(), adapter=adapter) == 1
+        local = board_of(crewed)["owner_queue"][-1]["id"]
+        capsys.readouterr()
+        # the same text from the same session again is a repeat of the local one, not a third
+        assert act(crewed, *ask_argv(), adapter=adapter) == 0
+        assert json.loads(capsys.readouterr().out) == {"id": local, "outcome": "repeat"}
 
     def test_a_refused_supersede_names_who_gave_way_to_the_question(
         self, crewed, monkeypatch, capsys

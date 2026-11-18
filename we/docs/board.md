@@ -344,7 +344,17 @@ minutes. Per line it writes one row per recipient to
 | `coordinator` (the orchestrator) | always, unless the line came from its own chat (`via: chat`, `session` = the orchestrator) | a prompt as if typed: `<id>: proposal accepted` (an Accept on a one-way `merge-go` with its PR, **Yes, I'll do it**: `<id>: the owner approves or merges <pr_url> by hand — do not merge or arm it; the question stays open until the PR is merged`; **Taken** on a task: `<id>: taken — the owner does this task; do not do it yourself`), `<id>: proposal denied`, `<id>: let's talk about it`, `<id>: I need more information` or `<id>: please check whether this question is still current and correctly worded (goal still active? needs an update?)`, then where it was written (`(answered from the board pane in <session>)`, `(answered in the chat of <session>)` or `(answered on ticket <KEY> (<human>))` after a space: transparency, no check), then on lines of their own the question (`The question: "<ask>"`), its recommendation (`The recommendation accepted: "…"`, `denied` on a Deny) and the owner's words when the line has a `quote` | the session stored the prompt as a user row |
 | `asker` (`owner_queue[].session`) | unless the line was written in the asker's own session; a question no longer on the board has none | a message to that session: the same text, for **Update** `check whether <id> is still current and well worded; re-ask it with a new id or withdraw it` | the engine queued it there |
 | `owner` (`owner_queue[].owner`) | unless it is the coordinator, the asker or the session that wrote the line | a message to that session: the coordinator's text plus `(copy for the owner of this subject)`; a refusal is a ledger row only, no routing line | the engine queued it there |
-| `route` (the orchestrator) | the asker was not reached | a prompt: `<id>: the owner's answer (<kind>) did not reach <asker> (<reason>); wake that session or route the answer` | as `coordinator` |
+| `starter` (`owner_queue[].starter`) | only on a question with `answer_to: asker`, once the asker refused or was not reached | a message to the asker's starter: the asker's text plus `(for <asker>, which did not take it: carry it on or act on it)` | the engine queued it there |
+| `route` (the orchestrator) | the asker was not reached (with `answer_to: asker` and a starter: the starter was not reached either) | a prompt: `<id>: the owner's answer (<kind>) did not reach <asker> (<reason>); wake that session or route the answer` | as `coordinator` |
+
+**`board.answer_to`** in the asking repo's `.weside/config.json` (`coordinator`, the default, or
+`asker`) decides who carries an answer. `board.py ask` stamps the question with `asker_id` (the
+asking session's id), the launcher marker's `starter` and, under `asker`, `answer_to: asker`. On
+such a question the asker gets the answer as above and the coordinator's prompt is one copy line,
+`<id>: <kind> — copy for the queue; the answer goes to <asker> directly, do not relay it` with the
+writer note; an asker that is gone hands it to its starter (role `starter`), and only when that
+fails too does the coordinator get the routing line. A question without the stamp keeps the
+coordinator's full text.
 
 The board's optional `answer_prompts` words these texts in the orchestrator's own language, `{id}`
 standing for the question's id and `{pr}` for its PR link: `{"accept": "{id}: Vorschlag angenommen"}`;
@@ -379,6 +389,9 @@ back, and the deliverer carries it like a press:
 python3 <plugin>/scripts/board.py answer Q1 accept --session lead --via chat --quote "go ahead"
 ```
 
+`--text-file <path>` (or `-` for stdin) takes the owner's words in place of `--quote`, so a code
+span in them never meets the shell.
+
 It refuses, writing nothing, an id in neither `owner_queue` nor `news` and a kind outside `accept`,
 `deny`, `discuss`, `info`, `update`, `withdraw` (the human's take-back of an `ask --to` question,
 which closes it like Accept or Deny); it opens `board.json` read-only and prints the line it wrote. A
@@ -396,6 +409,10 @@ The JSONL files beside the board only grow (`O_APPEND`, one whole line per write
 records a board change is appended after board.json was replaced, still under the lock, so a failed
 write leaves no line.
 
+A refused value prints the valid values and one line `corrected call: board.py …` with the value
+it likely meant (`state=working` → `state=build`, a member's name in `waiting_on` → the role it
+holds, a field passed as a flag `--now x` → `now=x`, an answer kind `no` → `deny`).
+
 **`set` — the session's own line.** `board.py set now="<step>" state=<state> waiting_on=<role>`
 writes the line whose `name` is the caller's, as `claude agents --json` lists it for its
 `CLAUDE_CODE_SESSION_ID` (a missing line is appended with `name` and `session_id`; a session without
@@ -410,24 +427,33 @@ line clears all three and on any other line changes nothing, so a hand-written `
 
 **`ask` — a question for the owner.** Each session asks its own question with `board.py ask`;
 the coordinator owns the queue (answers, re-routing). The call is
-`board.py ask --session <asker> --key <KEY> --key-title "<title>" --ask "<question>"
---recommendation "<recommendation>" --cause <cause>`. A missing or blank field, a key outside the
+`board.py ask --key <KEY> --key-title "<title>" --ask "<question>"
+--recommendation "<recommendation>" --cause <cause>`; `--session <asker>` defaults to the session's
+own name as `set` finds it. `--text-file <path>` (or `-` with a quoted heredoc on stdin) takes the
+question in place of `--ask`: inside double quotes the shell runs a `code span` and leaves an empty
+gap, and a refusal whose text shows such a gap names `--text-file`. A missing or blank field, a key outside the
 crew's `naming.key` or a cause outside the six is refused, one line each, before anything runs.
 A `merge-go` question also needs `--pr <ref>` (a URL, `<owner>/<repo>#<n>` or a number) on a PR
 `gh pr view` reads as `OPEN`; a merged or closed one is refused before the reader, so no question
 asks about a merge that already happened. `--one-way <class>` (merge-go only) marks a one-way PR:
 the owner approves it where the repo's one-way gate takes an approve as the go, else merges it
 by hand, so the card offers the link and no **Accept**. `board.py close-merged`
-(also run by `bundle` and `/we:merged`) removes every open merge question whose PR
-merged or closed and logs one `closed` line each in `board-questions.jsonl`.
+(also run by `bundle` and `/we:merged`) removes every merge question still in `owner_queue` whose
+PR merged or closed, whatever its answer (an Accept, the owner's hand merge) and in whichever repo
+its `pr_url` points, logs one `closed` line each in `board-questions.jsonl` and prints
+`closed <id>: PR <state> <url>` per question.
 Then a cold reader judges the question: one `claude -p` run (the prompt, model and effort of
 `templates/cold-reader.md`) in an empty directory, with no tools, no MCP server, no settings files, hooks
-off, no session file and the global login, given only the question, the recommendation, the title
+off, no session file and the global login, given only the question (the asker's own text: the required-checks line a
+merge-go appends reaches the owner, never the reader), the recommendation, the title
 and the crew's two labels. It must say what the owner decides and what happens on yes, and it names
 form findings: more than one decision, no recommendation, more than three options, another
 language than the labels. A question that passes lands in `owner_queue` as `Q<n>` (one above every
 `Q` number on the board, in the answers file and in the log), with `since` and `ts` stamped by the
-script, and prints `posted Q<n>`. One that does not comes back, never silently: exit 1 with
+script, and prints exactly one JSON object on stdout, `{"id": "Q<n>", "outcome": "posted"}` (an
+`ask --to` on jira adds its `carry` list; everything else goes to stderr). The same text from the
+same session within an hour (no `--replace`) posts nothing: it prints the first id with
+`"outcome": "repeat"` and logs a `repeat` line, so a retry never doubles a question. One that does not comes back, never silently: exit 1 with
 `returned to <asker>: <reason>`, the same text as the asker's line's `note`; the owner's news gets
 nothing. The asker's next posted question clears a `returned to` note; a note that does not start
 with `returned to` is never overwritten, and the refusal and the `returned` line in
@@ -445,7 +471,7 @@ another key, is refused. An asker who takes a question back without a new one ru
 
 Every `ask` past the field check appends one line to `board-questions.jsonl`:
 `{id?, ts, session, key, key_title, ask, recommendation, cause, outcome, reason?, reader?}`, with
-`outcome` `posted` (only then `id`), `returned`, `reader-error`, `duplicate` (with `of`), `replaced` (with `by`), `closed` (`close-merged`) or `pruned` (§ Pruning), and `reader` the reader's raw
+`outcome` `posted` (only then `id`), `returned`, `reader-error`, `duplicate` (with `of`), `replaced` (with `by`), `repeat` (with the first `id`), `closed` (`close-merged`) or `pruned` (§ Pruning), and `reader` the reader's raw
 `decides`, `on_yes`, `form`. A duplicate answer adds a `duplicate-answer` line (§ Answers given in a
 chat). The line keeps the question's text after it leaves `owner_queue` (§ Pruning, `close-merged`), so
 questions per day and answer times come from this log joined with `board-answers.jsonl` by `id`.
@@ -471,7 +497,7 @@ the board lock (`prune` in `board.py`), and `board.py prune` runs it alone and p
 
 | Entry | Leaves when |
 |---|---|
-| a question (or item) an Accept or Deny closed | nothing is owed to its asker any more, since the deliverer finds the asker only on the board: each answer line on the id is older than the ledger's `epoch`, written in the asker's own session, or has an asker row `delivered: true` in `board-deliveries.jsonl` (refused, or not taken 24 h after the answer: a delivered `route` row, which the deliverer writes to the coordinator then, `ROUTE_AFTER_MS` in `deliver.ts`). A close no one carried stays however old, a `duplicate-answer` line changes nothing, an Accept ("Yes, I'll do it") on a one-way merge-go stays until `close-merged` sees its PR merged or closed, and an Accept on a `window-go` stays until its asker runs `board.py withdraw <id> --reason done` once the go is typed |
+| a question (or item) an Accept or Deny closed | nothing is owed to its asker any more, since the deliverer finds the asker only on the board: each answer line on the id is older than the ledger's `epoch`, written in the asker's own session, or has an asker row `delivered: true` in `board-deliveries.jsonl` (refused, or not taken 24 h after the answer: a delivered `starter` or `route` row, which the deliverer writes to the coordinator then, `ROUTE_AFTER_MS` in `deliver.ts`). A close no one carried stays however old, a `duplicate-answer` line changes nothing, an Accept ("Yes, I'll do it") on a one-way merge-go stays until `close-merged` sees its PR merged or closed, and an Accept on a `window-go` stays until its asker runs `board.py withdraw <id> --reason done` once the go is typed |
 | a question its asker took back, unanswered | a `withdrawn` or `superseded` line names it (`board.py withdraw`, `supersede`; § Several humans) |
 | a news item | its newest answer line is `read` |
 | a `returned` item | at once (reason `returned`): its asker has it |
@@ -792,7 +818,7 @@ refused, never decided by the local row. With an owner of `in_test`, Done comes 
 | `claim <KEY> [--release] [--input FILE]` | the comment `claim <role>@<human> <session>` (or `release …`) on the ticket and a line in `board-claims.jsonl`; a claim lives `board.claim_hours` (default 4) from its comment, until the same role, human and session releases it; only a claim on a comment's first line counts, from the account of the human it names or one of `board.shared_accounts` | `board.py claim <KEY>: refused: claimed by <role>@<human> (<session>) at <ts>, live for <n> h`, when another claimant (role, human or session) holds a live claim on the ticket or in the local claims |
 | `inbox [--input FILE]` | the search `[<jql_scope> AND ]labels = "<question label>-<me>"`: every ticket that holds an open question to this session's human | — |
 | `reply <KEY> <accept\|deny\|discuss\|info\|update> [--text T]` | the answer of this session's human on the ticket: the comment `<role>@<human> <kind> · <T>`, then this human's question label off (`{"op": "unlabel", "key", "remove"}`); another human's question stays theirs | an unknown human |
-| `withdraw <Q> [--for <Q2>] [--reason T]`, `supersede <Q> --by <Q2> [--reason T]` | the asker (its session name, matched in any case; a nameless `unknown` never matches) or the coordinator takes its own open question off the board: a `withdrawn` or `superseded` line (with `by`, or `for` when it gave way to `<Q2>`) in `board-questions.jsonl`; a question asked with `--to` also gets the comment `<Q> withdrawn` (or `superseded by <Q2>`) and loses its label | another session's question, an id not open, `--by` naming no other open question; a refused `supersede` of `<Q>` also names each session that withdrew its own question for `<Q>` (`--for`, or `<Q>` in its reason): the caller tells them, since their option is on no board |
+| `withdraw <Q> [--for <Q2>] [--reason T]`, `supersede <Q> --by <Q2> [--reason T]` | the asker (its session name, matched in any case; a nameless `unknown` never matches) or the coordinator takes its own open question off the board: a `withdrawn` or `superseded` line (with `by`, or `for` when it gave way to `<Q2>`) in `board-questions.jsonl`; a question asked with `--to` also gets the comment `<Q> withdrawn` (or `superseded by <Q2>`) and loses its label | another session's question, an id the board and its logs never had (an id already off the queue is no refusal: `<Q>: nothing to withdraw, it is off the queue (<status>, …)`, exit 0; the status is `question_status`, the one definition of open that `show` and the pane share), `--by` naming no other open question; a refused `supersede` of `<Q>` also names each session that withdrew its own question for `<Q>` (`--for`, or `<Q>` in its reason): the caller tells them, since their option is on no board |
 | `ask … [--input FILE]` | a `merge-go` in a crew with `humans` reads the ticket's status first | `board.py ask: refused: <KEY> is <status> on the ticket` when it is On Hold; refused too for a status no `board.states` entry maps |
 | `ask … --to <human>` | as § Questions and decisions (the cold reader included), for a human on another machine: the item keeps `to` and `label`, the carry is the comment `<question_label> <labels.to> <Name> · <ask> · <labels.recommendation>: <recommendation>` and the label `<question_label lowercased>-<human>`; `--to` naming this session's own human is a plain `ask` | `--to` naming no human of the crew, or a `--key` that is a plan slug |
 
