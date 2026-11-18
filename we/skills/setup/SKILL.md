@@ -1,7 +1,7 @@
 ---
 name: setup
 description: >
-  Project setup: detects stack, ticketing and tools, asks up to six skippable questions,
+  Project setup: detects stack, ticketing and tools, asks up to seven skippable questions,
   writes .weside/config.json, optionally rosters and crew. Triggers: "/we:setup", "configure
   project", "initialize repo", "first time".
 ---
@@ -52,6 +52,12 @@ never commit yourself.
    the 5h window an account counts as full (no new worker starts while every account in rotation is)? Defaults `10` and `80` (skip keeps them). Process
    workers share one login, so too many at once hit the usage limit together; `we-worker` refuses a
    start over either (`${CLAUDE_PLUGIN_ROOT}/scripts/worker_launch.py` `capacity`).
+7. **Plan landing**, asked only when the default branch has a ruleset
+   (`gh api repos/{owner}/{repo}/rules/branches/<default>` returns a rule): do plans reach it by a
+   docs PR or by direct push? `pr` (default) · `push` (only when this session's account may bypass the
+   ruleset). `push` lands plan commits through `plan_push.py`
+   (`${CLAUDE_PLUGIN_ROOT}/references/plan-commit.md` step 5), and only once `.weside/config.json`
+   is committed on the default branch: both read that copy.
 
 Review gates are detected, not asked: a Claude or Codex review workflow in `.github/workflows/`, a
 CodeRabbit or Greptile app. The ids go to `review.available`; `/we:ci-review` collects threads from
@@ -77,6 +83,7 @@ Written always, also when step 4 is declined. Only keys a verb reads:
   "review": { "available": ["claude"] },
   "agents": { "visible_teammates": false, "worker_launch": "subagent" },
   "workers": { "max_busy_sessions": 10, "max_active_5h_percent": 80 },
+  "plans": { "land": "pr", "push_paths": ["docs/plans/**"], "secret_scan": null },
   "acceptance": { "receipts_workflow": "<workflow path whose RC run uploads accept.json, or null>",
                   "rc_tag_glob": "<RC tag glob, e.g. v*-rc.*>" }
 }
@@ -90,13 +97,16 @@ receipt for the acceptance keeper; `lenses.acceptance.sample` stays the lens sam
 `/we:merged` moves a landed story to In Review, never to Done (L0 §Lifecycle;
 `${CLAUDE_PLUGIN_ROOT}/skills/merged/SKILL.md` § 5).
 
+`plans.secret_scan` stays `null` (gitleaks) unless the user names a scanner: a command with `{range}`
+and an optional `{report}`, or `"none"` (`${CLAUDE_PLUGIN_ROOT}/scripts/plan_push.py`).
+
 `agents.worker_launch` is a command template that starts each dev worker as a session of its own
 (`${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md` § Worker launch backend), for a repo without a
 crew; `"subagent"` (shown above) is its default. A repo with a crew gets one in the crew's
 `launch.worker` instead, written in step 4a (L0 §Sessions: build only in workers).
 
 A re-run re-detects `tools` and overwrites only that block. Print what was configured in a short
-block (stack, ticketing, goals, test discipline, verification, review gates, worker cap, missing tools).
+block (stack, ticketing, goals, test discipline, verification, review gates, worker cap, plan landing, missing tools).
 
 ## 4. Council (optional, ask once)
 

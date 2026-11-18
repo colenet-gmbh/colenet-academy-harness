@@ -119,8 +119,9 @@ a wrong claim goes back to the refiner. Pass → set `status: approved` in the p
 frontmatter, then commit it per `${CLAUDE_PLUGIN_ROOT}/references/plan-commit.md` (plan and staging-check
 file copied out of the refiner's worktree, step 3, and committed together, step 4; never the shared main
 checkout). Fail → re-dispatch once naming the missing item, then one question line to the epic owner. Then remove the
-refiner's worktree (step 6). Run the Ready panel (`/we:lens ready <KEY>`) once the docs PR's review is clean,
-or right before the build: every review edit to the plan is a new blob and makes a green panel stale. On the default branch (its docs PR merged) and green under the Ready gate the story is
+refiner's worktree (step 6). Run the Ready panel (`/we:lens ready <KEY>`) once the plan landed by push (`plans.land: push`,
+`plan_push.py` exit 0) or its docs PR's review is clean, or right before the build: every review edit to the plan is a new
+blob and makes a green panel stale. On the default branch (pushed, or its docs PR merged) and green under the Ready gate the story is
 Selected; move its ticket per `ticketing.md`, which names the mover for every state.
 
 ## Build
@@ -139,6 +140,7 @@ after the first merged; its PR waits for that merge). Wait for the merge only wh
 still open (owner, 09.11.2026: "wir müssen keine tage warten").
 
 **Before every dispatch:** `git fetch origin`, re-read the plan (another session may have built it).
+A plan landed by push (`references/plan-commit.md` step 5) has no docs PR; the waits-for line below does not apply.
 When only CI holds the plan's docs PR, the build may start once the Ready panel is green on the plan
 blob, before the pull: `board.py select` needs the plan on the default branch (with a crew
 `risk.command` its tier fails until then), and In Progress needs Selected. The code PR carries the
