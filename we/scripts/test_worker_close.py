@@ -332,7 +332,8 @@ class TestRefusals:
         assert close(KEY) == 1
         out = capsys.readouterr().out
         assert f"held: no story plan for {KEY} on origin/main" in out
-        assert f"move {KEY} to In Review yourself" in out
+        assert f"move {KEY} to In Review yourself once every repo landed: python3 " in out
+        assert f"board.py move {KEY} in_review --pr https://github.com/acme/app/pull/7" in out
         assert world.transitions() == [] and not tree.exists()
 
     def test_a_remote_branch_with_an_open_pr_stays(self, world):

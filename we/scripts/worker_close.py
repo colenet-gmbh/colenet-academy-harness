@@ -25,7 +25,8 @@ One writer for "this story's build is over". In the order it runs:
    `held: <names> still work on <KEY>; run close again when they end`, and `claude agents`
    unreadable holds too. **No story plan on `origin/<default>`**, since then nothing names the
    repos that must land (a repo whose PR titles never carry the key stays invisible): the session
-   moves the ticket itself.
+   moves the ticket itself (with a crew file by the printed `board.py move`, a hand move in the
+   transitions log).
 3. **Teardown** (`--keep-worktrees` skips it). A worktree is the story's when its launcher marker
    names the key, or its branch is the head branch of one of the story's PRs or carries the key
    as a whole token. Each one stays, named, when it is the caller's own tree, a living session
@@ -618,7 +619,7 @@ def _given(key: str, ref: str, ctx: dict) -> dict:
     return given
 
 
-def _hold(key: str, ctx: dict, given: dict | None) -> str | None:
+def _hold(key: str, ctx: dict, given: dict | None, urls: list[str]) -> str | None:
     """Why In Review waits although every PR the key shows is merged, or None."""
     try:
         names = holders(ctx["top"], key, ctx["pattern"], closed_names(ctx["top"], given))
@@ -627,9 +628,16 @@ def _hold(key: str, ctx: dict, given: dict | None) -> str | None:
     if names:
         return held_line(key, names)
     if not ctx["plan"]:
+        how = (
+            f"once every repo landed: python3 {HERE / 'board.py'} move {key} in_review "
+            + " ".join(f"--pr {u}" for u in urls)
+            + " (a hand move in the transitions log)"
+            if ctx["state"] is not None
+            else "with your ticketing tool (references/ticketing.md)"
+        )
         return (
             f"held: no story plan for {key} on origin/{ctx['base']} names the repos that must "
-            f"land; move {key} to In Review yourself (references/ticketing.md)"
+            f"land; move {key} to In Review yourself {how}"
         )
     return None
 
@@ -665,7 +673,7 @@ def _in_review(
             + (f"; follow-up PRs: {', '.join(after)}" if after else "")
         )
         return res
-    res["held"] = _hold(key, ctx, given)
+    res["held"] = _hold(key, ctx, given, [p["url"] for p in merged])
     if res["held"]:
         res["closed"] = False
         res["out"] += [res["held"], f"in_review: {key} stays {was or 'unmoved'}"]
