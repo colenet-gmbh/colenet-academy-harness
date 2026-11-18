@@ -108,11 +108,9 @@ silently. If the workflow rejects the move, report it and continue.
   The next agent reads the plan, not the diff.
 - **Epic upkeep:** `we-worker close` writes the one `## Updates Log` line (§ 4); a learning the
   next plan needs goes in through its `--learning`, never as a second line.
-- **Finish line:** with an epic that has `line:`, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/epic_state.py line
-  <epic plan>` and put its summary into the Updates Log line. It counts Done, which acceptance sets later:
-  the trigger fires where Done is set (`/we:accept` § 4, the coordinator's sweep), never here. Once every
-  other line key is Done and this merge is the last one, start no new story of the epic: the line is
-  built (`epic-plan.md` § Finish line). `we-worker close` puts the summary into its line already.
+- **Finish line:** the line's trigger fires where Done is set (`/we:accept` § 4, the coordinator's
+  sweep), never here. Once every other line key is Done and this merge is the last one, start no
+  new story of the epic: the line is built (`epic-plan.md` § Finish line).
 - **No state file.** Run state lives in the PR and the ticket, and what is still open lives in
   the report (owner decision 2026-09-25).
 - **Board:** in a repo with a crew, `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/board.py close-merged` drops the merge
