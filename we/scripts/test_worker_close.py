@@ -275,6 +275,67 @@ class TestRefusals:
         assert f"keep {tree}: {KEY}-w still runs there" in capsys.readouterr().out
         assert (world.workers / f"{KEY}-w.settings.json").exists()
 
+    def test_another_living_worker_on_the_key_holds_in_review_and_the_teardown_runs(
+        self, world, capsys
+    ):
+        tree = world.worker()
+        world.agents = [
+            {"sessionId": "w2", "name": f"{KEY}-api", "pid": os.getpid()},
+            {"sessionId": "w3", "name": f"{KEY}-dead", "pid": 999_999_999},
+            {"sessionId": "w4", "name": "PROJ-120-x", "pid": os.getpid()},
+        ]
+        world.save()
+        assert close(KEY) == 1
+        out = capsys.readouterr().out
+        assert f"held: {KEY}-api still work on {KEY}; run close again when they end" in out
+        assert world.transitions() == [] and "epic:" not in out
+        assert not tree.exists()  # the finished tree still goes
+
+    def test_the_worker_being_closed_and_the_caller_do_not_hold(self, world, capsys):
+        world.worker()
+        world.agents = [{"sessionId": "w", "name": f"{KEY}-w", "pid": os.getpid()}]
+        world.save()
+        assert close(KEY, "--pr", "7", "--keep-worktrees") == 0, capsys.readouterr()
+        assert world.transitions()[0]["to"] == "in_review"
+
+    def test_a_queued_start_on_the_key_holds_in_review(self, world, capsys):
+        world.worker()
+        queue = world.workers / "queue"
+        queue.mkdir()
+        doc = {
+            "name": f"{KEY}-ui",
+            "tree": str(world.top),
+            "queued_at": 1,
+            "waiter_pid": os.getpid(),
+        }
+        (queue / f"{KEY}-ui.json").write_text(json.dumps(doc))
+        assert close(KEY, "--keep-worktrees") == 1
+        assert f"held: {KEY}-ui (queued) still work on {KEY}" in capsys.readouterr().out
+        assert world.transitions() == []
+        doc["waiter_pid"] = 0  # a queue entry without a living waiter holds nothing
+        (queue / f"{KEY}-ui.json").write_text(json.dumps(doc))
+        assert close(KEY, "--keep-worktrees") == 0
+
+    def test_claude_agents_unreadable_holds_in_review(self, world, capsys, monkeypatch):
+        world.worker()
+        monkeypatch.setenv("FAKE_AGENTS_EXIT", "1")
+        assert close(KEY) == 1
+        assert "held: claude agents unreadable" in capsys.readouterr().out
+        assert world.transitions() == []
+
+    def test_no_story_plan_on_the_default_branch_moves_nothing(self, world, capsys):
+        git(world.top, "rm", "-q", f"docs/plans/{KEY}-story.md")
+        world.commit("drop plan")
+        git(world.top, "push", "-q", "origin", "HEAD:main")
+        world.write(f"docs/plans/{KEY}-story.md", STORY)  # a local copy names nothing
+        tree = world.worker()
+        assert close(KEY) == 1
+        out = capsys.readouterr().out
+        assert f"held: no story plan for {KEY} on origin/main" in out
+        assert f"move {KEY} to In Review yourself once every repo landed: python3 " in out
+        assert f"board.py move {KEY} in_review --pr https://github.com/acme/app/pull/7" in out
+        assert world.transitions() == [] and not tree.exists()
+
     def test_a_remote_branch_with_an_open_pr_stays(self, world):
         world.pr(5, "OPEN", "feat/shared")
         line = worker_close.remote_branch(world.top, "feat/shared")
@@ -297,6 +358,15 @@ class TestSweep:
         assert tree.exists() and world.transitions() == []
         assert close("--sweep", "--apply") == 0
         assert not tree.exists() and world.transitions()[0]["to"] == "in_review"
+
+    def test_another_living_worker_holds_the_sweep(self, world, capsys):
+        world.worker()
+        world.agents = [{"sessionId": "w2", "name": f"{KEY}-api", "pid": os.getpid()}]
+        world.save()
+        assert close("--sweep") == 0
+        assert f"  held: {KEY}-api still work on {KEY}" in capsys.readouterr().out
+        assert close("--sweep", "--apply") == 1
+        assert world.transitions() == []
 
 
 def test_with_line_puts_a_newest_first_log_on_top():
