@@ -100,7 +100,7 @@ A refiner is a `we:dev-high` worker `<KEY>-refiner` that you start in a worktree
 from the main checkout creates it under `workers.tree: own`, else `git worktree add --detach <path>
 origin/<default>` and `--tree <path>`; the brief's `Tree:` names it) (L0 §Lifecycle: the epic's
 master starts it; the owner judges, never starts), whose brief (the four headings of `references/worker-dispatch.md`
-§ Name and brief) begins under its goal: "Use the Skill tool with skill `we:plan-story` and args `<KEY>`" (a bare `/we:plan-story` in a subagent prompt is not proven to run the skill, probe 27.09.2026). Refiners may run in parallel (up to three); each writes its plan and, for `receipt` ACs, the staging-check file the plan's `**Staging checks:**` line names. The
+§ Name and brief) begins under its goal: "Use the Skill tool with skill `we:plan-story` and args `<KEY>`; carry to Selected" (a bare `/we:plan-story` in a subagent prompt is not proven to run the skill, probe 27.09.2026). Refiners may run in parallel (up to three); each writes its plan and, for `receipt` ACs, the staging-check file the plan's `**Staging checks:**` line names. The
 brief carries the context a human would give: epic frame (3–5 lines), the story's intent, scope
 in/out, known constraints and seams, one to three architecture docs to read first, and "a design
 fork you cannot settle → write `## Open Fork` and stop". Its limits section ends with the tree limits, verbatim
@@ -113,17 +113,12 @@ Read, search and write only with the Read, Grep, Glob, Edit and Write tools unde
 /we:plan-story names, with absolute paths and no `cd`.
 ```
 
-On return, run the DoR scan on the plan in the returned worktree, then one `we:explore-medium`
-checks every code claim in the plan (file:line, "only caller", "no reader", each named lever) and
-in its staging-check file (each request, field name and CLI flag a receipt uses) against the code;
-a wrong claim goes back to the refiner. Pass → set `status: approved` in the plan's
-frontmatter, then commit it per `${CLAUDE_PLUGIN_ROOT}/references/plan-commit.md` (plan and staging-check
-file copied out of the refiner's worktree, step 3, and committed together, step 4; never the shared main
-checkout). Fail → re-dispatch once naming the missing item, then one question line to the epic owner. Then remove the
-refiner's worktree (step 6). Run the Ready panel (`/we:lens ready <KEY>`) once the plan landed by push (`plans.land: push`,
-`plan_push.py` exit 0) or its docs PR's review is clean, or right before the build: every review edit to the plan is a new
-blob and makes a green panel stale. On the default branch (pushed, or its docs PR merged) and green under the Ready gate the story is
-Selected; move its ticket per `ticketing.md`, which names the mover for every state.
+The refiner gates, lands, runs the Ready panel, fixes within the round cap and selects
+(`/we:plan-story` § Carry to Selected); its land step checks the code claims, you run no explore pass
+over its plan. While it runs: a docs PR URL it sends you is armed per `plan-commit.md` step 5. On its
+report: `selected` → the story builds (§ Build), its ticket moved per `ticketing.md`, which names the mover for every state; `capped` → its standing findings go to each holder it
+names (`/we:lens` § Round cap); `selected: no` → one line to the role it names; `blocked` → the fork
+goes to its owner. Then remove the refiner's worktree (`plan-commit.md` step 6).
 
 ## Build
 
@@ -300,8 +295,8 @@ Then one `we:dev-medium` finisher in `<int>` runs the finish sequence.
   the HOW to the epic owner (else the component owner), each milestone (plan on main, PR opened or merged, a blocker) as one line
   to the coordinator, a question for the human as one question line through it (L0 §Talking and the board). A Lead bound to a companion also writes back at those milestones per
   `${CLAUDE_PLUGIN_ROOT}/references/companion-session.md` § Writeback.
-- An epic run: after every merged story run the epic upkeep (`/we:epic` update: mirror, Updates Log,
-  Learnings forward, the finish line per `/we:merged` § 6) and commit it before the next story starts.
+- An epic run: after every merged story run the epic upkeep (one Updates Log line per `epic-plan.md`
+  § Upkeep after a merge, learnings forward, the finish line per `/we:merged` § 6) and commit it before the next story starts.
   Pull only keys on the epic's `line:`; work a worker finds beyond it becomes an `## Extensions` entry,
   never a story or a phase. When acceptance tells you `finish line reached`, report it to the coordinator in one line; from then on start no worker for this
   epic until the human's answer comes back. An epic without `line:`: draw it first (a proposal through

@@ -111,6 +111,8 @@ user names plugins or MCP servers a worker never needs; absent, the plugin's def
 
 `plans.secret_scan` stays `null` (gitleaks) unless the user names a scanner: a command with `{range}`
 and an optional `{report}`, or `"none"` (`${CLAUDE_PLUGIN_ROOT}/scripts/plan_push.py`).
+`plans.short_max_files` (default 3) caps the files of a short-form plan (`${CLAUDE_PLUGIN_ROOT}/references/story-plan.md`
+§ Short form); write it only when the user names another limit.
 
 `agents.worker_launch` is a command template that starts each dev worker as a session of its own
 (`${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md` § Worker launch backend), for a repo without a

@@ -5,8 +5,8 @@
 Frontmatter · Readiness · Lifecycle · Sections, in this order (Context, Open Fork, Acceptance
 Criteria, User Journey, Testing Requirements, Verification, Technical Approach, Implementation
 Phases, Out of scope, Constraints and Pins, Design Decisions, Code Guidance, Security Review
-Required, Documentation Impact, Updates Log) · Oracle-class marker · What the Ready gate reads ·
-Updates Log lines.
+Required, Documentation Impact, Updates Log) · Short form · Oracle-class marker · What the Ready
+gate reads · Updates Log lines.
 
 The contract between the writer (`/we:plan-story`, run by a refiner worker the epic's master starts) and the readers (`/we:master`,
 `/we:develop`, `scripts/ready_gate.py`). This file owns the grammar the gate parses; change a field
@@ -39,9 +39,10 @@ parallel_groups: []
 | `story` | Roster and branch key; the file name is the fallback. |
 | `epic` | An epic run rosters by it; without it the story is invisible there. Omit the line only for a standalone story. |
 | `depends_on` | Keys that must be built before this story is dispatched. Each key's plan `docs/plans/<KEY>-story.md` must be on the default branch before a Ready panel starts (`lens_verdict.py plan ready` refuses otherwise). A key from another repo carries its repo, `repo/KEY`: it is warned, not checked. |
-| `status` | `draft` while an `## Open Fork` stands or the Ready gate fails; `approved` once the DoR scan and the claim check pass: the master sets it in the commit that puts the plan on the default branch (`/we:master` § Refine lane); `/we:plan-story` writes `draft`. The `/flow` pane and the `/board` work tree read it for the Approval lamp; Selected itself comes from `board.py select`. Approval is per epic (L0 §Units), never per story; the one exception is the master card's fence rule. `built`, `done`, `merged`, `shipped` and `in review` count as built. |
+| `status` | `draft` while an `## Open Fork` stands or the Ready gate fails; `approved` once the DoR scan and the claim check pass, set in the commit that puts the plan on the default branch by whoever lands it (`/we:plan-story` § Carry to Selected, else `/we:master` § Refine lane); a plan written without landing stays `draft`. The `/flow` pane and the `/board` work tree read it for the Approval lamp; Selected itself comes from `board.py select`. Approval is per epic (L0 §Units), never per story; the one exception is the master card's fence rule. `built`, `done`, `merged`, `shipped` and `in review` count as built. |
 | `comments_read_through` | Id or timestamp of the newest ticket comment the plan answers, or `none`. A newer comment means the plan may be stale. |
 | `parallel_groups` | `[[2, 3]]` lets phases 2 and 3 run concurrently. Only for phases with disjoint `**Files:**` and a fixed contract between them; `[]` (serial) is the normal case. |
+| `form` | `short` for the short form (§ Short form); absent is the full form. Any other value fails the gate. |
 | `type`, `created` | Informational. |
 
 ## Readiness
@@ -194,6 +195,26 @@ to the built code; a receipt that cannot run before the build is no Ready defect
 label) belong there; the prose ACs keep the new and fuzzy ones. A repo whose `.weside/verify.md`
 names no staging checks writes `none — no staging checks in this repo`.
 
+## Short form
+
+A defect at one place takes the short form: frontmatter with `form: short`, then `## Is` (what
+happens now, with the place), `## Should` (what happens instead), `## Acceptance Criteria` (same
+form and markers as above), `## Files` (a bullet per path, read like a `**Files:**` list),
+`## Verification` (the same block) and, once written, `## Updates Log`. `## Open Fork` stands above
+`## Acceptance Criteria` as in the full form. Tests follow `references/test-economy.md` in both
+forms; the short form names them in the AC's `ci:` detail.
+
+The Ready gate accepts it only while `## Files` names at most `plans.short_max_files` paths
+(`.weside/config.json`, default 3), none of them marked `(other repo)`, and none on a `path` rule
+of any section of the checkout's `.weside/risk-paths` (a repo without the file gets no short form).
+Everything else refuses with "use the full form": rewrite the plan in § Sections, never trim the
+files to fit.
+
+| Plan | Verdict |
+|---|---|
+| `form: short`, `## Files`: the parser and its test; `## Is`: "`parse()` drops the last field at `src/csv.py:41`" | good: one place, the defect named |
+| `form: short`, `## Files`: a handler, a migration, a client and a test | bad: four files and a migration; the full form |
+
 ## Oracle-class marker
 
 Every AC ends with its oracle class in brackets: `[receipt]` (a mechanical check in the repo's
@@ -247,7 +268,8 @@ Every repo value comes from the crew (`scripts/crew.py`).
 Story checks, each failure one line, the run never stops at the first:
 
 1. Frontmatter `story:` present; without `epic:` the fence and goal checks warn (§ Warn until present).
-2. Every section of § Sections present except `## Code Guidance` and `## Updates Log`; an
+2. Every section of § Sections present except `## Code Guidance` and `## Updates Log` (with
+   `form: short` the sections of § Short form instead, and its file limit and risk-path check); an
    `## Open Fork` fails.
 3. Every AC holds `**Given**`, `**When**`, `**Then**` and a marker.
 4. Every marker parses (§ Oracle-class marker).
@@ -262,7 +284,7 @@ Story checks, each failure one line, the run never stops at the first:
    would refuse at `gh pr create` (an AC class such as `ci` there, a decline without reason) is one
    warning, never a failure.
 
-**Files.** Under each `### Phase <n>:`, the bullets after `**Files:**` up to the next
+**Files.** In the short form the bullets of `## Files`; in the full form under each `### Phase <n>:`, the bullets after `**Files:**` up to the next
 `- **<Label>:**` bullet. A backtick span is a path when it holds no whitespace and contains `/`,
 starts with `.`, or is a bullet's first span and ends in an extension; a trailing `:<line>[-<line>]`
 is dropped. A phase line `- **Repo:** <name>` puts its paths in repo `<name>`; without it they are

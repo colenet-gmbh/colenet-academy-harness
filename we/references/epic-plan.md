@@ -1,13 +1,13 @@
 ---
 name: epic-plan
-description: The epic plan file — frontmatter links, mirror block, target and mode, drafting and writer contract. Shared by /we:epic, /we:standup, /we:merged.
+description: The epic plan file — frontmatter links, finish line, upkeep after a merge, target and mode, drafting and writer contract. Shared by /we:epic, /we:standup, /we:merged.
 ---
 
 # Epic plan
 
 ## Contents
 
-Links · Finish line · Mirror block · Target and mode · Drafting an epic · Writer contract.
+Links · Finish line · Upkeep after a merge · Target and mode · Drafting an epic · Writer contract.
 
 Above an epic stands only the goal file (L0 §Units): an epic carries `serves: <metric>`, a chain is
 the epics serving one metric, and an epic too big for one outcome becomes linked epics. `/we:epic`
@@ -63,48 +63,36 @@ The human approves an epic together with its finish line (L0 §Units); the line 
 - **Running epics** approved before the finish line have no `line:`: `board.py move … backlog` warns
   and moves until their master draws the line (a proposal the human approves like a new epic).
 
-## Mirror block
+## Upkeep after a merge
 
-`/we:epic` owns a block of child Stories between markers; `/we:merged` updates one row after a
-merge. Everything outside the markers is user prose and never touched.
+The epic plan holds no story table: `/flow` and the `/board` work pane derive it from the story plans
+whose `epic:` names the epic and from their PRs (`hooks/plans/plans.ts`). After a story's merge the
+epic gets exactly one line in `## Updates Log`, committed per `${CLAUDE_PLUGIN_ROOT}/references/plan-commit.md`, and
+`updated:` set:
 
-```markdown
-<!-- mirror:start (auto-generated; do not edit by hand — run /we:epic to refresh) -->
-
-_Mirror of child Stories in the ticketing tool, refreshed YYYY-MM-DD._
-
-| Key | Title | Status | Plan | Last activity | Notes |
-|---|---|---|---|---|---|
-
-<!-- mirror:end -->
+```text
+- YYYY-MM-DD — <KEY> merged (PR #<n>); <epic_state.py line summary, with a line:>; <a learning the next plan needs | none>
 ```
 
-- The block sits under `## Stories`.
-- `Plan` is `✓` when `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ready_gate.py story
-  docs/plans/<KEY>-story.md` exits 0 (`${CLAUDE_PLUGIN_ROOT}/references/story-plan.md` § Readiness), else `—`.
-- Status buckets: Done · Active · Refined (plan passes the gate, not started) · Backlog · Blocked.
-  Map the tool's status names through `.weside/orchestrate.md` § Ticket states.
-- Children come from the ticketing tool (`${CLAUDE_PLUGIN_ROOT}/references/ticketing.md`) by parent or
-  Epic link. Without ticketing: the frontmatter of the child plan files, with a footnote saying so.
-- A refresh rewrites only the block, sets `updated:` and appends one line to `## Updates Log`:
-  `- YYYY-MM-DD — mirror refresh (<N> children; +<a> added, −<b> removed, !<c> status-changed)`.
-  Missing markers: insert the block under its heading, creating the heading.
+A learning longer than that line goes into the next story's plan, never into the epic. An older epic
+plan may still carry a block between `<!-- mirror:start` and `<!-- mirror:end -->`: nothing reads
+it; the next commit to the epic deletes it.
 
 ## Target and mode
 
 1. Target, first hit wins: the argument (key, path or slug); the branch name; the newest epic plan in
    `docs/plans/` with an active status; else list the candidates and ask one question.
 2. Mode from the words around the target: none → **Status** (read-only, the default); "refine",
-   "update", "sharpen" → **Refine**; "new" or a slug with no file → **Create**; "refresh", "sync",
-   "mirror" → **Mirror-refresh**. Ambiguous → one question. A ticket key that is a Story, or matches
+   "update", "sharpen" → **Refine**; "new" or a slug with no file → **Create**. Ambiguous → one question. A ticket key that is a Story, or matches
    no `*-epic.md` and no ticketing Epic, is **Create** from that ticket's newest comment (a slice cut
    written there before `/we:epic {TICKET}` was printed).
-3. Status loads the plan, the goal file's metric it serves and the children, and renders: header
-   line with status and path, the children per bucket, drift against the mirror (`+` missing, `-`
-   gone, `!` stale status), one risk-driven next move, and the offers `[r]` refresh · `[f]` Refine ·
-   `[q]` done. Status never writes.
-4. Mirror-refresh is mechanical: the session writes the block itself and commits it per `${CLAUDE_PLUGIN_ROOT}/references/plan-commit.md`. No writer.
-5. Each transition (Status → Refine) needs the user's choice.
+3. Status loads the plan, the goal file's metric it serves and the children (ticketing children of
+   the epic ticket, else the story plans whose `epic:` matches; status buckets Done · Active · Refined
+   (plan passes the Ready gate, not started) · Backlog · Blocked, mapped through
+   `.weside/orchestrate.md` § Ticket states), and renders: header line with status and path, the
+   children per bucket, one risk-driven next move, and the offers `[f]` Refine · `[q]` done. Status
+   never writes.
+4. Each transition (Status → Refine) needs the user's choice.
 
 ## Drafting an epic (Refine and Create)
 
@@ -119,8 +107,7 @@ _Mirror of child Stories in the ticketing tool, refreshed YYYY-MM-DD._
    otherwise. A subagent writes a plan file here, never code. Brief: first line `Read <abs>/skills/epic/references/template.md and <abs>/references/epic-plan.md, then follow § Writer contract.`
    (paths as they resolve here); the absolute target path in the scratch worktree; the goal file's
    metric; every interview decision with the rejected alternative and who decided; the user's words
-   verbatim where they matter; the records read with the one line each settled; freshly fetched
-   mirror rows.
+   verbatim where they matter; the records read with the one line each settled.
 4. Approval: present the path, the writer's digest and what step 5 will do: the ticket created or
    updated with its title (or re-parented or closed), and where the commit lands. The approval covers
    only what this message names. Feedback goes to the same writer via `SendMessage`. Plan mode is not
@@ -132,7 +119,7 @@ _Mirror of child Stories in the ticketing tool, refreshed YYYY-MM-DD._
 
 - Write only the target file. No ticket, no commit, no other file, no downstream verb.
 - Follow the template's sections in order. On Refine, edit in place: keep the user's prose where the
-  interview did not change it, and leave the mirror block to the rows the brief carries.
+  interview did not change it.
 - Read the goal file and the records the brief names before writing; a contradiction between them
   and the brief is reported, never resolved silently.
 - Name a size signal you notice (more than one outcome, more stories than the epic limit) in the

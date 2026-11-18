@@ -1,13 +1,11 @@
 ---
 name: plan-commit
-description: Where and how a plan or planning doc (story plan, epic plan, mirror refresh, optimization store) is committed — repo fact first, else a detached scratch worktree that lands by push (plans.land push) or by a docs PR with auto-merge.
+description: Where and how a plan or planning doc (story plan, epic plan, an epic's updates-log line, optimization store) is committed — repo fact first, else a detached scratch worktree that lands by push (plans.land push) or by a docs PR with auto-merge.
 ---
 
 # Plan commit
 
-Every verb that commits a planning document follows this section: `/we:epic` (also a mirror
-refresh), `/we:master` (the plans its refiner workers wrote), `/we:plan-story` (when its brief makes
-it commit), `/we:merged`,
+Every verb that commits a planning document follows this section: `/we:epic`, `/we:master`, `/we:plan-story` (when its brief makes it commit), `/we:merged`,
 `/we:retro`, `/we:instruction-audit`, `/we:optimize`.
 
 1. **Repo fact first.** `.weside/orchestrate.md` § *Where plan commits land*, else the instruction
@@ -23,7 +21,8 @@ it commit), `/we:merged`,
    database for a tree that carries one file. Commit
    hooks still run on the commit.
 3. **Get the file into the scratch tree.** A writer dispatched by the verb writes straight to the
-   absolute path inside `<scratch>`. A file written elsewhere (a refiner's `isolation: "worktree"`
+   absolute path inside `<scratch>`. A refiner that carries its plan to Selected commits in its own
+   tree, a worktree off the default branch already, and needs no scratch tree. A file written elsewhere (a refiner's `isolation: "worktree"`
    tree) is copied with `cp` into `<scratch>` before the commit. A story plan's staging-check file
    (its `**Staging checks:**` line) travels with it, to the same relative path.
 4. **Commit and check.** A story plan first passes

@@ -16,9 +16,8 @@ line in the plan (step 5), nothing else: no commit, no push, no ticket write. Sh
 `git log`) are fine. Your final message is the report the dispatcher reads (step 6).
 **A brief that makes the plan a PR chunk** (it names the commit or plan-PR command) overrides the no-commit
 line: you commit and open the PR by that command, and the chunk ends at its merge (L0 § Workers): you watch it
-until green, answer its review and Ready-panel rounds on the same branch, then report. A brief that names
-`plan_push.py` instead lands the plan per `${CLAUDE_PLUGIN_ROOT}/references/plan-commit.md` step 5, and the
-chunk ends at its exit 0 (no PR to watch). Without such a line the
+until green, answer its review and Ready-panel rounds on the same branch, then report. **A brief that says `carry to
+Selected`** runs § Carry to Selected after step 5 and ends with its report. Without such a line the
 report ends you.
 
 ## Rules
@@ -86,7 +85,8 @@ report ends you.
      delete them (an allow-all policy and no purge passed three panels, two review rounds later).
 3. **Write the file.**
    - Sections, phases (`**Files:**`, `**Repo:**`, `**Risk:**`), AC form and oracle-class marker:
-     `${CLAUDE_PLUGIN_ROOT}/references/story-plan.md`. Real phases even for a small story, each independently
+     `${CLAUDE_PLUGIN_ROOT}/references/story-plan.md`. A defect at one place takes its § Short form; the gate
+     says when it needs the full form. Real phases even for a small full-form story, each independently
      committable; `rg` the changed symbols under the test trees for call sites that break. Every AC is checkable
      against a running system, not against the diff. A sentence users read about privacy, retention, consent,
      security or a crisis carries, in its AC, the verdict of the crew member with `specialist: legal` where the crew has one.
@@ -115,3 +115,26 @@ report ends you.
 
    A brief with a `Lead:` line, or running as an Agent Teams teammate: send the same text as one
    `SendMessage` to the Lead; your plain text never reaches it.
+
+## Carry to Selected
+
+The brief makes you land the plan and take it through the Ready panel; step 6's report comes at the end of
+this section, never between. A fork or a `scope change:` line still ends you with `blocked` at step 6.
+
+1. **Approve.** Set `status: approved`; `ready_gate.py story <plan>` exits 0 (step 4), or you fix and rerun.
+2. **Land** per `${CLAUDE_PLUGIN_ROOT}/references/plan-commit.md` steps 4–5 from your own tree (a worktree off
+   the default branch, so no scratch tree): its `check-plan-identifiers.py` is the check of your code claims,
+   no other pass follows. By push, `plan_push.py` exits 0. The PR way: open the docs PR, send its URL to your
+   starter in one line (a worker never arms; the starter does), and wait in the background with
+   `watch-pr-checks.sh <PR> --until-merged` for `merged`.
+3. **Panel.** Skill tool, skill `we:lens`, args `ready <KEY>`; you run its steps.
+4. **Fix within the cap.** A red round: fix every BLOCKING and WARNING finding of it in one edit, rerun steps
+   1–2, then step 3 again. `round cap: the lens holder decides` ends the loop: no further edit, report `capped`.
+5. **Select.** Green: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/board.py select <KEY>`. Refused because the
+   crew wants the product role for it: report `selected: no, <role> selects`, never retry.
+6. **Report**, one of:
+
+   ```text
+   selected: <KEY> | plan: <path on the default branch> | rounds: <n> | decided: <lens: sentence | none> | <step 6 fields>
+   capped: <KEY> | rounds: <n> | holder decides: <lens> → <role>: <standing finding, one per lens> | plan: <path>
+   ```
