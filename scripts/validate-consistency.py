@@ -90,8 +90,25 @@ RETIRED_PATHS = (
     "we/hooks/automerge_gate.py",
     "we/hooks/test_automerge_gate.py",
     "we/scripts/board_freeze.py",
+    "we/skills/ac-review",
+    "we/skills/decide",
+    "we/skills/find-dead-code",
+    "we/skills/codex-task",
 )
-RETIRED_VERBS = ("orchestrate", "refine", "saga", "vision", "meet", "story", "handoff")
+# The last four went unused: no successor verb, the work they did has an owner elsewhere.
+RETIRED_VERBS = (
+    "orchestrate",
+    "refine",
+    "saga",
+    "vision",
+    "meet",
+    "story",
+    "handoff",
+    "ac-review",
+    "decide",
+    "find-dead-code",
+    "codex-task",
+)
 RETIRED_SHELLS = (
     "architect",
     "legal",
@@ -118,6 +135,9 @@ RETIRED_TERMS = (
     "§ Mirror block",
     "Mirror-refresh",
     "<mirror block",
+    # The docs-vault MCP integration: ripgrep answers the same search; nothing reads `tools.turbovault`.
+    "turbovault",
+    "TurboVault",
 )
 # Files that name the retired terms on purpose: this checker and the tests that pin it.
 RETIRED_ALLOWLIST = {

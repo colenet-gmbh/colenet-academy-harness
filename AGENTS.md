@@ -84,6 +84,8 @@ evals/                            repeat cases for `claude plugin eval` (README.
 - Tool commands are detected from the project's marker files, never hard-coded.
 - No weside application paths, internal ticket keys or internal URLs in `we/`.
 - A shared fact lives in one file under `we/references/`; skills point at it.
+- A line says why, and a guideline where the case occurs comes before a rule or a check
+  (`we/AUTHORING.md` § Guideline before rule).
 
 ## Checks before a commit
 

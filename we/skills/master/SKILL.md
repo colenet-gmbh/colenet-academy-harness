@@ -201,9 +201,10 @@ Then one `we:dev-medium` finisher in `<int>` runs the finish sequence.
 1. Read the report. Re-run a test it names, in the worker's worktree, only when its `gates:` line
    lacks a receipt (the command, the HEAD it ran on, its result line), that HEAD is not the branch's HEAD, or you changed the tree after the report (a
    lane merge, your own fix); CI runs the suite again, and § After each lane merge covers integration.
-   Check the AC → evidence lines and the rows of `.weside/dod.md` against the named files and tests. No local LLM
+   Check the AC → evidence lines and the plan's `## Verification` block against the named files and tests,
+   not a separate DoD checklist: it repeats the rules. No local LLM
    review: CI runs the Claude and Codex reviews (`worker-dispatch.md` § Finish sequence). A missing
-   AC, a DoD `Fail` or a red gate goes back to the same worker by `SendMessage`.
+   AC, an unmet verification or a red gate goes back to the same worker by `SendMessage`.
 2. A migration gets `upgrade → downgrade → upgrade` on a real database. Run
    the conflict check of `/we:ci-review` § 3 in `<wt>` (merge `origin/<default>` only on a conflict), then push once from the PR branch's worktree
    (`git -C <wt> push -u origin <branch>`); the pre-push hooks run once over the whole diff.
