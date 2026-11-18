@@ -110,7 +110,7 @@ def arm_calls(calls):
 
 def test_a_blocked_pr_is_armed_on_the_head_it_read(tmp_path):
     code, out, calls = run(tmp_path, [{"head": NEW, "checks": PENDING}], ["ok"])
-    assert (code, out) == (0, [f"armed: auto-merge on {NEW} (merge)"])
+    assert (code, out) == (0, [f"armed: auto-merge on {NEW} (merge)", "pending: Claude Review"])
     (arm,) = arm_calls(calls)
     assert f"sha={NEW}" in arm and "method=MERGE" in arm
 
@@ -162,8 +162,8 @@ def test_a_clean_answer_never_merges(tmp_path, later, arms, code, line):
     got, out, _ = run(tmp_path, reads, arms)
     assert got == code, out
     assert not any(o.startswith("ready") for o in out) or code == 3
-    if line:
-        assert out[-1] == line
+    if line:  # the verdict line; `armed` adds its `pending:` line after it
+        assert [o for o in out if not o.startswith("pending: ")][-1] == line
     if code == 3:
         assert out == [
             f"ready: all required checks green on {NEW} — merge: gh pr merge 7 --merge --match-head-commit {NEW}"

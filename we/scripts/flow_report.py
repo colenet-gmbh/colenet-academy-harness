@@ -32,7 +32,10 @@ Sources (read only; the script holds no credential):
   counts per required check the heads of the window's PRs on which it concluded red (``RED``),
   each once by its outcome: ``rerun green`` (the same head later shows it green: a false alarm),
   ``fixed`` (a later head of the PR shows it green), else ``open``. Without a required check the
-  row is ``n/a``.
+  row is ``n/a``. A required check named in ``flow.construction_checks`` of the repo's
+  ``.weside/config.json`` (red by construction until a release commit, such as a version check)
+  stays out of that row: ``Required checks: red by construction`` shows its heads as
+  ``<name> <n> by construction``.
 - ``lens_verdict.rounds`` for the Ready rounds of every key in the repo's severity log.
 - The ``Tests:`` line ``test-delta.py`` writes into a PR body: new test functions and cases per
   merged code PR. An escape is a story's move out of Done in the window; its class comes from the
@@ -549,6 +552,65 @@ def github_rows(prs: list, since: datetime, review_match: str, src: str) -> list
         )
     )
     return rows
+
+
+CONSTRUCTION_ROW = "Required checks: red by construction"
+
+
+def construction_checks(root: Path | None) -> list:
+    """`flow.construction_checks` of the repo's `.weside/config.json` (default empty): required
+    checks that are red by construction until a release commit."""
+    if root is None:
+        return []
+    try:
+        config = json.loads((root / ".weside" / "config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    flow = config.get("flow") if isinstance(config, dict) else None
+    names = flow.get("construction_checks") if isinstance(flow, dict) else None
+    if not isinstance(names, list):
+        return []
+    return [n for n in names if isinstance(n, str) and n]
+
+
+def red_head_rows(
+    prs: list,
+    required: list | None,
+    since: datetime,
+    src: str,
+    construction: list = (),
+    why: str | None = None,
+) -> list:
+    """`Required checks: red heads` over the required checks outside `construction`, and with
+    a construction check among the required ones the row `Required checks: red by construction`
+    (its heads red by construction, outside the totals); `n/a (<why>)` when `required` is None."""
+    if required is None:
+        return [na("Required checks: red heads", why or "required checks not read")]
+    built = [c for c in required if c in construction]
+    rest = [c for c in required if c not in built]
+    out = [
+        red_head_row(prs, rest, since, src)
+        if rest or not built
+        else row(
+            "Required checks: red heads",
+            0,
+            value="every required check is in flow.construction_checks",
+            source=f"{src}: required checks, PR heads in the window",
+        )
+    ]
+    if built:
+        counts = red_head_row(prs, built, since, src)["checks"]
+        out.append(
+            row(
+                CONSTRUCTION_ROW,
+                sum(sum(c.values()) for c in counts.values()),
+                value=" · ".join(
+                    f"{check} {sum(c.values())} by construction" for check, c in counts.items()
+                ),
+                source=f"{src}: flow.construction_checks, PR heads in the window",
+            )
+        )
+    return out
 
 
 def red_head_row(prs: list, required: list, since: datetime, src: str) -> dict:
@@ -1082,11 +1144,7 @@ def build(
 
     if prs is not None:
         rows += github_rows(prs, since, args.review_match, src)
-        rows.append(
-            red_head_row(prs, names, since, src)
-            if names is not None
-            else na("Required checks: red heads", req_why)
-        )
+        rows += red_head_rows(prs, names, since, src, construction_checks(root), req_why)
         rows.append(prs_per_story(prs, since, pattern, src))
     else:
         for name in (
