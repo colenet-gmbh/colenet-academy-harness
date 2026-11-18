@@ -178,6 +178,10 @@ export type LiveSession = {
   profile?: string | null
   envRead?: boolean
   mode?: string | null
+  // From the launcher's marker in the session's tree, when it names the session.
+  role?: string
+  starter?: string
+  tree?: string
 }
 
 export type BoardView = {

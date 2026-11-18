@@ -18,6 +18,7 @@ Usage:
   board.py [--board FILE] decision <area> <cut|fence|process> --key KEY --text T
   board.py [--board FILE] bundle
   board.py [--board FILE] news add --title T [--body B] [--kind <info|gate|todo>]
+  board.py [--board FILE] news worker --id ID --title T [--body B]
   board.py [--board FILE] escalation open --key KEY --parties ROLE,ROLE --question Q --a T --a-cost C
            --b T --b-cost C --reversible <yes|no> [--touches <vision|money|law|priority>]
   board.py [--board FILE] escalation <route|count>
@@ -2049,6 +2050,29 @@ def cmd_news(state, args, crew, now):
     return 0
 
 
+def cmd_news_worker(state, args, _crew, now):
+    """`news worker`: the launcher's supervisor (`scripts/worker_supervisor.py`) puts one `todo`
+    item for the human: a worker's stop it could not tell its starter, a permission prompt that
+    waits. The id is the supervisor's (`W-…`); an item of that id already in `news` stays as it is."""
+    title = (args.title or "").strip()
+    if not title or "\n" in title or not str(args.id).startswith("W-"):
+        raise BoardError("board.py news worker: --id W-… and a one-line --title")
+
+    def mutate(board):
+        news = board.get("news") if isinstance(board.get("news"), list) else []
+        if any(isinstance(i, dict) and i.get("id") == args.id for i in news):
+            return UNCHANGED
+        item = {"id": args.id, "kind": "todo", "title": title, "ts": _iso(now)}
+        if (args.body or "").strip():
+            item["body"] = args.body.strip()
+        board["news"] = [item, *news]
+        return item
+
+    result = state.write_board(mutate)
+    print("unchanged" if result is UNCHANGED else json.dumps(result, ensure_ascii=False))
+    return 0
+
+
 def cmd_prune(state, _args, _crew, _now):
     state.write_board(lambda _board: UNCHANGED)  # the pass inside write_board does the work
     gone = [line["id"] for line in state.last_pruned]
@@ -3511,6 +3535,13 @@ def _add_news_verbs(verbs):
     add.add_argument("--body")
     add.add_argument("--kind", choices=NEWS_KINDS, default="info")
     add.set_defaults(run=cmd_news)
+    wk = steps.add_parser(
+        "worker", help="the launcher's item for the human (worker_supervisor.py)"
+    )
+    wk.add_argument("--id", required=True)
+    wk.add_argument("--title", required=True)
+    wk.add_argument("--body")
+    wk.set_defaults(run=cmd_news_worker)
 
 
 def _add_staging_verbs(verbs):

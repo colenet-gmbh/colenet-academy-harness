@@ -52,7 +52,8 @@ we/                               plugin root
     gates                         ready_gate.py, plan_tier.py, risk_paths.py, risk_runner.py, lens_verdict.py,
                                   check-plan-identifiers.py, check-instruction-budget.py
     rules                         rule_loading.py, load-rules.py, probe-rule-loading.py, probe-hook-cap.py (fixtures/)
-    launch                        wclaude, we-worker, install_launcher.py, worker_launch.py, worker_rights.py, pin.sh, identity_cache.py,
+    launch                        wclaude, we-worker, install_launcher.py, worker_launch.py, worker_rights.py,
+                                  worker_supervisor.py (a worker's end and gc), pin.sh, identity_cache.py,
                                   wake_poller.py, gh_anchor.sh
     watch                         watch-pr-checks.sh (CI to the merge), watch-pr-conflicts.sh, watch-worker.sh
     flow                          flow_log.py (the flow log's one owner), sampler_age.py, flow_report.py (the

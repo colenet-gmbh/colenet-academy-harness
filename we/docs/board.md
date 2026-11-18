@@ -85,7 +85,8 @@ breaks a header line between its parts, never inside a frame, so it stays readab
 prod live, an epic done), what blocks (`gate`) and what the owner must do (`todo`). The coordinator
 writes one with `board.py news add --title "<one line>" [--body "<detail>"] [--kind info|gate|todo]`
 (at the top, id `N<n>`), the machinery writes `todo` items itself (bundle, staging past its SLA,
-signals):
+signals, and the launcher's supervisor with `board.py news worker --id W-… --title T`: a worker's
+stop its starter could not be told, a permission prompt older than 15 minutes; once per id):
 
 ```json
 "news": [
