@@ -134,7 +134,8 @@ this section, never between. A fork or a `scope change:` line still ends you wit
 5. **Select.** Green: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/board.py select <KEY> --refiner`, always with
    `--refiner`; its `carry:` line is yours to carry per `${CLAUDE_PLUGIN_ROOT}/references/ticketing.md` (move,
    then read back). Refused in group `refiner` (no approved epic line holding the key, or the epic says
-   `select: owner`: `${CLAUDE_PLUGIN_ROOT}/references/epic-plan.md` § Finish line) or `role`: report
+   `select: owner`: `${CLAUDE_PLUGIN_ROOT}/references/epic-plan.md` § Finish line; or the crew sets
+   `select.refiner: false`, then skip the call) or `role`: report
    `selected: no, <role> selects (<board.py's reason line>)`, never retry.
 6. **Report**, one of:
 

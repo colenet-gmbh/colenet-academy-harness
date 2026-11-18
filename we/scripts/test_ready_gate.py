@@ -401,6 +401,18 @@ def test_a_path_outside_the_fence_is_a_scope_change(tmp_path):
     ]
 
 
+def test_a_media_type_in_backticks_is_no_path(tmp_path):
+    root = repo(tmp_path)
+    path = add_file(
+        root,
+        "green",
+        "  - `docs/guides/upload.md`: accepts `application/pdf` and `image/png`",
+        phase="### Phase 1",
+    )
+    out = gate(root, "story", path)
+    assert "application/pdf" not in out.stdout and "image/png" not in out.stdout, out.stdout
+
+
 def test_another_repos_path_is_judged_against_its_repo_globs(tmp_path):
     root = repo(tmp_path)
     path = add_file(root, "green", "  - `src/other.py`")

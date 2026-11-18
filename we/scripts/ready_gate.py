@@ -380,9 +380,16 @@ def phases(text: str) -> list[Phase]:
     return found
 
 
+# a media type such as ``application/pdf`` names no file, though it carries a ``/``
+_MEDIA_TYPE = re.compile(
+    r"(application|audio|font|image|message|model|multipart|text|video)/[A-Za-z0-9][\w.+-]*"
+)
+
+
 def _paths(lines: list[str]) -> list[tuple[str, bool]]:
     """Path-like backtick spans of a ``**Files:**`` list (story-plan.md § What the Ready gate
-    reads): no whitespace, and a ``/``, a leading ``.``, or an extension on a bullet's first span."""
+    reads): no whitespace, and a ``/``, a leading ``.``, or an extension on a bullet's first span;
+    a media type (``image/png``) is no path."""
     items: list[str] = []
     for line in lines:
         if _BULLET.match(line) or not items:
@@ -393,7 +400,7 @@ def _paths(lines: list[str]) -> list[tuple[str, bool]]:
     for item in items:
         for index, span in enumerate(_SPAN.finditer(item)):
             value = span.group(1)
-            if re.search(r"\s", value) or "://" in value:
+            if re.search(r"\s", value) or "://" in value or _MEDIA_TYPE.fullmatch(value):
                 continue
             value = _LINE_SUFFIX.sub("", value.split("§")[0]).rstrip("/")
             first = index == 0

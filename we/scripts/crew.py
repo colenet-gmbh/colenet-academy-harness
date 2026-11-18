@@ -246,6 +246,9 @@ DEFAULTS: dict[str, Any] = {
     },
     "ready_lenses": ["product", "architecture", "acceptance"],
     "ready_panel": {"warning_ok_after_rounds": None, "max_rounds": 2},
+    # refiner: false — no refiner selects its own story in this crew, whatever an epic plan says
+    # (the product role selects every story, e.g. after a ticket owner's yes)
+    "select": {"refiner": True},
     "t2_panel": ["product", "architecture", "acceptance"],
     "risk": {
         "command": None,

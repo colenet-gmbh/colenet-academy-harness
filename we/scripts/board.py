@@ -171,7 +171,8 @@ select   moves a story to Selected when its `ENTRY_RULES["selected"]` hold, in o
          refuses with `board.py select <KEY>: refused (<group>)` and its lines; no rule asks a
          human. `--refiner` (a refiner selecting its own story, after `plan on main`) refuses,
          naming the product role, unless the story's epic plan on that ref is approved, holds
-         the key on its `line:` and says no `select: owner`. A passing select comments `selected by <role>@<human>, plan <blob>, panel <id>`
+         the key on its `line:` and says no `select: owner`, and the crew does not set
+         `select.refiner: false`. A passing select comments `selected by <role>@<human>, plan <blob>, panel <id>`
          on the ticket after the transition.
 signals  (several humans, docs/board.md § Several humans) for each `board.signals` entry whose
          role this session's human runs: the ticket search `board_humans.signal_jql`; each hit
@@ -3117,6 +3118,8 @@ def rule_refiner(m):
 
 def _off_line(m):
     """Why the product role selects this story instead of its refiner, None when the refiner may."""
+    if (m.crew.get("select") or {}).get("refiner") is False:
+        return "the crew sets `select.refiner: false`"
     ref = str((m.crew.get("risk") or {}).get("rules_from") or "origin/main")
     story = _show(m.root, str(m.selected.get("plan") or "")) or ""
     epic = ready_gate.frontmatter(story).get("epic", "").strip()
