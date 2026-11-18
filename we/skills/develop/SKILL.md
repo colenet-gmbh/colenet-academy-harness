@@ -54,8 +54,7 @@ phase:
    system boundaries.
 2. A new field flows end to end, not only into the model.
 3. Regenerate and commit the generated artifacts the brief lists. Leave gate baselines to the Lead.
-4. Commit the phase by path: `<KEY>: phase <N> — <what>` with the `Co-Authored-By:` trailer of the
-   model running you.
+4. Commit the phase `<KEY>: phase <N> — <what>` (staging, trailer: `worker-dispatch.md` § Dev-only worker contract).
 
 A refactor chunk's last step deletes the characterization tests that a test on the new seam now
 asserts; the report's `retired:` field names each one and the test that replaces it.
@@ -68,8 +67,7 @@ code (`${CLAUDE_PLUGIN_ROOT}/references/code-notes.md`): the next agent reads th
 Run the commands yourself; they are deterministic. Scope and exceptions are in the contract:
 affected tests only, service-bound tests skipped and listed, the named integration suite for a
 critical chunk. A gate failure: fix, commit, re-run. The same gate red three times: stop. A gate run
-that ended without a verdict (killed, timed out, out of memory) never starts again on its own: read why
-and report it; it runs again only after a fix that answers the cause (the contract's rule).
+that ended without a verdict: `references/session-traps.md`.
 
 ## 5. Finish, when the brief makes you the last writer
 

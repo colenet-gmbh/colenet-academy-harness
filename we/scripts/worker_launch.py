@@ -473,7 +473,9 @@ def key_pattern(repo: Path | None) -> str:
 
 
 def check_name(name: str, key_re: str = DEFAULT_KEY, example: str | None = None) -> str:
-    """The story key the worker name starts with; a `LaunchError` (exit 2) without one."""
+    """The story key the worker name starts with; a `LaunchError` (exit 2) without one. Close, the
+    board and the supervisor find a story's workers by the key in the name, so a keyless worker
+    would be invisible to all three."""
     try:
         found = re.match(rf"(?P<key>{key_re})(?:-(?P<chunk>.+))?$", name)
     except re.error as exc:
@@ -481,7 +483,8 @@ def check_name(name: str, key_re: str = DEFAULT_KEY, example: str | None = None)
     if found and found.group("key"):
         return found.group("key")
     raise LaunchError(
-        f"worker name {name} carries no story key ({key_re}), e.g. {example or 'ABC-123'}-{name}",
+        f"worker name {name} carries no story key ({key_re}), e.g. {example or 'ABC-123'}-{name}"
+        " (close, the board and the supervisor find a story's workers by that key)",
         2,
     )
 
@@ -746,7 +749,8 @@ def check_needs(brief: str, repo: Path) -> None:
     """Refuse (exit 2) a brief that needs a plugin `workers.context.disable_plugins` disables (by
     its id `<plugin>@<marketplace>` or its bare name) or a server `deny_mcp_servers` denies: the
     worker would start without a tool its brief needs. The needs are the brief's `Needs:` lines
-    and the frontmatter `needs:` of every plugin skill the brief names."""
+    and the frontmatter `needs:` of every plugin skill the brief names. Refusing at launch is the
+    point: without it the missing tool shows only after the worker has run its chunk."""
     needs, skills = brief_needs(brief), brief_skills(brief)
     if not needs and not any(skill_needs(s) for s in skills):
         return

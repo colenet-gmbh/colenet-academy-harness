@@ -125,7 +125,7 @@ One line per item, and only what someone has to do:
 - rounds a receipt names as owed, such as a live round, a staging round or a device round;
 - a deploy or release that the merge does not trigger on its own (the repo's release command is the user's word);
 - a decision the PR put to the user;
-- follow-ups found along the way, named with a recommendation. They are never filed without the user asking;
+- follow-ups found along the way, named with a recommendation (`references/worker-dispatch.md` § Dev-only worker contract);
 - trees, branches or processes left standing, and why.
 
 Leave out anything that is merely true: what the PR contained, which gates were green, how many
