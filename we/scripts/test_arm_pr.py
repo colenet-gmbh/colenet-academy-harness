@@ -134,6 +134,16 @@ def test_a_blocked_pr_is_armed_on_the_head_it_read(tmp_path):
             0,
             None,
         ),
+        # A red check that is not required leaves the PR UNSTABLE, which GitHub merges.
+        (
+            {
+                "checks": [*GREEN, check("Codex", conclusion="FAILURE", required=False)],
+                "merge": "UNSTABLE",
+            },
+            [CLEAN],
+            3,
+            None,
+        ),
     ],
     ids=[
         "no-checks",
@@ -142,6 +152,7 @@ def test_a_blocked_pr_is_armed_on_the_head_it_read(tmp_path):
         "required-red",
         "all-green",
         "review-missing",
+        "unstable",
     ],
 )
 def test_a_clean_answer_never_merges(tmp_path, later, arms, code, line):

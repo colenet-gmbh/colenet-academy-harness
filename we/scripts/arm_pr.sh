@@ -14,8 +14,8 @@
 # When GitHub answers that the PR is already in a clean (or unstable) state, the helper does not
 # merge: it waits until check runs of the head are registered, re-reads, arms if a required check is
 # still pending, and reports `ready` once every required check of the base branch is green on that
-# head, GitHub calls the PR CLEAN and no required review is missing. The caller then merges as a
-# separate, explicit command with `--match-head-commit <sha>`.
+# head, GitHub calls the PR mergeable (CLEAN, UNSTABLE, HAS_HOOKS) and no required review is
+# missing. The caller then merges as a separate, explicit command with `--match-head-commit <sha>`.
 #
 # Before the arm, only in a checkout whose HEAD is the PR head, the risk classifier (`risk_paths.py`
 # over `origin/<base>:.weside/risk-paths`) runs; a one-way class is refused: only the human merges
@@ -175,8 +175,10 @@ while :; do
     pending) arm ;;  # a required check runs: GitHub can wait for it now
     pass)
       # Green checks are not every requirement: a review or another rule GitHub still waits for
-      # leaves the PR not CLEAN, and then it is armed instead.
-      [ "$MSTATE" = CLEAN ] && [ "$REVIEW" != REVIEW_REQUIRED ] && [ "$REVIEW" != CHANGES_REQUESTED ] || { arm; continue; }
+      # leaves the PR BLOCKED, and then it is armed instead. UNSTABLE (a red check that is not
+      # required) and HAS_HOOKS merge like CLEAN: the required checks were judged by name above.
+      case "$MSTATE" in CLEAN|UNSTABLE|HAS_HOOKS) ;; *) arm; continue ;; esac
+      [ "$REVIEW" != REVIEW_REQUIRED ] && [ "$REVIEW" != CHANGES_REQUESTED ] || { arm; continue; }
       echo "ready: all required checks green on $SHA — merge: gh pr merge $PR --$METHOD --match-head-commit $SHA"
       exit 3 ;;
   esac
