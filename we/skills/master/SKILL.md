@@ -216,7 +216,7 @@ Then one `we:dev-medium` finisher in `<int>` runs the finish sequence.
 4. Run `${CLAUDE_PLUGIN_ROOT}/scripts/watch-pr-checks.sh <PR> --sha <pushed sha>` as a background command,
    with `--until-merged` once auto-merge is armed (`--human-merge` on a one-way PR the human merges), and next to it one
    `${CLAUDE_PLUGIN_ROOT}/scripts/watch-pr-conflicts.sh <PR>…` over the run's open PRs. The headers list
-   the exit codes. One checks watcher per PR: a worker running `/we:ci-review` on it watches until green
+   the exit codes; start both from the main checkout (`references/session-traps.md` § CI and checks). One checks watcher per PR: a worker running `/we:ci-review` on it watches until green
    (L0 §Sessions), then you arm it `--until-merged`. Meanwhile refine or prepare the next story.
 5. You stay on an auto-merge PR until it is merged; the user never runs `/we:ci-review` or
    `/we:merged` by hand on it (owner 28.10.2026). On the watcher's exit, without asking:

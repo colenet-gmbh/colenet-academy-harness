@@ -16,7 +16,10 @@ Sources:
               chain, the rules without ``paths:``; plus ``MEMORY.md``, the repo's auto-memory index
               (``<config dir>/projects/<repo>/memory/``, the main worktree's slug), counted as
               Claude Code loads it: the first 200 lines, at most 25,000 characters. Its content is
-              never shown; only its size.
+              never shown; only its size. For the ``worker`` role ``workers.context.auto_memory``
+              of the workplace's ``.weside/config.json`` decides (``worker_launch.apply_context``):
+              ``off`` (the launcher's default once the block exists) shows 0 with the source
+              ``off (workers.context)``, ``own`` reads ``own directory, not measured``.
   transcript  the newest transcript of a session of that role under ``<config dir>/projects/``
               (the workplace's directory and its worktrees') whose first ``api-request-shape``
               line comes before any assistant entry (a cold start), everything before it: system prompt and tool schemas (that shape), skill
@@ -33,6 +36,8 @@ and only when both files lie in the repo or the plugin; otherwise the line names
 ``--md`` writes ``reports/context-<UTC date>.md`` under ``.weside/optimization/`` of the repo
 (``references/optimization-store.md`` § Layout); the report's last line carries its numbers for the
 next run's delta. No store: one line on stderr, nothing written.
+
+The disk rows are what would load; the ``measured start`` line is what did (the footer says so).
 """
 
 from __future__ import annotations
@@ -65,6 +70,9 @@ WORKER_MARK = "You are a worker:"  # the first line of process/L0-worker.md
 L0_MARK = "The crew process (L0)"  # the heading of process/L0.md
 DATA = "<!-- context-load "
 NA = "n/a (no transcript)"
+MEMORY_OFF = "off (workers.context)"
+MEMORY_OWN = "own directory, not measured"
+FOOTER = "disk rows: what would load · measured start: what did"
 MEASURED = (
     "measured start"  # the first assistant entry's usage: input + cache creation + cache read
 )
@@ -195,6 +203,32 @@ def disk_session(
                     inside(Path(path), roots),
                 )
             )
+    rows.append(memory_row(work_dir, role))
+    return rows, texts, work_dir
+
+
+def worker_auto_memory(work_dir: Path) -> str | None:
+    """`workers.context.auto_memory` of the workplace's `.weside/config.json`; None without the
+    `workers.context` block or an unreadable file. Inside the block the launcher defaults to `off`."""
+    try:
+        config = json.loads((work_dir / ".weside" / "config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    workers = config.get("workers") if isinstance(config, dict) else None
+    ctx = workers.get("context") if isinstance(workers, dict) else None
+    if not isinstance(ctx, dict):
+        return None
+    value = ctx.get("auto_memory", "off")
+    return value if isinstance(value, str) else None
+
+
+def memory_row(work_dir: Path, role: str) -> Row:
+    """The ``MEMORY.md`` row: its size on disk, unless the role's sessions run without it."""
+    mode = worker_auto_memory(work_dir) if role == "worker" else None
+    if mode == "off":
+        return Row("MEMORY.md", MEMORY_OFF, 0)
+    if mode == "own":
+        return Row("MEMORY.md", MEMORY_OWN, None)
     memory = (
         claude_home.config_dir()
         / "projects"
@@ -202,8 +236,7 @@ def disk_session(
         / "memory"
         / "MEMORY.md"
     )
-    rows.append(Row("MEMORY.md", "disk", memory_chars(memory) if memory.is_file() else 0))
-    return rows, texts, work_dir
+    return Row("MEMORY.md", "disk", memory_chars(memory) if memory.is_file() else 0)
 
 
 def largest(rows: list[Row], rules: list[tuple[str, str, int]]) -> list[tuple[str, int]]:
@@ -527,6 +560,7 @@ def render(results: list, before: dict, repo: Path, home: Path, md: bool) -> str
             digest = hashlib.sha256(sentence.encode()).hexdigest()[:8]
             text = f'"{sentence[:QUOTE]}"' if quotable else f"#{digest}"
             out.append(f"- {text} — {where}")
+    out.append("\n" + FOOTER)
     if md:
         out.append("\n" + DATA + json.dumps(now, ensure_ascii=False, sort_keys=True) + " -->")
     return "\n".join(out) + "\n"

@@ -83,8 +83,8 @@ Every verb that commits a planning document follows this section: `/we:epic`, `/
    reported with its message, never forced. On the PR way the document is on the default branch
    once the PR merged; a step that needs it there (a dispatch reading the plan, Selected for
    Development) waits with a background
-   `watch-pr-checks.sh <number> --until-merged` until its final line reads `merged`. If `arm_pr.sh` ends
-   on any line but `armed` or `ready` (auto-merge off in the repo, red, no checks), a required review blocks, or the PR is not merged within
+   `watch-pr-checks.sh <number> --until-merged` until its final line reads `merged`. If `arm_pr.sh`'s
+   verdict line is neither `armed` nor `ready` (auto-merge off in the repo, red, no checks), a required review blocks, or the PR is not merged within
    60 min: report the PR URL to the owner (in a crew: the coordinator) and leave the
    story unselected; never merge by hand (the `ready` line's merge is the arm's, not a hand merge), never force. The PR URL goes into your report before
    step 6, it outlives the scratch tree.

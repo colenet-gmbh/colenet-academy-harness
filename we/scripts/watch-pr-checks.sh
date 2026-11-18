@@ -69,7 +69,8 @@
 # The repo is resolved once at start (`-R`, else `gh repo view`, else a github.com `origin`)
 # and every gh call carries `-R`; the calls run from the repo's main checkout (gh_anchor.sh), so
 # removing the worktree it was started in does not break it and a per-directory gh account holds.
-# Run it as a background command.
+# Run it as a background command started from the main checkout: a shell left in a removed
+# worktree fails its own `pwd` after the watcher ended (references/session-traps.md § CI and checks).
 # Needs only `gh` (its built-in --jq).
 # One watcher per PR: the first takes a lock (`flock` on
 # `${WE_STATE_DIR:-~/.claude/we-state}/watch-locks/<owner>-<repo>-<PR>.lock`, holding its pid and

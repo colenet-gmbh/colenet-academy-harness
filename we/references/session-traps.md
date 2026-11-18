@@ -41,6 +41,11 @@ cards point here instead of repeating them.
 - **A watcher's exit 0 is not green.** `gh run watch` ends on an expired token, and a chained
   `; echo` exits 0 anyway: act only on `gh run view <id> --json status,conclusion` or on
   `watch-pr-checks.sh`'s verdict line.
+- **Start a PR watcher from the main checkout.** The watcher survives the removal of the
+  worktree it started in, but the background shell around it does not: after `final …: merged` its
+  own `pwd` fails (`getcwd: cannot access parent directories`) and the command exits 1. Start it as
+  `cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && <plugin>/scripts/watch-pr-checks.sh …`
+  (the same for `watch-pr-conflicts.sh`).
 - **Cancelled is red, absent is not green.** A required check that never reported blocks like a red
   one.
 - **After a push a PR looks clean for seconds:** GitHub still reports the old head's state, and

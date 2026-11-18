@@ -91,7 +91,8 @@ Written always, also when step 4 is declined. Only keys a verb reads:
                             "auto_compact_window": null } },
   "plans": { "land": "pr", "push_paths": ["docs/plans/**"], "secret_scan": null },
   "acceptance": { "receipts_workflow": "<workflow path whose RC run uploads accept.json, or null>",
-                  "rc_tag_glob": "<RC tag glob, e.g. v*-rc.*>" }
+                  "rc_tag_glob": "<RC tag glob, e.g. v*-rc.*>" },
+  "flow": { "construction_checks": [] }
 }
 ```
 
@@ -119,6 +120,11 @@ prints as a warning: a worker started for that skill is refused.
 and an optional `{report}`, or `"none"` (`${CLAUDE_PLUGIN_ROOT}/scripts/plan_push.py`).
 `plans.short_max_files` (default 3) caps the files of a short-form plan (`${CLAUDE_PLUGIN_ROOT}/references/story-plan.md`
 § Short form); write it only when the user names another limit.
+
+`flow.construction_checks` names required checks that are red by construction until a release
+commit (a version check); `${CLAUDE_PLUGIN_ROOT}/scripts/flow_report.py` shows them on a row of
+their own, outside the red-head totals. Write it only when the repo has such a check. The crew's
+`flow` block (log, sampler) is another file's (`${CLAUDE_PLUGIN_ROOT}/scripts/crew.py`).
 
 `agents.worker_launch` is a command template that starts each dev worker as a session of its own
 (`${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md` § Worker launch backend), for a repo without a
