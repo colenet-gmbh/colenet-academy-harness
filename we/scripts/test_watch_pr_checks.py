@@ -480,7 +480,6 @@ def test_until_merged_keeps_watching_green_until_merged(tmp_path):
 @pytest.mark.parametrize(
     "patch, note",
     [
-        ({}, "merge: UNKNOWN/UNKNOWN · auto-merge off — arm: arm_pr.sh 57"),
         (
             {"autoMergeRequest": {"enabledAt": "x"}, "mergeStateStatus": "DIRTY"},
             "merge: DIRTY/UNKNOWN — conflicts with the base: merge it",
@@ -520,8 +519,48 @@ def test_auto_merge_off_names_the_crews_armer(tmp_path, merge, patch, step):
     (tmp_path / ".weside").mkdir()
     crew = {"version": 2, "roles": {}, "members": {}, "merge": merge}
     (tmp_path / ".weside" / "crew.json").write_text(json.dumps(crew))
-    code, out = run(tmp_path, [{**_green(), **patch}], "--until-merged")
-    assert (code, out) == (0, [f"final {SHA}: green · {MERGE} · auto-merge off — {step}"])
+    merged = {**_green(), **patch, "state": "MERGED"}
+    code, out = run(tmp_path, [{**_green(), **patch}] * 3 + [merged], "--until-merged")
+    assert (code, out[0]) == (
+        0,
+        f"waiting {SHA}: green · {MERGE} · auto-merge off — {step} — watching to the merge",
+    )
+
+
+def test_until_merged_says_auto_merge_off_once_and_watches_to_the_merge(tmp_path):
+    """Red: the watcher ended on `auto-merge off` and its master sat beside a PR that merged later."""
+    unarmed = _green()
+    armed = {**unarmed, "autoMergeRequest": {"enabledAt": "x"}, "mergeStateStatus": "BLOCKED"}
+    merged = {**armed, "state": "MERGED"}
+    code, out = run(tmp_path, [unarmed] * 5 + [armed, armed, merged], "--until-merged")
+    assert (code, out) == (
+        0,
+        [
+            f"waiting {SHA}: green · {MERGE} · auto-merge off — arm: arm_pr.sh 57 — watching to the merge",
+            f"final {SHA}: merged",
+        ],
+    )
+
+
+def test_until_merged_follows_a_moved_head_to_the_merge(tmp_path):
+    """Red: a push during the watch ended it with exit 3 and nobody watched the new head."""
+    new = "b" * 40
+    armed = {**_green(), "autoMergeRequest": {"enabledAt": "x"}, "mergeStateStatus": "BLOCKED"}
+    moved = {**armed, "headRefOid": new}
+    code, out = run(
+        tmp_path, [_pending(armed), moved, moved, {**moved, "state": "MERGED"}], "--until-merged"
+    )
+    assert (code, out) == (0, [f"head moved {SHA} -> {new} — watching it", f"final {new}: merged"])
+    lock = (tmp_path / "state" / "watch-locks" / "o-r-57.lock").read_text()
+    assert f"head {new} (follows new heads)" in lock, lock
+
+
+def test_until_merged_judges_the_new_head_from_scratch(tmp_path):
+    new = "b" * 40
+    moved = {**REAL, "headRefOid": new}
+    code, out = run(tmp_path, [_pending(_green()), _pending(moved), moved], "--until-merged")
+    assert code == 1 and out[0] == f"head moved {SHA} -> {new} — watching it", out
+    assert out[-1].startswith(f"final {new}: red"), out
 
 
 def test_human_merge_waits_past_auto_merge_off_and_blocked_until_merged(tmp_path, monkeypatch):
@@ -946,6 +985,16 @@ def test_a_second_watcher_on_the_same_pr_exits_14_naming_the_holder(tmp_path):
     )
     calls = (tmp_path / "calls.log").read_text()
     assert "pr view" not in calls and "run list" not in calls, calls
+
+
+@needs_flock
+def test_a_holder_that_follows_new_heads_turns_a_second_away_at_once(tmp_path):
+    held = _hold(tmp_path, "pid 4242 head " + "b" * 40 + " (follows new heads)")
+    try:
+        code, out = run(tmp_path, [_green()], "--sha", SHA)
+    finally:
+        held.close()
+    assert code == 14 and "follows new heads" in out[0], out
 
 
 @needs_flock

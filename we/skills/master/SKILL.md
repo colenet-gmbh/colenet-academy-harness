@@ -227,8 +227,8 @@ Then one `we:dev-medium` finisher in `<int>` runs the finish sequence.
      findings remain on a green run.
    - `final … merged` (exit 0, or 7 with red non-required checks named) → `/we:merged <PR>` yourself;
      exit 8 (closed) → report.
-   - exit 3 (head moved), 12 (conflict, before the checks) or 0 under `--until-merged` without `merged`
-     (behind, auto-merge off) → handle it, then re-arm on the new head.
+   - exit 3 (head moved; `--until-merged` follows it), 12 (conflict, before the checks) or 0 under
+     `--until-merged` without `merged` (behind, dirty) → handle it, then re-arm on the new head.
    - exit 10 (no workflow ran on the head) → push an empty commit once; again 10 → report.
    - exit 11 (the review hit its quota; auto-merge left as it was) → rerun the review check after the
      quota resets, then watch again.
