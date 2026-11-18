@@ -62,7 +62,9 @@ the defaults are the three lenses ``product``, ``architecture``, ``acceptance``,
 default, keeps every standing WARNING red; a number N of at least 1 lets a Ready panel in round N
 or later whose red lenses stand on WARNINGs alone count green with those warnings carried onto the
 Selected row; a BLOCKING stays red, and a T2 panel never reads it; ``lens_verdict.py`` owns the
-round, and every new plan blob is one, a whitespace edit included: pick N with that in mind), ``t2_panel``, ``risk``,
+round, and every new plan subject is one: pick N with that in mind; ``max_rounds``: 2, the
+default, is the last round lenses run in, above it the lens holder decides, null turns the cap
+off), ``t2_panel``, ``risk``,
 ``fallback`` (role key -> role key or ``human_bundle``), ``local_rules``, ``acceptance``,
 ``oracles``, ``board`` (``file``, ``ticketing``, ``states``: state key -> ticket status name,
 ``in_test`` default null: only a crew that maps it has an In Test step; ``signals``: a list of objects
@@ -243,7 +245,7 @@ DEFAULTS: dict[str, Any] = {
         "acceptance": _lens("acceptance", 5),
     },
     "ready_lenses": ["product", "architecture", "acceptance"],
-    "ready_panel": {"warning_ok_after_rounds": None},
+    "ready_panel": {"warning_ok_after_rounds": None, "max_rounds": 2},
     "t2_panel": ["product", "architecture", "acceptance"],
     "risk": {
         "command": None,
@@ -338,7 +340,7 @@ NUMBER_OR_NULL = (
     "sample",
 )
 # a number default that also takes null (null = off)
-NUMBER_OR_OFF = ("acceptance.done_sample",)
+NUMBER_OR_OFF = ("acceptance.done_sample", "ready_panel.max_rounds")
 # keys no release reads any more: skipped with a stderr line instead of refused as unknown
 RETIRED_KEYS = (
     "capacity",
@@ -698,6 +700,9 @@ def _validate(path: Path, data: dict[str, Any]) -> None:
         raise _fail(
             path, "ready_panel.warning_ok_after_rounds must be a number of at least 1 or null"
         )
+    cap = data.get("ready_panel", {}).get("max_rounds", 2)
+    if cap is not None and not (_is_int(cap) and cap >= 1):
+        raise _fail(path, "ready_panel.max_rounds must be a number of at least 1 or null")
     _validate_fallback(path, data.get("fallback", {}))
     reviewer = data.get("sla", {}).get("t2_second_reviewer")
     if reviewer is not None and reviewer not in slugs:

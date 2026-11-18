@@ -110,7 +110,7 @@ def test_an_open_fork_fails(tmp_path):
     out = gate(root, "story", str(path))
     assert out.returncode == 1
     assert out.stdout.splitlines() == [
-        f"{path}: ## Open Fork: an open fork stands; answer it and delete the section"
+        f"{path}:19: ## Open Fork: an open fork stands; answer it and delete the section"
     ]
 
 
@@ -129,7 +129,8 @@ def test_a_standalone_story_warns_and_still_checks_repos(tmp_path):
     out = gate(root, "story", str(path))
     assert out.returncode == 1
     assert out.stdout.splitlines() == [
-        f"{path}: phase 1: `lib/x.py` is marked (other repo): name the repo in a `**Repo:**` line"
+        f"{path}:54: phase 1: `lib/x.py` is marked (other repo): name the repo in a `**Repo:**`"
+        " line"
     ]
 
 
@@ -170,7 +171,7 @@ def test_an_unknown_class_fails(tmp_path):
     out = gate(root, "story", str(path))
     assert out.returncode == 1
     assert out.stdout.splitlines() == [
-        f"{path}: AC1: unknown oracle class `manual` (receipt, ci or walk)"
+        f"{path}:21: AC1: unknown oracle class `manual` (receipt, ci or walk)"
     ]
 
 
@@ -187,7 +188,7 @@ def test_receipt_check_unset_fails_closed(tmp_path):
     out = gate(root, "story", plan(root, "green"))
     assert out.returncode == 1
     assert out.stdout.splitlines() == [
-        f"{plan(root, 'green')}: AC1: receipt AC but the crew names no oracles.receipt_check"
+        f"{plan(root, 'green')}:21: AC1: receipt AC but the crew names no oracles.receipt_check"
     ]
 
 
@@ -360,7 +361,7 @@ def test_a_boundary_ac_without_a_mock_persona_fails(tmp_path):
     out = gate(root, "story", path)
     assert out.returncode == 1
     assert out.stdout.splitlines() == [
-        f"{path}: AC1: server-boundary receipt AC but the crew names no acceptance.mock_persona"
+        f"{path}:21: AC1: server-boundary receipt AC but the crew names no acceptance.mock_persona"
     ]
     assert argv_log(root)[0][1:] == []
 
@@ -377,7 +378,7 @@ def test_a_receipt_check_boundary_line_passes_through(tmp_path):
 # --- AC2: the fence -----------------------------------------------------------------------
 
 SCOPE = (
-    "{plan}: scope change: {path} (phase {n}) outside the fence of PROJ-1 — approver: {who} "
+    "{plan}:{line}: scope change: {path} (phase {n}) outside the fence of PROJ-1 — approver: {who} "
     "(fence change); Hal if it changes the outcome (§Units)"
 )
 
@@ -396,7 +397,7 @@ def test_a_path_outside_the_fence_is_a_scope_change(tmp_path):
     out = gate(root, "story", path)
     assert out.returncode == 1
     assert out.stdout.splitlines() == [
-        SCOPE.format(plan=path, path="infra/main.tf", n=1, who="Ada")
+        SCOPE.format(plan=path, line=55, path="infra/main.tf", n=1, who="Ada")
     ]
 
 
@@ -405,7 +406,7 @@ def test_another_repos_path_is_judged_against_its_repo_globs(tmp_path):
     path = add_file(root, "green", "  - `src/other.py`")
     out = gate(root, "story", path)
     assert out.stdout.splitlines() == [
-        SCOPE.format(plan=path, path="lib-repo:src/other.py", n=2, who="Ada")
+        SCOPE.format(plan=path, line=66, path="lib-repo:src/other.py", n=2, who="Ada")
     ]
 
 
@@ -414,7 +415,7 @@ def test_an_unbound_product_role_names_the_role_key(tmp_path):
     path = add_file(root, "green", "  - `infra/main.tf`", phase="### Phase 1")
     out = gate(root, "story", path)
     assert out.stdout.splitlines() == [
-        SCOPE.format(plan=path, path="infra/main.tf", n=1, who="product")
+        SCOPE.format(plan=path, line=55, path="infra/main.tf", n=1, who="product")
     ]
 
 
@@ -424,7 +425,8 @@ def test_other_repo_without_a_repo_line_fails(tmp_path):
     out = gate(root, "story", path)
     assert out.returncode == 1
     assert out.stdout.splitlines() == [
-        f"{path}: phase 1: `lib/x.py` is marked (other repo): name the repo in a `**Repo:**` line"
+        f"{path}:55: phase 1: `lib/x.py` is marked (other repo): name the repo in a `**Repo:**`"
+        " line"
     ]
 
 
@@ -592,7 +594,7 @@ def test_a_plan_whose_phases_name_no_path_has_no_seams(tmp_path):
     out = gate(root, "story", plan(root, "green"))
     assert out.returncode == 1
     assert out.stdout.splitlines() == [
-        f"{plan(root, 'green')}: Implementation Phases: no seams named (no path in any Files list)"
+        f"{plan(root, 'green')}:46: Implementation Phases: no seams named (no path in any Files list)"
     ]
 
 
@@ -661,6 +663,13 @@ def test_a_plan_not_yet_on_main_defers_the_tier_and_leaves_real_failures_readabl
     assert out.returncode == 0, out.stdout + out.stderr
     assert f"warning: {new}: tier deferred: plan not on origin/main: {new}" in out.stderr
     assert "tier not computed" not in out.stdout
+    # the fence check runs on the scratch tree's plan and names the line to fix
+    add_file(root, "PROJ-13-story", "  - `infra/main.tf`", phase="### Phase 1")
+    out = gate(root, "story", new)
+    assert out.returncode == 1
+    assert out.stdout.splitlines() == [
+        SCOPE.format(plan=new, line=55, path="infra/main.tf", n=1, who="Ada")
+    ]
 
 
 def test_the_epic_gate_computes_no_tier(tmp_path):
