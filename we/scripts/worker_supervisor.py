@@ -456,7 +456,7 @@ def status_lines(
             continue
         since = dt.datetime.fromtimestamp(q.get("queued_at", now), dt.timezone.utc)
         until = dt.datetime.fromtimestamp(q.get("deadline", now), dt.timezone.utc)
-        waiter = "" if wl._pid_lives(q.get("waiter_pid", 0)) else " waiter-gone"
+        waiter = "" if _waiter_lives(q.get("waiter_pid")) else " waiter-gone"
         out.append(
             f"queued {q.get('name')} position={pos} since={since:%H:%M} until={until:%H:%M}"
             f" tree={q.get('tree')} starter={q.get('starter') or '-'}{waiter}"
@@ -481,6 +481,26 @@ START_TIMEOUT_S = 300
 
 def queue_dir(state: Path) -> Path:
     return state / "queue"
+
+
+def _waiter_lives(pid: object) -> bool:
+    """A queue entry's waiter: a missing or non-positive pid is no waiter (unlike `_pid_lives`,
+    which keeps an unreadable session row alive)."""
+    try:
+        num = int(str(pid))
+    except ValueError:
+        return False
+    return num > 0 and wl._pid_lives(num)
+
+
+NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def safe_name(name: str) -> str:
+    """A worker name as a file name in the state dir; a path (`/`, `..`) refuses (exit 2)."""
+    if not NAME_RE.fullmatch(name) or ".." in name:
+        raise wl.LaunchError(f"{name!r} is no worker name (letters, digits, . _ -)", 2)
+    return name
 
 
 def parse_duration(text: str) -> float:
@@ -522,7 +542,7 @@ def enqueue(
     qdir = queue_dir(state)
     qdir.mkdir(parents=True, exist_ok=True)
     held = _read(qdir / f"{name}.json")
-    if held and wl._pid_lives(held.get("waiter_pid", 0)):
+    if held and _waiter_lives(held.get("waiter_pid")):
         raise wl.LaunchError(
             f"{name} is already queued (since {held.get('queued_at', 0):.0f}); "
             f"`we-worker stop {name}` removes it",
@@ -566,7 +586,7 @@ def unqueue(state: Path, name: str) -> dict | None:
     """`we-worker stop <name>` of a queued start: removes the entry and ends its waiter."""
     doc = _drop(state, name)
     pid = (doc or {}).get("waiter_pid")
-    if pid and pid != os.getpid() and wl._pid_lives(pid):
+    if pid != os.getpid() and _waiter_lives(pid):
         with contextlib.suppress(OSError):
             os.kill(int(pid), 15)
     return doc
@@ -575,7 +595,7 @@ def unqueue(state: Path, name: str) -> dict | None:
 def _head(state: Path, me: str) -> str | None:
     """The oldest entry whose waiter lives (this waiter counts as living)."""
     for doc in queued(state):
-        if doc["name"] == me or wl._pid_lives(doc.get("waiter_pid", 0)):
+        if doc["name"] == me or _waiter_lives(doc.get("waiter_pid")):
             return doc["name"]
     return None
 
@@ -930,6 +950,12 @@ def main(argv: list[str] | None = None) -> int:
         print(spawn(args.name, args.tree))
         return 0
     if args.cmd in VERBS:
+        try:
+            if getattr(args, "name", None) is not None:
+                safe_name(args.name)
+        except wl.LaunchError as exc:
+            print(f"we-worker: {exc}", file=sys.stderr)
+            return exc.code
         return VERBS[args.cmd](args, state_dir())
     if args.cmd == "run":
 

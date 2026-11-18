@@ -262,9 +262,11 @@ for x in json.load(sys.stdin):
     [[ $# -ge 2 && -n "$2" ]] || usage
     key=$2
     sup=$(plugin_script scripts/worker_supervisor.py)
-    # a queued start of that name: removed, its waiter ends, nothing started
-    [[ -n "$sup" && -f "$sup" ]] && python3 "$sup" unqueue --name "$key" && exit 0
+    # a queued start of that name: removed, its waiter ends; a session holding the name still stops
+    unqueued=0
+    [[ -n "$sup" && -f "$sup" ]] && python3 "$sup" unqueue --name "$key" && unqueued=1
     IFS=$'\t' read -r id _pid kind sid _state aname _cwd <<<"$(_resolve_any "$key")" || true
+    [[ $unqueued -eq 1 && -z "${id:-}" ]] && exit 0
     wtree=${_cwd:--}
     [[ -n "${id:-}" ]] || { echo "we-worker: no worker '$key' in claude agents" >&2; exit 1; }
     if ! _is_worker "${kind:--}" "${_pid:--}" "${_cwd:--}" "${aname:--}"; then
@@ -488,8 +490,10 @@ if [[ $rc -eq 3 && $queue -eq 1 ]]; then
     case $a in --queue | --queue-timeout=*) continue ;; --queue-timeout) skip=1; continue ;; esac
     qargs+=("$a")
   done
+  qflags=()
+  [[ -n "$brief" ]] && qflags+=(--has-brief)
   printf '%s\0' "${qargs[@]}" | python3 "$sup" queue --name "$name" --tree "$PWD" ${starter:+--starter "$starter"} \
-    ${queue_timeout:+--timeout "$queue_timeout"} $([[ -n "$brief" ]] && echo --has-brief)
+    ${queue_timeout:+--timeout "$queue_timeout"} ${qflags[@]+"${qflags[@]}"}
   exit
 fi
 [[ $rc -eq 0 ]] || exit $rc

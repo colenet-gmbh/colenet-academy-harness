@@ -472,8 +472,12 @@ def test_stop_waits_until_the_row_is_gone_and_ends_what_it_left(tmp_path):
         settings = tmp_path / "home" / ".claude" / "we-state" / "workers" / "w.settings.json"
         settings.parent.mkdir(parents=True)
         settings.write_text("{}")
+        # a stale queue entry of the same name (its waiter gone) never shields the living worker
+        (settings.parent / "queue").mkdir()
+        (settings.parent / "queue" / "w.json").write_text(json.dumps({"name": "w"}))
         proc = run(project, env, "stop", "w")
         assert proc.returncode == 0, proc.stderr
+        assert "queued start of w removed" in proc.stdout
         assert f"w (ab12) stopped; also ended: {child} sleep" in proc.stdout
         assert not settings.exists()  # the stop clears the worker's settings file
         assert "session s; resume: we-worker w --bg --resume s" in proc.stdout

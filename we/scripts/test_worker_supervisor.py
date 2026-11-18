@@ -368,7 +368,21 @@ def test_stop_removes_a_queued_start_and_its_waiter_gives_up(queue):
     assert not queue["sent"]
 
 
-def test_a_name_already_queued_refuses(queue):
+def test_a_name_already_queued_refuses_unless_its_waiter_is_gone(queue):
     queue["put"]("AC-1-a", queue["clock"]())
     with pytest.raises(ws.wl.LaunchError, match="already queued"):
         queue["put"]("AC-1-a", queue["clock"]())
+    # an entry without a waiter (none spawned) neither blocks its name nor the younger entries
+    ws.enqueue(queue["state"], "AC-2-b", "/tree", [], None, None, 60, queue["clock"]())
+    ws.enqueue(queue["state"], "AC-2-b", "/tree", [], None, None, 60, queue["clock"]())
+    assert ws._head(queue["state"], "AC-3-c") == "AC-1-a"
+    ws._drop(queue["state"], "AC-1-a")
+    assert ws._head(queue["state"], "AC-3-c") is None  # AC-2-b, without a waiter, is skipped
+
+
+@pytest.mark.parametrize("name", ["../AC-1", "AC-1/x", ".hidden", "AC..1"])
+def test_a_path_is_no_worker_name_for_the_state_dir(tmp_path, monkeypatch, name):
+    monkeypatch.setenv("WE_WORKER_STATE_DIR", str(tmp_path))
+    (tmp_path / "AC-1.json").write_text("{}")
+    assert ws.main(["unqueue", "--name", name]) == 2
+    assert (tmp_path / "AC-1.json").exists()
