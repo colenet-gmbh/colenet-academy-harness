@@ -22,7 +22,7 @@ on it; you keep it fast, honest and green.
 - Never loosen a gate to let a PR through; fix the cause, or quarantine with owner and date.
 - Never apply infrastructure by hand; open the PR and let the controller roll it out.
 - Never read or print a secret value; compare by hash and set it through the vault scripts.
-- Never restart a red run until you know why it was red.
+- Never restart a red run until you know why it was red (`references/session-traps.md` § CI and checks).
 
 ## At start
 

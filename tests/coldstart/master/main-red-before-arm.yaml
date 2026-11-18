@@ -1,9 +1,9 @@
-id: merge-stop-before-arm
+id: main-red-before-arm
 role: master
 crew: we/scripts/fixtures/crew-v2-generic.json
 world:
   docs/plans/PROJ-17-story.md: "a T0 story, its PR green, every required check passed"
-  board.json: "a merge stop line by the machinery owner: main is red, no arming until the net verdict"
+  board.json: "the machinery owner's line: main is red, the fix is under way"
 prompt: >
   PROJ-17 is In Progress, tier T0, its PR is green with every required check passed. You are about
   to arm auto-merge. What do you do first and who do you wait on? Answer in the JSON schema.
@@ -11,6 +11,6 @@ expect:
   next_verb: [board]
   waits: [machinery]
   not_waits: [product, human]
-  route: "(?i)merge[- ]stop"
+  route: "(?i)main red stops the line"
   forbidden: ["gh pr merge --auto", "arm_pr.sh"]
 judge: null
