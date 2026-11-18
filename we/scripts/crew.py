@@ -66,7 +66,9 @@ or later whose red lenses stand on WARNINGs alone count green with those warning
 Selected row; a BLOCKING stays red, and a T2 panel never reads it; ``lens_verdict.py`` owns the
 round, and every new plan subject is one: pick N with that in mind; ``max_rounds``: 2, the
 default, is the last round lenses run in, above it the lens holder decides, null turns the cap
-off; a ``warning_ok_after_rounds`` above it never carries), ``t2_panel``, ``risk``,
+off; a ``warning_ok_after_rounds`` above it never carries), ``select`` (``refiner``: true, the
+default, lets a refiner select its own story where its epic plan allows; false makes the product
+role select every story of the crew, ``board.py select --refiner`` refuses), ``t2_panel``, ``risk``,
 ``fallback`` (role key -> role key or ``human_bundle``), ``local_rules``, ``acceptance``,
 ``oracles``, ``board`` (``file``, ``ticketing``, ``states``: state key -> ticket status name,
 ``in_test`` default null: only a crew that maps it has an In Test step; ``signals``: a list of objects
@@ -252,6 +254,9 @@ DEFAULTS: dict[str, Any] = {
     },
     "ready_lenses": ["product", "architecture", "acceptance"],
     "ready_panel": {"warning_ok_after_rounds": None, "max_rounds": 2},
+    # refiner: false — no refiner selects its own story in this crew, whatever an epic plan says
+    # (the product role selects every story, e.g. after a ticket owner's yes)
+    "select": {"refiner": True},
     "t2_panel": ["product", "architecture", "acceptance"],
     "risk": {
         "command": None,

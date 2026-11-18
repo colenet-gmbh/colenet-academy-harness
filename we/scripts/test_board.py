@@ -2029,6 +2029,23 @@ class TestSelectRefiner:
         assert act(moving, "select", KEY, "--refiner", adapter=fake()) == 1
         assert "refused (refiner)" in capsys.readouterr().err
 
+    def test_a_crew_without_refiner_selects_refuses_every_refiner(self, moving, capsys):
+        green_lenses(moving)
+        crew_path = moving / "work" / ".weside" / "crew.json"
+        data = json.loads(crew_path.read_text(encoding="utf-8"))
+        data["select"] = {"refiner": False}
+        crew_path.write_text(json.dumps(data), encoding="utf-8")
+        before = (moving / "board.json").read_bytes()
+        adapter = fake()
+        assert act(moving, "select", KEY, "--refiner", adapter=adapter) == 1
+        out, err = capsys.readouterr()
+        lines = [x for x in err.splitlines() if not x.startswith("warning:")]
+        assert lines == [
+            f"board.py select {KEY}: refused (refiner)",
+            "the crew sets `select.refiner: false`; product (Ada) selects",
+        ]
+        assert_untouched(moving, before, out, adapter)
+
     def test_a_key_on_the_approved_line_selects(self, moving, capsys):
         green_lenses(moving)
         assert act(moving, "select", KEY, "--refiner", adapter=fake()) == 0, (

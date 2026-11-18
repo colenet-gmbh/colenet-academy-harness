@@ -583,6 +583,7 @@ def test_the_ready_gate_keys_default_and_are_typed(tmp_path):
             "oracles.receipt_check must be a string or null",
         ),
         ({"acceptance__boundary_terms": "tenant"}, "acceptance.boundary_terms must be a list"),
+        ({"select__refiner": "no"}, "select.refiner must be true or false"),
     ]:
         core.joinpath(".weside", "crew.json").write_text(json.dumps(with_(**changes)))
         out = run(core, "show")
