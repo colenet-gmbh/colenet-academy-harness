@@ -84,7 +84,11 @@ worker starts in ``permissions.defaultMode``; ``auto`` reads the same) or ``bypa
 ``we-worker --bg`` worker starts in (``bypass`` adds ``--permission-mode bypassPermissions``, because
 in the background nobody answers a prompt; a window worker keeps the default mode); ``worker_timer``: a script ``we-worker`` registers each worker's time
 limit with, null = none; ``restore``: the crew's restore command after a host crash, which prints its plan without arguments
-and starts with ``--apply``; ``/we:start`` offers it), ``release``, ``cadences``,
+and starts with ``--apply``; ``/we:start`` offers it), ``merge`` (who arms a ready PR: ``armer``
+``session`` (the default: a session runs ``arm_pr.sh``) or ``workflow`` (the repo's own workflow arms
+every ready PR, so ``arm_pr.sh`` refuses and the session's step is ``gh pr ready``); ``hold_labels``:
+a list of label names, a PR carrying one is merged by a human only, ``arm_pr.sh`` refuses it and
+``conflict_gate.py`` names no re-arm for it), ``release``, ``cadences``,
 ``files``, ``state_dir`` (the folder of the crew's board family and
 ``l0-served.jsonl``: a ``~`` path or one relative to the crew file's directory in the repo's main
 worktree, so every worktree names the same folder; null, the default,
@@ -657,6 +661,7 @@ def _check_list(path: Path, value: Any, default: list, dotted: str) -> None:
 
 
 WORKER_MODES = ("default", "bypass", "auto")  # auto: the same as default
+ARMERS = ("session", "workflow")
 SIGNAL_KEYS = ("state", "role", "jql_window")
 JQL_WINDOW = re.compile(r"[1-9][0-9]{0,4}[mhd]")
 
@@ -716,9 +721,7 @@ def _validate(path: Path, data: dict[str, Any]) -> None:
     reviewer = data.get("sla", {}).get("t2_second_reviewer")
     if reviewer is not None and reviewer not in slugs:
         raise _fail(path, f"sla.t2_second_reviewer {reviewer!r} is no member")
-    mode = data.get("launch", {}).get("worker_mode", "default")
-    if mode not in WORKER_MODES:
-        raise _fail(path, f"launch.worker_mode must be one of {', '.join(WORKER_MODES)}")
+    _validate_choices(path, data)
     _validate_local_rules(path, data.get("local_rules", []))
     _validate_urgent_commands(path, data.get("flow", {}).get("urgent_commands", []))
     for key, text in data.get("labels", {}).items():
@@ -728,6 +731,17 @@ def _validate(path: Path, data: dict[str, Any]) -> None:
                 f"labels.{key} must be one non-empty line of at most {LABEL_CHARS} characters",
             )
     _validate_paths(path, data)
+
+
+def _validate_choices(path: Path, data: dict[str, Any]) -> None:
+    """The string keys that take one of a few words."""
+    for dotted, choices, default in (
+        ("launch.worker_mode", WORKER_MODES, "default"),
+        ("merge.armer", ARMERS, "session"),
+    ):
+        block, key = dotted.split(".")
+        if data.get(block, {}).get(key, default) not in choices:
+            raise _fail(path, f"{dotted} must be one of {', '.join(choices)}")
 
 
 def _validate_lenses(path: Path, data: dict[str, Any], slugs: set[str]) -> None:
@@ -1637,9 +1651,6 @@ def _merge_cli(argv: list[str]) -> int:
         print(f"crew: {exc}", file=sys.stderr)
         return 1
     value = (crew or DEFAULTS)["merge"][field]
-    if field == "armer" and value not in ("session", "workflow"):
-        print(f"crew: merge.armer {value!r} is not session or workflow", file=sys.stderr)
-        return 1
     print("\n".join(value) if isinstance(value, list) else value)
     return 0
 

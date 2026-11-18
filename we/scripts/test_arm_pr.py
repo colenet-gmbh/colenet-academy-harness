@@ -237,3 +237,11 @@ def test_a_label_outside_hold_labels_still_arms(tmp_path):
     code, out, calls = run(tmp_path, reads, ["ok"], merge={"hold_labels": ["review"]})
     assert (code, out[0]) == (0, f"armed: auto-merge on {NEW} (merge)")
     assert len(arm_calls(calls)) == 1
+
+
+def test_a_broken_crew_merge_block_is_a_crew_error_not_a_gh_failure(tmp_path):
+    code, out, calls = run(
+        tmp_path, [{"head": NEW, "checks": PENDING}], ["ok"], merge={"armer": "Workflow"}
+    )
+    assert code == 2 and out[-1].startswith("crew: ") and "merge.armer must be one of" in out[-1]
+    assert arm_calls(calls) == []

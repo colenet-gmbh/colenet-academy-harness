@@ -27,6 +27,7 @@
 #     then one more line, what the merge waits for: `pending: <names>` (the head's required checks
 #     still running or not yet registered), `pending: none`, or `pending: unknown (<error>)`
 #   gh failed: <error>                                                           exit 2  (also usage)
+#   crew: <reason> (the crew file's merge block is unreadable)                   exit 2
 #   ready: all required checks green on <sha> — merge: gh pr merge <PR> --<method> --match-head-commit <sha>
 #                                                                                exit 3
 #   refused: draft | refused: <state>                                            exit 4
@@ -68,9 +69,16 @@ if [ -z "$REPO" ]; then
 fi
 OWNER=${REPO%%/*} NAME=${REPO#*/}
 
-ARMER=$(python3 "$HERE/crew.py" merge armer) || { echo "gh failed: crew.json merge.armer unreadable"; exit 2; }
+crew_merge() {  # the crew's merge.$1 (a warning on stderr passes through); a broken crew: crew.py's reason
+  local err rc
+  err=$(mktemp) && python3 "$HERE/crew.py" merge "$1" 2>"$err"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then echo "crew: $(tail -n 1 "$err" | sed 's/^crew: //')"; rm -f "$err"; return 2; fi
+  cat "$err" >&2; rm -f "$err"
+}
+ARMER=$(crew_merge armer) || { echo "$ARMER"; exit 2; }
 if [ "$ARMER" = workflow ]; then echo "refused: armed by workflow — the step is gh pr ready"; exit 4; fi
-HOLD=$(python3 "$HERE/crew.py" merge hold_labels) || { echo "gh failed: crew.json merge.hold_labels unreadable"; exit 2; }
+HOLD=$(crew_merge hold_labels) || { echo "$HOLD"; exit 2; }
 
 # Line 1: id, state, isDraft, head, base, mergeStateStatus, reviewDecision (NONE when the repo
 # requires no review), the PR's labels joined by a comma. Then one line per check on the head:
