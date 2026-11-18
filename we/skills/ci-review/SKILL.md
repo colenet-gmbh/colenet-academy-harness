@@ -46,8 +46,8 @@ A skip is legitimate only when one of these holds:
   one-way PR (owner 12.11.2026). Otherwise the re-review posts the same verdict and
   the gate stays red. In the report, say that the gate needs a human override.
 - **A small defect on the seam this PR touches is fixed here**, even when it is pre-existing. A finding that cannot ride along
-  (a product decision, a money-path change, a foreign subsystem, a change that buries the diff) goes into
-  the report with its reason and a recommendation. It is not filed as a ticket unless the user asks, and you never ask whether to file one.
+  (a product decision, a money-path change, a foreign subsystem, a change that buries the diff) goes into the report with
+  its reason and a recommendation, named and not ticketed (`references/worker-dispatch.md` § Dev-only worker contract).
 - **Human threads are surfaced to the user before fixing.** One may make a bot finding moot. They are never resolved by you.
 
 ## 1 · Collect
@@ -68,7 +68,7 @@ Without an authenticated `gh` or without a PR, the local gates are the only gate
 **Merge state first:** `gh pr view $PR --json mergeable,mergeStateStatus,autoMergeRequest,isDraft`.
 
 - A round that will change code starts with `gh pr merge $PR --disable-auto` when `autoMergeRequest` is
-  set, and never drafts the PR (`/we:pr` step 4). After the round's push the main session re-arms on
+  set; drafts per `/we:pr` step 4. After the round's push the main session re-arms on
   Green. A fix after the merge is a follow-up PR from `origin/$BASE`.
 
 - `UNKNOWN` for a few seconds after a push: GitHub is still computing it, and a single read makes a
@@ -211,4 +211,4 @@ When the user is away, take the safest branch, record the open question in the r
 - the push SHA, each required check's status, the terminal state, and the run ids you read. A status from before the push is not current;
 - the merge state in one line: `CLEAN`, `BEHIND`, `DIRTY` with the conflicting files, `BLOCKED`, or a lasting `UNKNOWN`;
 - 0 unresolved bot threads, and every human thread quoted verbatim;
-- follow-ups named with a recommendation, never filed without the user asking.
+- follow-ups named with a recommendation.

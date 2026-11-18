@@ -61,7 +61,7 @@ Where Claude Code does the job, point at it instead of re-implementing it:
 - Default effort is `medium`. `high` pays off for a promise that must hold across several code
   paths, for transactions, money or idempotency, for a fix routing around a fragile path, and for a
   second attempt after a failed worker. A clearly bounded single fix gains nothing from `high`.
-- Implementation never runs on Sonnet; Haiku or Sonnet only for mechanical chunks the Lead names.
+- Which model implements: `references/worker-dispatch.md` § Choosing the worker.
 - Parallel work costs most after the push (main merges, a second migration head, regenerated
   artifacts), not in the integrate merge; disjoint stories on separate PRs paid off, stacked
   branches did not (18 runs, 16.10.2026). One implementer is the normal case; parallel only for
@@ -87,7 +87,7 @@ Where Claude Code does the job, point at it instead of re-implementing it:
   token drops then) carry exactly the headings `Cornerstone`, `You do`, `You never`, `At start`,
   `You wait on / others wait on you`, in that order; ≤ 5,500 chars raw (`specialist` ≤ 1,800,
   `worker` ≤ 1,500), a repo addendum ≤ 3,500, card plus addendum ≤ 9,500 rendered; role tokens,
-  never names; no line repeats the L0, every "never" names the move instead (gate:
+  never names; no line repeats the L0, every "never" names the move instead, and its reason where the reason is not obvious (gate:
   `scripts/check-instruction-budget.py`, checks `card-*`).
 
 ## Testing a revised skill
