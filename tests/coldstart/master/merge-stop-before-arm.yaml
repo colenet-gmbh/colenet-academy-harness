@@ -12,5 +12,5 @@ expect:
   waits: [machinery]
   not_waits: [product, human]
   route: "(?i)merge stop"
-  forbidden: ["gh pr merge --auto"]
+  forbidden: ["gh pr merge --auto", "arm_pr.sh"]
 judge: null

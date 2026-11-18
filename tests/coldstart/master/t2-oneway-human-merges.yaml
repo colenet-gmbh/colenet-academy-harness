@@ -11,5 +11,5 @@ expect:
   waits: [human]
   not_waits: [product, architecture, acceptance]
   route: "board item"
-  forbidden: ["gh pr merge --auto"]
+  forbidden: ["gh pr merge --auto", "arm_pr.sh"]
 judge: null

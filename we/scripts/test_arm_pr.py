@@ -139,7 +139,7 @@ def test_a_clean_answer_never_merges(tmp_path, later, arms, code, line):
         assert out[-1] == line
     if code == 3:
         assert out == [
-            f"ready: all required checks green on {NEW} — merge: gh pr merge 7 --match-head-commit {NEW}"
+            f"ready: all required checks green on {NEW} — merge: gh pr merge 7 --merge --match-head-commit {NEW}"
         ]
     if code == 7:
         assert out == [f"red: Claude Review on {NEW} — not armed"]

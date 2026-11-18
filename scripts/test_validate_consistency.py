@@ -89,12 +89,30 @@ def test_successor_names_and_history_pass(tmp_path):
         tmp_path,
         {
             "we/notes.md": "/we:master, /we:plan-story, council-member, epic-plan.md, "
-            "a storyboard, we:master; it freezes an interface; the `merge-freeze` label\n",
+            "a storyboard, we:master; it freezes an interface; the `merge-freeze` label\n"
+            "arm with `scripts/arm_pr.sh 7`; a fix round runs `gh pr merge 7 --disable-auto`\n",
             "docs/plans/old-story.md": "Built by `/we:orchestrate` with `/we:refine`.\n",
         },
     )
     done = run(root, "retired")
     assert done.returncode == 0, done.stdout
+
+
+def test_an_arm_through_gh_pr_merge_auto_fails_outside_the_helper(tmp_path):
+    root = tree(
+        tmp_path,
+        {
+            "we/skills/pr/SKILL.md": "| T0 | you: `gh pr merge <PR> --auto --merge` |\n",
+            "we/scripts/arm_pr.sh": "# never `gh pr merge 7 --auto`\n",
+        },
+    )
+    done = run(root, "retired")
+    assert done.returncode == 1, done.stdout
+    assert (
+        "we/skills/pr/SKILL.md:1: retired arm 'gh pr merge <PR> --auto' — arm with "
+        "we/scripts/arm_pr.sh" in done.stdout
+    )
+    assert "arm_pr.sh:1" not in done.stdout
 
 
 def test_dead_mention_in_code_file(tmp_path):

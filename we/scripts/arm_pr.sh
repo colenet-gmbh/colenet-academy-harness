@@ -22,7 +22,8 @@
 # One final line and its exit code:
 #   armed: auto-merge on <sha> (<method>)                                        exit 0
 #   gh failed: <error>                                                           exit 2  (also usage)
-#   ready: all required checks green on <sha> — merge: gh pr merge <PR> --match-head-commit <sha>   exit 3
+#   ready: all required checks green on <sha> — merge: gh pr merge <PR> --<method> --match-head-commit <sha>
+#                                                                                exit 3
 #   refused: draft | refused: <state>                                            exit 4
 #   refused: head moved <old> -> <new>                                           exit 5
 #   refused: one-way <class> — only the human merges it                          exit 6
@@ -168,7 +169,7 @@ while :; do
     fail:*) echo "red: ${v#fail:} on $SHA — not armed"; exit 7 ;;
     pending) arm ;;  # a required check runs: GitHub can wait for it now
     pass)
-      echo "ready: all required checks green on $SHA — merge: gh pr merge $PR --match-head-commit $SHA"
+      echo "ready: all required checks green on $SHA — merge: gh pr merge $PR --$METHOD --match-head-commit $SHA"
       exit 3 ;;
   esac
 done

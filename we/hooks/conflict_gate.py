@@ -210,8 +210,8 @@ def _sweep(targets: list[tuple[str, str | None]], state: dict) -> str | None:
         parts.append(
             "; ".join(rearm)
             + ". It lost its arm (a conflict, a ready event GitHub ran no workflow for, or a fix "
-            "round's `--disable-auto`): arm it again per `/we:master` § Close the run, or name why "
-            "not yet."
+            "round's `--disable-auto`): arm it again with `scripts/arm_pr.sh <PR>` (`/we:master` § "
+            "Close the run), or name why not yet."
         )
     return " ".join(parts) + " This hook names each head once." if parts else None
 

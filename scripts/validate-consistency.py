@@ -28,7 +28,9 @@ silently return:
 10. Retired — no path in RETIRED_PATHS exists, and no tracked file outside
    docs/plans/ (and RETIRED_ALLOWLIST) names a term of RETIRED_TERMS: the verbs,
    references and council shells the cut to the crew process L0 removed. A
-   successor is named instead (master, plan-story, epic-plan, council-member).
+   successor is named instead (master, plan-story, epic-plan, council-member). An arm through
+   `gh pr merge … --auto` is retired too: outside RETIRED_ARM_ALLOWLIST every arm names
+   we/scripts/arm_pr.sh (gh merges a PR that looks clean instead of arming it).
 11. Install resolver — no file under we/ resolves the plugin by the newest folder of the
    cache (`plugins/cache/weside-ai/we/*`), and every file of RESOLVER_FILES carries the one
    resolver RESOLVER verbatim (a copy in a Markdown list or YAML block indented by 3 or 8 spaces), two crews, AC7.
@@ -125,6 +127,17 @@ RETIRED_ALLOWLIST = {
     # A copy of a repo's one-way gate formats, kept verbatim (its freeze label included).
     "we/scripts/fixtures/brake-self-merge/judge.json",
 }
+# `gh pr merge … --auto` merges at once when the PR looks clean (the old head's state right after a
+# push); every arm goes through the helper. Named on purpose: the helper, its test and doc, this
+# checker and its test, and the cold-start cases that forbid the term.
+RETIRED_ARM = re.compile(r"gh pr merge\b[^\n`|]*?\s--auto(?![\w-])")
+RETIRED_ARM_ALLOWLIST = {
+    "we/scripts/arm_pr.sh",
+    "we/scripts/test_arm_pr.py",
+    "we/references/session-traps.md",
+    "scripts/test_coldstart_cases.py",
+}
+RETIRED_ARM_ALLOWED_DIRS = ("tests/coldstart/",)
 CODE_SUFFIXES = (".py", ".ts", ".tsx", ".js", ".json")
 # Bare `we:<token>` that names no skill or agent on purpose: the role-skill stub marker
 # (`<!-- we:stub`), and `we:lens-<key>`, the per-repo lens agents a crew file names.
@@ -517,9 +530,12 @@ def check_retired(root: Path = REPO) -> None:
             lines = path.read_text(encoding="utf-8").splitlines()
         except (UnicodeDecodeError, OSError):
             continue
+        arm_ok = rel in RETIRED_ARM_ALLOWLIST or rel.startswith(RETIRED_ARM_ALLOWED_DIRS)
         for lineno, line in enumerate(lines, 1):
             for m in pattern.finditer(line):
                 fail(f"{rel}:{lineno}: retired name '{m.group(0)}' — name its successor")
+            for m in [] if arm_ok else RETIRED_ARM.finditer(line):
+                fail(f"{rel}:{lineno}: retired arm '{m.group(0)}' — arm with we/scripts/arm_pr.sh")
 
 
 ORCHESTRATE_TEMPLATE = "we/templates/orchestrate.md"

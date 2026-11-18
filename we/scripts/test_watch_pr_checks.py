@@ -468,7 +468,7 @@ def test_until_merged_keeps_watching_green_until_merged(tmp_path):
 @pytest.mark.parametrize(
     "patch, note",
     [
-        ({}, "merge: UNKNOWN/UNKNOWN · auto-merge off"),
+        ({}, "merge: UNKNOWN/UNKNOWN · auto-merge off — arm: arm_pr.sh 57"),
         (
             {"autoMergeRequest": {"enabledAt": "x"}, "mergeStateStatus": "DIRTY"},
             "merge: DIRTY/UNKNOWN — conflicts with the base: merge it",
