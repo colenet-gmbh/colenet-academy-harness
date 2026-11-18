@@ -25,7 +25,7 @@ Usage:
   board.py [--board FILE] escalation list [--waiting-on ROLE] [--stage STAGE]
   board.py [--board FILE] escalation advise E<n> --recommendation T
   board.py [--board FILE] escalation settle E<n> --outcome T [--via human]
-  board.py [--board FILE] select <KEY> [--plan PATH]
+  board.py [--board FILE] select <KEY> [--plan PATH] [--refiner]
   board.py [--board FILE] signals [--input FILE]
   board.py [--board FILE] claim <KEY> [--release] [--input FILE]
   board.py [--board FILE] inbox [--input FILE]
@@ -152,7 +152,9 @@ select   moves a story to Selected when its `ENTRY_RULES["selected"]` hold, in o
          verdict (`lens_verdict.check`) bound to that blob, never to the checkout's plan; in a
          crew with `humans` the caller holds `roles.product` first. The first failing group
          refuses with `board.py select <KEY>: refused (<group>)` and its lines; no rule asks a
-         human. A passing select comments `selected by <role>@<human>, plan <blob>, panel <id>`
+         human. `--refiner` (a refiner selecting its own story, after `plan on main`) refuses,
+         naming the product role, unless the story's epic plan on that ref is approved, holds
+         the key on its `line:` and says no `select: owner`. A passing select comments `selected by <role>@<human>, plan <blob>, panel <id>`
          on the ticket after the transition.
 signals  (several humans, docs/board.md § Several humans) for each `board.signals` entry whose
          role this session's human runs: the ticket search `board_humans.signal_jql`; each hit
@@ -2775,6 +2777,80 @@ def rule_reopen(m):
     return []
 
 
+def epic_approved(status):
+    """The one reading of an approved epic plan: its `status:` starts with `approved`."""
+    return str(status or "").startswith("approved")
+
+
+def _show(root, spec):
+    """`git show <spec>` in `root`, None when absent or unreadable."""
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(root), "show", spec], capture_output=True, text=True, check=False
+        )
+    except OSError:
+        return None
+    return done.stdout.replace("\r\n", "\n") if done.returncode == 0 else None
+
+
+def _epics_on_ref(root, ref, epic):
+    """(name, text) of every `docs/plans/*-epic.md` on `ref` naming `epic` (`ready_gate.names_epic`)."""
+    listing = _show(root, f"{ref}:docs/plans") or ""
+    hits = []
+    for name in sorted(n.strip() for n in listing.splitlines()):
+        if not name.endswith("-epic.md"):
+            continue
+        text = _show(root, f"{ref}:docs/plans/{name}")
+        if text is not None and ready_gate.names_epic(ready_gate.frontmatter(text), epic):
+            hits.append((name, text))
+    return hits
+
+
+def rule_refiner(m):
+    """`select --refiner`: a refiner selects its own story only when the story's epic plan on
+    `risk.rules_from` is approved (`epic_approved`), its `line:` holds the key and it carries no
+    `select: owner`; every other case is the product role's select. The story's `epic:` comes from
+    the plan blob `plan on main` fixed, never from the checkout."""
+    if not getattr(m.args, "refiner", False):
+        return []
+    reason = _off_line(m)
+    if reason is None:
+        return []
+    owner = crew_mod.holder_name(m.crew, "product")
+    return [f"{reason}; product ({owner}) selects" if owner else f"{reason}; product selects"]
+
+
+def _off_line(m):
+    """Why the product role selects this story instead of its refiner, None when the refiner may."""
+    ref = str((m.crew.get("risk") or {}).get("rules_from") or "origin/main")
+    story = _show(m.root, str(m.selected.get("plan") or "")) or ""
+    epic = ready_gate.frontmatter(story).get("epic", "").strip()
+    if not epic or epic == "null":
+        return f"{m.key} names no `epic:`"
+    hits = _epics_on_ref(m.root, ref, epic)
+    if len(hits) != 1:
+        found = " and ".join(name for name, _ in hits) or "none"
+        return f"no single epic plan on {ref} names {epic} ({found})"
+    name, text = hits[0]
+    meta = ready_gate.frontmatter(text)
+    status = meta.get("status", "")
+    line = ready_gate.line_keys(meta)
+    checks = (
+        (
+            not epic_approved(status),
+            f"epic {epic} is not approved ({name} status: {status or 'none'})",
+        ),
+        (meta.get("select", "").strip() == "owner", f"epic {epic} says `select: owner` ({name})"),
+        (line is None, f"epic {epic} has no `line:` ({name})"),
+        (
+            line is not None and m.key not in line,
+            f"{m.key} is not on the finish line of {epic} ({name} line: "
+            f"{', '.join(line or []) or 'empty'})",
+        ),
+    )
+    return next((why for off, why in checks if off), None)
+
+
 def rule_epic_approved(m):
     epic = (m.args.epic or "").strip()
     if not epic:
@@ -2788,7 +2864,7 @@ def rule_epic_approved(m):
         ]
     path, text = hits[0]
     status = ready_gate.frontmatter(text).get("status", "")
-    if not status.startswith("approved"):
+    if not epic_approved(status):
         return [f"epic {epic} is not approved ({path.name} status: {status or 'none'})"]
     line = ready_gate.line_keys(ready_gate.frontmatter(text))
     if line is None:
@@ -3099,6 +3175,7 @@ ENTRY_RULES = {
         ("role", rule_selector),
         ("owner", rule_owner),
         ("plan on main", rule_plan_on_main),
+        ("refiner", rule_refiner),
         ("ready gate", rule_gate),
         ("tier", rule_tier),
         ("lenses", rule_lenses),
@@ -3562,6 +3639,11 @@ def _add_move_verbs(verbs):
     sel.add_argument("key")
     sel.add_argument("--plan", help="the story plan (default docs/plans/<KEY>-story.md)")
     sel.add_argument("--input", metavar="FILE", help="several humans: the ticket read carried")
+    sel.add_argument(
+        "--refiner",
+        action="store_true",
+        help="a refiner's own select: only a key on its approved epic's line, no `select: owner`",
+    )
     sel.set_defaults(run=cmd_select)
 
     mv = verbs.add_parser("move", help="move a story to a state whose entry rule holds")

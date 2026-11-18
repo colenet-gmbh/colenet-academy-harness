@@ -112,6 +112,10 @@ RETIRED_TERMS = (
     "automerge_gate",
     "board_freeze",
     "freeze",
+    # The epic plan's story table: /flow and the board derive it from the story plans.
+    "§ Mirror block",
+    "Mirror-refresh",
+    "<mirror block",
 )
 # Files that name the retired terms on purpose: this checker and the tests that pin it.
 RETIRED_ALLOWLIST = {

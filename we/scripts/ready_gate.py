@@ -13,8 +13,9 @@ as a missing section), 2 usage or an unreadable plan. Warnings go to stderr, eac
 ``warning:``, and never change the exit. There is no option: no caller can switch a check off.
 
 The gate reads the plan file it is given, the epic plan beside it and the crew of its checkout,
-never ``origin/main``: it runs on a refiner's branch before the plan lands. Only the tier (check
-10) needs the plan on ``risk.rules_from`` and defers there with one warning.
+not the plan from ``origin/main``: it runs on a refiner's branch before the plan lands. Only the
+tier (check 10) needs the plan on ``risk.rules_from`` and defers there with one warning; the short
+form's limits (check 9c) are read there too.
 
 The grammar it parses is owned by ``references/story-plan.md`` (§ Oracle-class marker, § What the
 Ready gate reads); this docstring only lists the story checks in their order:
@@ -33,6 +34,11 @@ Ready gate reads); this docstring only lists the story checks in their order:
    (``hooks/verification_gate.py``): a line that hook would refuse is one warning now, not a
    refusal at ``gh pr create`` later (the AC classes ``receipt``/``ci``/``walk`` are no oracle
    there);
+9c. the short form (``form: short``): the sections ``SHORT_SECTIONS`` replace the full set, the
+   paths come from ``## Files`` (at most ``plans.short_max_files`` of ``.weside/config.json``,
+   default 3), and a path on a rule of ``.weside/risk-paths``, a path marked ``(other repo)``,
+   or no rules file at all refuses with "use the full form"; both files are read from
+   ``risk.rules_from`` (default ``origin/main``), never from the tree that holds the plan;
 10. the plan's tier (``plan_tier.py``): the repo's ``risk.command`` on the plan alone, in a
     scratch tree at ``risk.rules_from``. A success prints ``tier: <line 1>`` on stderr, a
     failure is one stdout line ``<plan>: tier: tier not computed: <reason>``; without a
@@ -44,14 +50,16 @@ whose ``status:`` starts with ``approved`` without ``line:`` is refused, any oth
 it warns; a ``line:`` present must list keys without a repeat and come with a ``line_goal:``; more
 keys than the crew's ``limits.epic_stories`` upper bound is one warning.
 
-``story_failures(plan)`` runs checks 1-9 for ``board.py select``, which runs the tier itself.
+``story_failures(plan)`` runs checks 1-9c for ``board.py select``, which runs the tier itself.
 
-Every repo value comes from the crew through ``crew.py``; a ``CrewError`` is a refusal. Python
+Every repo value comes from the crew through ``crew.py`` (a ``CrewError`` is a refusal), except
+the short form's two: ``plans.short_max_files`` and the rules file, both read on ``risk.rules_from``. Python
 3.9, stdlib only.
 """
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
 import subprocess
@@ -65,6 +73,7 @@ if _HERE not in sys.path:
 
 import crew  # noqa: E402
 import plan_tier  # noqa: E402
+import risk_paths  # noqa: E402
 
 _HOOKS = str(Path(__file__).resolve().parent.parent / "hooks")
 if _HOOKS not in sys.path:
@@ -88,6 +97,13 @@ REQUIRED_SECTIONS = (
     "Security Review Required",
     "Documentation Impact",
 )
+# The short form for a defect at one place (story-plan.md § Short form); `## Updates Log` stays
+# optional as in the full form.
+SHORT = "short"
+SHORT_SECTIONS = ("Is", "Should", "Acceptance Criteria", "Files", "Verification")
+SHORT_MAX_FILES = 3
+RISK_RULES = ".weside/risk-paths"
+FULL_FORM = "use the full form (references/story-plan.md § Short form)"
 CLASSES = ("receipt", "ci", "walk")
 RECEIPT_TIMEOUT = 60
 GOAL_OFF = (
@@ -312,10 +328,23 @@ def receipt_boundary(marker: Marker) -> str:
 
 
 class Phase:
+    """A phase of the full form; number 0 is the short form's ``## Files`` section."""
+
     def __init__(self, number: int) -> None:
         self.number = number
         self.repo: str | None = None
         self.paths: list[tuple[str, bool]] = []  # (path, marked "(other repo)")
+
+    @property
+    def label(self) -> str:
+        return f"phase {self.number}" if self.number else "## Files"
+
+
+def short_files(text: str) -> Phase:
+    """The short form's one seam: the paths of ``## Files``, read like a ``**Files:**`` list."""
+    files = Phase(0)
+    files.paths = _paths(sections(text).get("Files", "").split("\n"))
+    return files
 
 
 def phases(text: str) -> list[Phase]:
@@ -427,8 +456,16 @@ class Gate:
         meta = frontmatter(text)
         if not meta.get("story"):
             self.fail("frontmatter", "no `story:`", 1)
+        form = meta.get("form", "")
+        if form not in ("", SHORT):
+            self.fail(
+                "frontmatter",
+                f"`form: {form}`: `short` or no `form:` line",
+                frontmatter_line(text, "form"),
+            )
+        short = form == SHORT
         present = sections(text)
-        for name in REQUIRED_SECTIONS:
+        for name in SHORT_SECTIONS if short else REQUIRED_SECTIONS:
             if name not in present:
                 self.fail(f"## {name}", "section missing")
         if "Open Fork" in present:
@@ -437,7 +474,9 @@ class Gate:
                 "an open fork stands; answer it and delete the section",
                 heading_line(text, "Open Fork"),
             )
-        found_phases = phases(text)
+        found_phases = [short_files(text)] if short else phases(text)
+        if short:
+            self._short(found_phases[0], "Files" in present)
         markers = self._acs(text)
         self._walk(markers, found_phases)
         self._receipts(markers)
@@ -445,7 +484,7 @@ class Gate:
         if epic is not None:
             self._fence(epic, meta["epic"], found_phases)
             self._goals(epic)
-        else:
+        elif not short:  # the short form refuses an (other repo) path itself
             self._phase_repos(found_phases)
         if "Implementation Phases" in present and not any(ph.paths for ph in found_phases):
             self.fail(
@@ -455,6 +494,81 @@ class Gate:
             )
         if "Verification" in present:
             self._oracle_line(text)
+
+    def _short(self, files: Phase, present: bool) -> None:
+        """Check 9c: the short form holds a defect at one place, off every risk path."""
+        at = heading_line(self.text, "Files")
+        paths = list(dict.fromkeys(p for p, _ in files.paths))
+        if present and not paths:
+            self.fail("## Files", "no path named", at)
+        limit = self._short_max_files()
+        if limit is not None and len(paths) > limit:
+            self.fail(
+                "## Files",
+                f"{len(paths)} files, the short form holds at most {limit} "
+                f"(plans.short_max_files); {FULL_FORM}",
+                at,
+            )
+        for path, other in files.paths:
+            if other:
+                self.fail(
+                    "## Files",
+                    f"`{path}` is in another repo; {FULL_FORM}",
+                    path_line(self.text, 0, path),
+                )
+        text = self._on_ref(RISK_RULES)
+        if text is None:
+            self.fail(
+                "## Files",
+                f"no {RISK_RULES} on {self._ref()} to check the files against; {FULL_FORM}",
+                at,
+            )
+            return
+        globs = risk_globs(text)
+        for path in paths:
+            hit = next((g for g, pattern in globs if pattern.match(path)), None)
+            if hit is not None:
+                self.fail(
+                    "## Files",
+                    f"`{path}` is on the risk path `{hit}` (.weside/risk-paths); {FULL_FORM}",
+                    path_line(self.text, 0, path),
+                )
+
+    def _short_max_files(self) -> int | None:
+        """``plans.short_max_files`` of ``.weside/config.json`` on ``risk.rules_from``, default 3; a
+        value that is no positive integer is one failure and None."""
+        try:
+            config = json.loads(self._on_ref(".weside/config.json") or "{}")
+        except ValueError:
+            config = {}
+        plans = config.get("plans") if isinstance(config, dict) else None
+        value = (
+            plans.get("short_max_files", SHORT_MAX_FILES)
+            if isinstance(plans, dict)
+            else SHORT_MAX_FILES
+        )
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            self.fail("config", f"plans.short_max_files {value!r} is no positive integer")
+            return None
+        return value
+
+    def _ref(self) -> str:
+        return str((self.crew.get("risk") or {}).get("rules_from") or "origin/main")
+
+    def _on_ref(self, rel: str) -> str | None:
+        """``rel`` as committed on ``risk.rules_from``, None when absent or unreadable: the short
+        form's limits come from the default branch, never from the tree whose plan they judge."""
+        try:
+            done = subprocess.run(
+                ["git", "-C", str(self.root), "show", f"{self._ref()}:{rel}"],
+                capture_output=True,
+                text=True,
+                timeout=RECEIPT_TIMEOUT,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return done.stdout if done.returncode == 0 else None
 
     def _oracle_line(self, text: str) -> None:
         """Check 9b: warn now what the PR hook refuses at `gh pr create`."""
@@ -674,7 +788,7 @@ class Gate:
             for path, other in phase.paths:
                 if other and phase.repo is None:
                     self.fail(
-                        f"phase {phase.number}",
+                        phase.label,
                         f"`{path}` is marked (other repo): name the repo in a `**Repo:**` line",
                         path_line(self.text, phase.number, path),
                     )
@@ -705,7 +819,7 @@ class Gate:
                 shown = file if phase.repo is None else f"{phase.repo}:{file}"
                 self.fail(
                     "scope change",
-                    f"{shown} (phase {phase.number}) outside the fence of {key} — approver: "
+                    f"{shown} ({phase.label}) outside the fence of {key} — approver: "
                     f"{product} (fence change); {human} if it changes the outcome (§Units)",
                     path_line(self.text, phase.number, file),
                 )
@@ -796,18 +910,35 @@ def ac_lines(text: str) -> dict[int, int]:
 
 
 def path_line(text: str, phase: int, path: str) -> int | None:
-    """The 1-based line under ``### Phase <phase>`` whose backtick span names ``path``."""
+    """The 1-based line under ``### Phase <phase>`` (0: the short form's ``## Files``) whose
+    backtick span names ``path``."""
     inside = False
     for number, line in enumerate(text.split("\n"), 1):
         heading = _PHASE.match(line)
         if heading or line.startswith(("## ", "### ")):
-            inside = bool(heading) and int(heading.group(1)) == phase
+            if phase == 0:
+                inside = line.strip() == "## Files"
+            else:
+                inside = bool(heading) and int(heading.group(1)) == phase
         elif inside and any(
             _LINE_SUFFIX.sub("", span.split("§")[0]).rstrip("/") == path
             for span in _SPAN.findall(line)
         ):
             return number
     return None
+
+
+def risk_globs(rules: str) -> list[tuple[str, re.Pattern[str]]]:
+    """Every ``path <glob>`` rule of a risk-paths file, whatever its section: each section is a
+    risk class. Other keywords (a classifier's ``line``, ``hunk``, ``from`` rules) judge a diff, not
+    a file name, and are skipped."""
+    out = []
+    for raw in rules.splitlines():
+        keyword, _, rest = raw.strip().partition(" ")
+        if keyword == "path" and rest.strip():
+            glob = rest.strip()
+            out += [(glob, risk_paths._glob_regex(one)) for one in risk_paths._expand(glob)]
+    return out
 
 
 def line_keys(meta: dict[str, str]) -> list[str] | None:
@@ -828,6 +959,13 @@ def extensions(text: str) -> list[tuple[bool, str]]:
     return out
 
 
+def names_epic(meta: dict[str, str], key: str) -> bool:
+    """An epic plan's frontmatter names ``key``: its ``ticket:``, ``epic:`` or ``linked_epics:``."""
+    return key in (meta.get("ticket"), meta.get("epic")) or key in inline_list(
+        meta.get("linked_epics")
+    )
+
+
 def find_epic_plan(plans_dir: Path, key: str) -> list[tuple[Path, str]]:
     """Every ``*-epic.md`` in ``plans_dir`` whose ``ticket:`` or ``epic:`` is ``key`` or whose
     ``linked_epics:`` holds it, with its text; the one finder for the gate and ``board.py move``."""
@@ -837,10 +975,7 @@ def find_epic_plan(plans_dir: Path, key: str) -> list[tuple[Path, str]]:
             text = candidate.read_text(encoding="utf-8").replace("\r\n", "\n")
         except OSError:
             continue
-        meta = frontmatter(text)
-        if key in (meta.get("ticket"), meta.get("epic")) or key in inline_list(
-            meta.get("linked_epics")
-        ):
+        if names_epic(frontmatter(text), key):
             hits.append((candidate, text))
     return hits
 

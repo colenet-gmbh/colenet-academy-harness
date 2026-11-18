@@ -1,18 +1,18 @@
 ---
 name: epic
 description: >
-  Epic plan: one outcome serving a goal-file metric — status from plan + ticketing mirror, or refine/create.
+  Epic plan: one outcome serving a goal-file metric — status from plan + its stories, or refine/create.
   Triggers: "/we:epic", "epic", "refine epic", "new epic".
 ---
 
 # /we:epic — one epic plan
 
 You hold one Epic at `docs/plans/<epic>-epic.md`: one outcome that carries `serves: <metric>` of the goal file and ships a coherent change (L0 §Units). Status is the read-only default.
-The plan is the durable artifact; a ticketing Epic, where one exists, is its index. `/we:epic` owns the Stories mirror.
+The plan is the durable artifact; a ticketing Epic, where one exists, is its index. The plan holds no story table: `/flow` and the board derive it.
 `/we:epic` never writes a Story plan: Stories come from the Sequencing section, and each plan comes from a refiner worker the epic's master starts (`/we:plan-story`), never from the epic owner (L0 §Lifecycle).
 Wanted stops: one interview question at a time, and the approval. After the approval you run the ticket step, commit, print the next verb and stop.
 
-Shared contract (target and mode, Status, mirror block, drafting, writer, commit path, `## Success Criteria`):
+Shared contract (target and mode, Status, upkeep after a merge, drafting, writer, commit path, `## Success Criteria`):
 `${CLAUDE_PLUGIN_ROOT}/references/epic-plan.md`. Template: `${CLAUDE_PLUGIN_ROOT}/skills/epic/references/template.md`.
 Tickets: `${CLAUDE_PLUGIN_ROOT}/references/ticketing.md`.
 
@@ -93,7 +93,7 @@ Epic: docs/plans/<epic>-epic.md (<sha> on <branch>). Ticket: <KEY | none>.
 Next: <see below>
 ```
 
-- Stories in the mirror or in `## Sequencing` → `/we:master <epic>`: the epic's master pulls each
+- Story plans with this `epic:`, or Stories in `## Sequencing` → `/we:master <epic>`: the epic's master pulls each
   Story, starts a refiner worker for one without a plan, and builds each Story as its own PR (L0 §Units).
 - No Stories yet → `/we:council` when the cut is contentious or seams compete; otherwise sketch the
   Stories in a Refine.

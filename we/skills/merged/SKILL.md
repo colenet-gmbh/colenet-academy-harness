@@ -103,9 +103,8 @@ silently. If the workflow rejects the move, report it and continue.
 
 - **Plan:** if `docs/plans/{KEY}-story.md` still describes an intention rather than what was built, correct it.
   The next agent reads the plan, not the diff.
-- **Epic mirror:** if the story has an `epic:`, update that story's row in the epic's mirror block
-  per `${CLAUDE_PLUGIN_ROOT}/references/epic-plan.md` § Mirror block (status bucket as the ticket now reads, `Plan` column,
-  `updated:`, one `## Updates Log` line), so the next roster does not offer a shipped story again.
+- **Epic upkeep:** if the story has an `epic:`, one `## Updates Log` line in the epic plan per
+  `${CLAUDE_PLUGIN_ROOT}/references/epic-plan.md` § Upkeep after a merge, and `updated:`; a leftover mirror block goes in the same commit.
 - **Finish line:** with an epic that has `line:`, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/epic_state.py line
   <epic plan>` and put its summary into the Updates Log line. It counts Done, which acceptance sets later:
   the trigger fires where Done is set (`/we:accept` § 4, the coordinator's sweep), never here. Once every

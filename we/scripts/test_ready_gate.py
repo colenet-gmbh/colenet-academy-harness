@@ -770,3 +770,174 @@ def test_extensions_reads_open_and_decided_entries():
     ]
     assert ready_gate.line_keys(ready_gate.frontmatter(text)) == ["PROJ-12", "PROJ-13"]
     assert ready_gate.line_keys({}) is None
+
+
+# --- the short form: a defect at one place ----------------------------------------------------
+
+RULES = (
+    "# risk rules\n[brake-change]\npath src/auth/**\n[t2]\nline src/**\npath docs/process/*.md\n"
+)
+
+
+def short_repo(tmp_path: Path, rules: str | None = RULES, config: dict | None = None) -> Path:
+    """The fixture repo as a real git repo whose `origin/main` carries the rules and the config:
+    the short form reads both there, never in the tree."""
+    root = repo(tmp_path)
+    if rules is not None:
+        (root / ".weside" / "risk-paths").write_text(rules)
+    if config is not None:
+        (root / ".weside" / "config.json").write_text(json.dumps(config))
+    shutil.rmtree(root / ".git")
+    for argv in (
+        ["init", "-q"],
+        ["add", "-A"],
+        ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "base"],
+        ["update-ref", "refs/remotes/origin/main", "HEAD"],
+    ):
+        subprocess.run(["git", "-C", str(root), *argv], check=True, capture_output=True)
+    return root
+
+
+def short_with(root: Path, old: str, new: str) -> Path:
+    path = root / plan(root, "short")
+    text = path.read_text()
+    assert old in text, old
+    path.write_text(text.replace(old, new, 1))
+    return path
+
+
+FILES_ANCHOR = "- `tests/test_export.py` — one case"
+
+
+def test_the_short_form_is_ready_without_the_full_sections(tmp_path):
+    root = short_repo(tmp_path)
+    out = gate(root, "story", plan(root, "short"))
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert out.stdout == ""
+
+
+@pytest.mark.parametrize(
+    ("files", "config", "ready"),
+    [
+        (["src/report/a.py"], None, True),  # three files: the default limit
+        (["src/report/a.py", "src/report/b.py"], None, False),  # four
+        ([], {"plans": {"short_max_files": 1}}, False),  # two above a limit of one
+    ],
+    ids=["three-at-the-default", "four-above-the-default", "two-above-a-limit-of-one"],
+)
+def test_the_short_form_file_limit(tmp_path, files, config, ready):
+    root = short_repo(tmp_path, config=config)
+    extra = "".join(f"- `{f}`\n" for f in files)
+    path = short_with(root, FILES_ANCHOR, extra + FILES_ANCHOR)
+    out = gate(root, "story", str(path))
+    assert out.returncode == (0 if ready else 1), out.stdout
+    if not ready:
+        limit = (config or {}).get("plans", {}).get("short_max_files", 3)
+        assert out.stdout.splitlines() == [
+            f"{path}:27: ## Files: {2 + len(files)} files, the short form holds at most {limit} "
+            f"(plans.short_max_files); {ready_gate.FULL_FORM}"
+        ]
+
+
+@pytest.mark.parametrize(
+    ("path", "glob"),
+    [("src/auth/token.py", "src/auth/**"), ("docs/process/merge.md", "docs/process/*.md")],
+    ids=["one-way-section", "two-way-section"],
+)
+def test_a_short_form_on_a_risk_path_needs_the_full_form(tmp_path, path, glob):
+    root = short_repo(tmp_path)
+    plan_path = short_with(root, FILES_ANCHOR, f"- `{path}`\n{FILES_ANCHOR}")
+    out = gate(root, "story", str(plan_path))
+    assert out.returncode == 1
+    assert out.stdout.splitlines() == [
+        f"{plan_path}:30: ## Files: `{path}` is on the risk path `{glob}` (.weside/risk-paths); "
+        f"{ready_gate.FULL_FORM}"
+    ]
+
+
+def test_a_line_rule_judges_a_diff_not_a_short_plan(tmp_path):
+    root = short_repo(tmp_path)  # `line src/**` in [t2] matches every file of the fixture
+    out = gate(root, "story", plan(root, "short"))
+    assert out.returncode == 0, out.stdout
+
+
+@pytest.mark.parametrize(
+    ("rules", "edit", "expected"),
+    [
+        (
+            None,
+            None,
+            "## Files: no .weside/risk-paths on origin/main to check the files against; {full}",
+        ),
+        (RULES, ("## Should\n", "## Shall\n"), "## Should: section missing"),
+        (RULES, ("## Files\n", "## Paths\n"), "## Files: section missing"),
+        (
+            RULES,
+            (FILES_ANCHOR, "- `lib/csv/parse.py` (other repo)"),
+            "## Files: `lib/csv/parse.py` is in another repo; {full}",
+        ),
+        (
+            RULES,
+            ("form: short", "form: tiny"),
+            "frontmatter: `form: tiny`: `short` or no `form:` line",
+        ),
+        (
+            RULES,
+            (FILES_ANCHOR, "- `infra/main.tf`"),
+            "scope change: infra/main.tf (## Files) outside the fence of PROJ-1",
+        ),
+        # the short form cuts sections, never the AC form: Given/When/Then and the marker stay
+        (RULES, ("**Then** the header", "the header"), "AC1: no `**Then**`"),
+        (
+            RULES,
+            (" [`ci`: extend `tests/test_export.py`; staging cannot build the case]", ""),
+            "AC1: no oracle-class marker",
+        ),
+    ],
+    ids=[
+        "no-rules-file",
+        "no-should",
+        "no-files",
+        "other-repo",
+        "unknown-form",
+        "outside-fence",
+        "ac-without-then",
+        "ac-without-marker",
+    ],
+)
+def test_the_short_form_refusals(tmp_path, rules, edit, expected):
+    root = short_repo(tmp_path, rules=rules)
+    path = short_with(root, *edit) if edit else root / plan(root, "short")
+    out = gate(root, "story", str(path))
+    want = expected.format(full=ready_gate.FULL_FORM)
+    assert out.returncode == 1
+    assert [line for line in out.stdout.splitlines() if want in line], out.stdout
+
+
+def test_rules_and_limit_in_the_tree_do_not_count(tmp_path):
+    root = short_repo(tmp_path)
+    (root / ".weside" / "risk-paths").write_text("# emptied in the tree\n")
+    (root / ".weside" / "config.json").write_text(json.dumps({"plans": {"short_max_files": 9}}))
+    extra = "".join(f"- `src/auth/{n}.py`\n" for n in range(3))
+    path = short_with(root, FILES_ANCHOR, extra + FILES_ANCHOR)
+    out = gate(root, "story", str(path))
+    assert out.returncode == 1
+    assert "5 files, the short form holds at most 3" in out.stdout
+    assert "is on the risk path `src/auth/**`" in out.stdout
+
+
+def test_a_standalone_short_plan_in_another_repo_gets_one_fix(tmp_path):
+    root = short_repo(tmp_path)
+    path = short_with(root, "epic: PROJ-1\n", "")
+    short_with(root, FILES_ANCHOR, "- `lib/csv/parse.py` (other repo)")
+    out = gate(root, "story", str(path))
+    assert out.returncode == 1
+    assert out.stdout.splitlines() == [
+        f"{path}:29: ## Files: `lib/csv/parse.py` is in another repo; {ready_gate.FULL_FORM}"
+    ]
+
+
+def test_a_full_plan_ignores_the_short_form_rules(tmp_path):
+    root = short_repo(tmp_path, rules=None, config={"plans": {"short_max_files": 1}})
+    out = gate(root, "story", plan(root, "green"))
+    assert out.returncode == 0, out.stdout

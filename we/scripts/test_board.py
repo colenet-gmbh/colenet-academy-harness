@@ -1795,15 +1795,95 @@ class TestSelect:
         assert after == before, "select wrote board.json or the answers file"
         sub = board.parser()._subparsers._group_actions[0].choices["select"]
         options = {s for a in sub._actions for s in a.option_strings} - {"-h", "--help"}
-        assert options == {"--plan", "--input"}
+        assert options == {"--plan", "--input", "--refiner"}
         assert [g for g, _ in board.ENTRY_RULES["selected"]] == [
             "role",
             "owner",
             "plan on main",
+            "refiner",
             "ready gate",
             "tier",
             "lenses",
         ]
+
+
+class TestSelectRefiner:
+    """`select --refiner` selects only a key on the line of its approved epic without
+    `select: owner`; the epic plan is read on main, never in the checkout."""
+
+    def epic(self, root, old, new):
+        path = root / "docs" / "plans" / "PROJ-1-epic.md"
+        path.write_text(path.read_text().replace(old, new, 1), encoding="utf-8")
+
+    @pytest.mark.parametrize(
+        "change, line",
+        [
+            (
+                ("line: [PROJ-12, PROJ-13]\n", ""),
+                "epic PROJ-1 has no `line:` (PROJ-1-epic.md); product (Ada) selects",
+            ),
+            (
+                ("line: [PROJ-12, PROJ-13]", "line: [PROJ-13]"),
+                f"{KEY} is not on the finish line of PROJ-1 (PROJ-1-epic.md line: PROJ-13); "
+                "product (Ada) selects",
+            ),
+            (
+                ("status: approved", "status: approved\nselect: owner"),
+                "epic PROJ-1 says `select: owner` (PROJ-1-epic.md); product (Ada) selects",
+            ),
+            (
+                ("status: approved", "status: draft"),
+                "epic PROJ-1 is not approved (PROJ-1-epic.md status: draft); product (Ada) selects",
+            ),
+        ],
+        ids=["no line", "off the line", "select owner", "draft with a line"],
+    )
+    def test_a_refiner_off_an_approved_line_is_refused(self, moving, capsys, change, line):
+        root = moving / "work"
+        green_lenses(moving)
+        self.epic(root, *change)
+        land(root)
+        before = (moving / "board.json").read_bytes()
+        adapter = fake()
+        assert act(moving, "select", KEY, "--refiner", adapter=adapter) == 1
+        out, err = capsys.readouterr()
+        lines = [x for x in err.splitlines() if not x.startswith("warning:")]
+        assert lines == [f"board.py select {KEY}: refused (refiner)", line]
+        assert_untouched(moving, before, out, adapter)
+
+    def test_a_story_without_an_epic_is_the_owner_s(self, moving, capsys):
+        root = moving / "work"
+        green_lenses(moving)
+        plan = root / "docs" / "plans" / f"{KEY}-story.md"
+        plan.write_text(plan.read_text().replace("epic: PROJ-1\n", "", 1), encoding="utf-8")
+        land(root)
+        assert act(moving, "select", KEY, "--refiner", adapter=fake()) == 1
+        err = capsys.readouterr().err
+        assert f"{KEY} names no `epic:`; product (Ada) selects" in err.splitlines()
+
+    def test_the_epic_is_read_on_main_not_in_the_checkout(self, moving, capsys):
+        root = moving / "work"
+        green_lenses(moving)
+        self.epic(root, "line: [PROJ-12, PROJ-13]", "line: [PROJ-13]")
+        land(root)
+        self.epic(root, "line: [PROJ-13]", "line: [PROJ-12, PROJ-13]")
+        assert act(moving, "select", KEY, "--refiner", adapter=fake()) == 1
+        assert "refused (refiner)" in capsys.readouterr().err
+
+    def test_a_key_on_the_approved_line_selects(self, moving, capsys):
+        green_lenses(moving)
+        assert act(moving, "select", KEY, "--refiner", adapter=fake()) == 0, (
+            capsys.readouterr().err
+        )
+        assert transitions(moving)[-1]["to"] == "selected"
+
+    def test_a_plain_select_ignores_the_line(self, moving, capsys):
+        root = moving / "work"
+        green_lenses(moving)
+        self.epic(root, "status: approved", "status: approved\nselect: owner")
+        self.epic(root, "line: [PROJ-12, PROJ-13]", "line: [PROJ-13]")
+        land(root)
+        assert act(moving, "select", KEY, adapter=fake()) == 0, capsys.readouterr().err
 
 
 class TestSelectLenses:

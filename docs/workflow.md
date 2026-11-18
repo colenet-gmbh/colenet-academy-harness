@@ -86,7 +86,7 @@ flowchart TD
 `/we:epic` writes or sharpens an epic and shows status by default; an epic too big for one outcome
 becomes linked epics. Approval is per epic: a story plan that passes the Ready gate is Selected
 without a per-story sign-off. `/we:council` convenes role lenses on any question; `/we:grill`
-stress-tests any plan one question at a time. Epic frontmatter and mirror block:
+stress-tests any plan one question at a time. Epic frontmatter, finish line and upkeep:
 [we/references/epic-plan.md](../we/references/epic-plan.md).
 
 ## Build: one master per epic, one PR per story

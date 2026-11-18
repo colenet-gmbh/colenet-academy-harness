@@ -185,17 +185,17 @@ CASES = [
     # review rows of the cut (R*): a contract field or file the cut left without a writer or reader
     (
         "R1 approved has a writer",
-        MASTER,
-        r"Pass → commit it\.",
-        r"Pass → set `status: approved` in the plan's frontmatter, then commit it",
+        PLAN_STORY,
+        None,
+        r"\*\*Approve\.\*\* Set `status: approved`",
     ),
     (
         "R1 who sets approved",
         STORY_PLAN,
         None,
-        r"the master sets it in the commit that puts the plan on the default branch",
+        r"set in the commit that puts the plan on the default branch by whoever lands it",
     ),
-    ("R1 the refiner writes draft", PLAN_STORY, r"status: approved", r"`status: draft`"),
+    ("R1 the master lands no refiner plan", MASTER, r"Pass → commit it\.", r"Carry to Selected"),
     ("R2 goals bound in the crew", SETUP, r"Skip → no goal check", r"bind `files\.goals`"),
     ("R2 no crew, no goal check", SETUP, None, r"the goal check needs a crew"),
     # watch rows: the PR watcher rule has one owner, L0 §Sessions
