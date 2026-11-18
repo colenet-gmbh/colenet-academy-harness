@@ -273,7 +273,7 @@ arms (the worker card).
 (`/we:master` § Push, PR, CI). `worker`: the master writes the line `PR owner: worker` into the brief
 of a story's single build worker, or of the finisher in a parallel story's integration tree; a
 parallel chunk never gets it, the master integrates its branch as before. The line is the switch a
-worker reads: without it, it runs the dev-only contract and never guesses from the config.
+worker reads, and its push: without it, it runs the dev-only contract and never guesses from the config.
 
 With the line, after § Finish sequence the worker carries its PR itself, because a hand-off to the
 master costs a round trip per head and the master's context:

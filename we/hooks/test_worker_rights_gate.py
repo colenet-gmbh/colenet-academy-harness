@@ -39,6 +39,9 @@ if args[:2] == ["pr", "view"]:
     if pr is None:
         print("no pull requests found", file=sys.stderr); sys.exit(1)
     print(json.dumps(pr)); sys.exit(0)
+if args[:2] == ["pr", "checks"]:
+    print(open(os.environ["FAKE_GH_CHECKS"]).read() if os.environ.get("FAKE_GH_CHECKS") else "[]")
+    sys.exit(0)
 sys.exit(0)
 """
 
@@ -645,3 +648,49 @@ def test_settings_add_the_pr_owner_rules_only_under_worker(world):
     assert wr.settings(plain, KEY)["permissions"]["allow"] == list(wr.PR_OWNER_ALLOW)
     allow = wr.settings(world["repo"], KEY)["permissions"]["allow"]
     assert allow.count("Bash(gh pr comment*)") == 1
+
+
+def _hold_crew(repo):
+    body = {**CREW, "worker_rights": RIGHTS, "merge": {"hold_labels": ["hold"]}}
+    (repo / ".weside" / "crew.json").write_text(json.dumps(body))
+    _git(repo, "add", ".weside/crew.json")
+    _commit(repo, "hold")
+    _publish(repo)
+
+
+def test_under_worker_the_merge_line_is_denied_on_a_hold_label(world):
+    _hold_crew(world["repo"])
+    _pr_owner(world["repo"], "worker")
+    prs = json.loads((world["tmp"] / "prs.json").read_text())
+    prs["7"]["labels"] = [{"name": "hold"}]
+    (world["tmp"] / "prs.json").write_text(json.dumps(prs))
+    decision, reason = hook(
+        world, f"gh pr merge 7 --merge --match-head-commit {_head(world['repo'])}"
+    )
+    assert decision == "deny" and "label hold" in reason
+    decision, reason = hook(world, "gh pr edit 7 --remove-label hold")
+    assert decision == "deny" and "hold label" in reason
+    assert hook(world, "gh pr edit 7 --remove-label other")[0] == "allow"
+
+
+def test_under_worker_the_merge_line_is_denied_on_a_red_required_check(world):
+    _pr_owner(world["repo"], "worker")
+    checks = world["tmp"] / "checks.json"
+    checks.write_text(json.dumps([{"name": "Tests", "bucket": "fail"}]))
+    command = f"gh pr merge 7 --merge --match-head-commit {_head(world['repo'])}"
+    decision, reason = hook(world, command, FAKE_GH_CHECKS=str(checks))
+    assert decision == "deny" and "required checks not green (Tests)" in reason
+
+
+def test_under_worker_the_merge_line_is_denied_on_a_one_way_class(world):
+    repo = world["repo"]
+    (repo / ".weside" / "risk-paths").write_text("[brake-change]\npath src/brake.py\n")
+    _git(repo, "add", ".weside/risk-paths")
+    _commit(repo, "risk")
+    _pr_owner(repo, "worker")
+    (repo / "src").mkdir()
+    (repo / "src" / "brake.py").write_text("x = 1\n")
+    _git(repo, "add", "src/brake.py")
+    _commit(repo, "brake")
+    decision, reason = hook(world, f"gh pr merge 7 --merge --match-head-commit {_head(repo)}")
+    assert decision == "deny" and "T2 one-way brake-change" in reason

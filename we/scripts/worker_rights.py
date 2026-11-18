@@ -20,7 +20,9 @@ branch conditions it may also run `git push` (`push`: every destination branch c
 `gh pr create` (`pr_create`: no argument, `--head` only its branch), `gh pr edit` and `gh pr comment`
 (`pr_edit`, `pr_comment`: its own PR), `arm_pr.sh` (`arm`: its own PR), `gh pr merge` (`merge`: its
 own PR, either `--disable-auto` alone or `--match-head-commit <its checkout's HEAD>`, the line
-`arm_pr.sh` prints as `ready`, never `--admin` or `--auto`; every other `gh pr merge` is denied) and
+`arm_pr.sh` prints as `ready`, never `--admin` or `--auto`, and only when the gate reads the same
+facts `ready` stands for: no one-way class, no hold label, every required check green; every other
+`gh pr merge` is denied; `gh pr edit` never removes a hold label) and
 `gh api graphql` with `resolveReviewThread` as its only mutation (`resolve_thread`). The switch is the
 opt-in: `worker_rights.repos` is not needed for these. Under `master` (the default) none of them is
 judged here, as before.
@@ -934,13 +936,109 @@ def right_refusal(  # noqa: PLR0911, PLR0912
         problem = _merge_refusal(args, cwd)
         if problem:
             return problem
+    if right == "pr_edit":
+        removed = _hold_removed(args, cwd)
+        if removed:
+            return (
+                f"gh pr edit --remove-label {removed}: a hold label keeps the merge for the human"
+            )
     if right in ("pr_edit", "merge"):
         selector = _pr_selector(args, VALUE_FLAGS[right])
     else:
         selector = _selector(args)
-    if selector is None:
-        return None
-    return _own_pr_refusal(selector, slug, branch, cwd)
+    if selector is not None:
+        problem = _own_pr_refusal(selector, slug, branch, cwd)
+        if problem:
+            return problem
+    if right == "merge" and "--disable-auto" not in args:
+        return _merge_facts_refusal(selector or branch, slug, cwd)
+    return None
+
+
+def _hold_labels(cwd: str | None) -> set[str]:
+    """The crew's `merge.hold_labels` as the default branch holds it (`crew.DEFAULTS` without one)."""
+    import crew as crew_mod  # noqa: PLC0415
+
+    block = (_crew_on_default(cwd) or {}).get("merge")
+    labels = (block if isinstance(block, dict) else {}).get(
+        "hold_labels", crew_mod.DEFAULTS["merge"]["hold_labels"]
+    )
+    return {str(x) for x in labels} if isinstance(labels, list) else set()
+
+
+def _hold_removed(args: list[str], cwd: str | None) -> str | None:
+    values = [
+        v
+        for k, tok in enumerate(args)
+        for v in [
+            tok.partition("=")[2] if "=" in tok else (args[k + 1] if k + 1 < len(args) else "")
+        ]
+        if tok.partition("=")[0] == "--remove-label"
+    ]
+    hold = _hold_labels(cwd) if values else set()
+    return next((x for v in values for x in v.split(",") if x.strip() in hold), None)
+
+
+def _gh_json(cwd: str | None, *args: str) -> tuple[Any, str]:
+    """(parsed stdout or None, stderr) of a `gh` call; never raises."""
+    try:
+        out = subprocess.run(
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=GH_TIMEOUT_S,
+            cwd=cwd or None,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, str(exc)
+    try:
+        return json.loads(out.stdout), out.stderr.strip()
+    except ValueError:
+        return None, out.stderr.strip() or f"gh exited {out.returncode}"
+
+
+def _merge_facts_refusal(selector: str, slug: str | None, cwd: str | None) -> str | None:  # noqa: PLR0911
+    """The `ready` facts `arm_pr.sh` checks before it prints the merge line, checked again here,
+    because a worker can type that line without running the helper: no one-way class
+    (`risk_paths.py` on this checkout, which `_merge_refusal` tied to the PR head), no hold label,
+    every required check green. A fact that cannot be read refuses."""
+    base = default_branch(cwd)
+    if _git(cwd, "cat-file", "-e", f"origin/{base}:.weside/risk-paths") is not None:
+        try:
+            out = subprocess.run(
+                [sys.executable, str(Path(__file__).with_name("risk_paths.py")), f"origin/{base}"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=GH_TIMEOUT_S,
+                cwd=cwd or None,
+            )
+            line = out.stdout.splitlines()[0] if out.stdout.strip() else ""
+        except (OSError, subprocess.TimeoutExpired, IndexError):
+            line = ""
+        if not line:
+            return (
+                "gh pr merge: the risk class could not be read; only arm_pr.sh's ready line merges"
+            )
+        if line.startswith("T2 one-way"):
+            return f"gh pr merge: {line}: only the human merges it"
+    view, err = _gh_json(cwd, "pr", "view", selector, "--repo", slug or "", "--json", "labels")
+    if not isinstance(view, dict):
+        return f"gh pr merge: the PR's labels could not be read ({err})"
+    names = {str((x or {}).get("name")) for x in view.get("labels") or []}
+    held = sorted(names & _hold_labels(cwd))
+    if held:
+        return f"gh pr merge: label {held[0]}: only the human merges it"
+    checks, err = _gh_json(
+        cwd, "pr", "checks", selector, "--repo", slug or "", "--required", "--json", "name,bucket"
+    )
+    if checks is None and "no required checks" not in err:
+        return f"gh pr merge: the required checks could not be read ({err})"
+    red = [c.get("name") for c in checks or [] if c.get("bucket") not in ("pass", "skipping")]
+    if red:
+        return f"gh pr merge: required checks not green ({', '.join(map(str, red))})"
+    return None
 
 
 def _own_pr_refusal(selector: str, slug: str | None, branch: str, cwd: str | None) -> str | None:
