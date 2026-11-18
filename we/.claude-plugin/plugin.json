@@ -19,7 +19,7 @@
     "scrum",
     "ai-companion"
   ],
-  "version": "9.1.0",
+  "version": "9.2.0",
   "skills": "./skills",
   "types": "./types/index.d.ts",
   "userConfig": {
