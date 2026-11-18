@@ -114,7 +114,10 @@ def test_an_end_with_a_reason_tells_the_starter_once_and_keeps_a_resumable_worke
     )
     assert not box["items"]
     kept = sorted(p.name for p in box["state"].iterdir())
-    assert kept == ([] if reason == "time-limit" else [f"{NAME}.json", f"{NAME}.settings.json"])
+    resume = f"{NAME}.resume.json"  # `--resume <name>` finds it once claude agents drops the row
+    files = [f"{NAME}.json", resume, f"{NAME}.settings.json"]
+    assert kept == ([resume] if reason == "time-limit" else files)
+    assert ws.kept_session(box["state"], NAME) == "s1"
 
 
 def test_a_starter_out_of_reach_gets_the_line_on_the_board(box):
@@ -241,6 +244,10 @@ def test_gc_removes_only_dead_sessions_own_files_and_lists_merged_clean_trees(
     for n, age in (("AC-7-quota", old), ("AC-8-quota", week)):
         (state / f"{n}.json").write_text("{}")
         os.utime(state / f"{n}.json", (age, age))
+    # a stopped worker's resume file stays 7 days like a resumable one's
+    for n, age in (("AC-9-stopped", old), ("AC-10-stopped", week)):
+        (state / f"{n}.resume.json").write_text("{}")
+        os.utime(state / f"{n}.resume.json", (age, age))
     rows.append({"name": "AC-8-quota", "id": "q8", "sessionId": "z", "pid": DEAD_PID})
     run = lambda apply: ws.gc(  # noqa: E731
         repo, apply, sessions=lambda: rows, state=state, jobs=jobs, projects=projects
@@ -251,7 +258,7 @@ def test_gc_removes_only_dead_sessions_own_files_and_lists_merged_clean_trees(
     assert dry == [x.replace("removed", "would remove") for x in lines]
     assert sorted(p.name for p in state.iterdir()) == sorted(
         [f"{n}{s}" for n in ("AC-1-live", "AC-3-fresh") for s in (".json", ".settings.json")]
-        + ["AC-7-quota.json"]
+        + ["AC-7-quota.json", "AC-9-stopped.resume.json"]
     )
     assert sorted(p.name for p in jobs.iterdir()) == ["j-gone", "j-live"]  # never removed
     assert any(x.startswith("1 job directories") for x in lines)
@@ -278,3 +285,90 @@ def test_gc_refuses_when_the_sessions_cannot_be_read(tmp_path, repo):
 
     with pytest.raises(ws.wl.LaunchError):
         ws.gc(repo, True, sessions=broken, state=tmp_path, jobs=tmp_path)
+
+
+# --- queue -------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def queue(tmp_path):
+    clock, sent, tried = Clock(), [], []
+
+    def put(name, at, timeout_s=7200):
+        ws.enqueue(tmp_path, name, "/tree", [name, "--bg"], "## Goal\n", "Lead", timeout_s, at)
+        ws.set_waiter(tmp_path, name, os.getpid())
+
+    def wait(name, results, on_sleep=None):
+        """Run the waiter of `name`; `results` are the fake start's exit codes in turn (3: the
+        capacity check refuses)."""
+        codes = list(results)
+
+        def start(doc):
+            tried.append(doc["name"])
+            return (codes.pop(0) if len(codes) > 1 else codes[0]), "we-worker: started"
+
+        def sleep(s):
+            clock.sleep(s)
+            if on_sleep:
+                on_sleep()
+
+        return ws.wait_queue(
+            tmp_path,
+            name,
+            start=start,
+            clock=clock,
+            sleep=sleep,
+            send=lambda t: sent.append(t) is None,
+        )
+
+    return {
+        "state": tmp_path,
+        "clock": clock,
+        "sent": sent,
+        "tried": tried,
+        "put": put,
+        "wait": wait,
+    }
+
+
+def test_a_queued_start_waits_for_room_and_tells_its_starter(queue):
+    queue["put"]("AC-1-a", queue["clock"]())
+    assert queue["wait"]("AC-1-a", [3, 3, 0]) == "started"
+    assert queue["tried"] == ["AC-1-a"] * 3
+    (line,) = queue["sent"]
+    assert "queued start of AC-1-a started after 1 min" in line
+    assert not ws.queued(queue["state"])
+    brief = queue["state"] / "queue" / "AC-1-a.brief.md"
+    assert not brief.exists()
+
+
+def test_queued_starts_go_first_come_first_served(queue):
+    t = queue["clock"]()
+    queue["put"]("AC-1-a", t)
+    queue["put"]("AC-2-b", t + 1)
+    # the older entry leaves the queue after the first poll: only then does the younger one try
+    drop = lambda: ws._drop(queue["state"], "AC-1-a")  # noqa: E731
+    assert queue["wait"]("AC-2-b", [0], on_sleep=drop) == "started"
+    assert queue["tried"] == ["AC-2-b"]
+    assert queue["clock"]() > t + ws.QUEUE_POLL_S - 1  # it waited a poll behind AC-1-a
+
+
+def test_a_queued_start_times_out_and_says_so(queue):
+    queue["put"]("AC-1-a", queue["clock"](), timeout_s=90)
+    assert queue["wait"]("AC-1-a", [3]) == "timeout"
+    (line,) = queue["sent"]
+    assert "timed out" in line and "nothing started" in line
+    assert not ws.queued(queue["state"])
+
+
+def test_stop_removes_a_queued_start_and_its_waiter_gives_up(queue):
+    queue["put"]("AC-1-a", queue["clock"]())
+    stop = lambda: ws._drop(queue["state"], "AC-1-a")  # noqa: E731  (unqueue without a kill)
+    assert queue["wait"]("AC-1-a", [3], on_sleep=stop) == "removed"
+    assert not queue["sent"]
+
+
+def test_a_name_already_queued_refuses(queue):
+    queue["put"]("AC-1-a", queue["clock"]())
+    with pytest.raises(ws.wl.LaunchError, match="already queued"):
+        queue["put"]("AC-1-a", queue["clock"]())

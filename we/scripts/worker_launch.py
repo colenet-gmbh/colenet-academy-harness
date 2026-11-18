@@ -48,8 +48,13 @@ Usage:
                                                    list: the active account's 5h decides), both
                                                    from .weside/config.json, both values named;
                                                    an unreadable value skips its check (stderr;
-                                                   silent without cswap on PATH);
+                                                   silent without cswap on PATH); `we-worker
+                                                   --queue` waits instead of refusing;
                                                    2: a limit that is no number
+  worker_launch.py needs [--repo <dir>] [--prefix <p>] < brief
+                                                   exit 2 when the brief's `Needs:` line names a
+                                                   plugin or MCP server `workers.context` turns
+                                                   off (`check_needs`), else 0
   worker_launch.py settings --repo <dir> --key <K> --out <file> [--session-start <command>] [--name <n>]
                                                    writes the worker's `--settings` file: the
                                                    granted rights of that repo as permissions.allow,
@@ -391,7 +396,8 @@ def capacity(repo: Path, prefix: str) -> None:
         raise LaunchError(
             f"refused, no worker started: {shown_busy} workers busy (limit {max_busy:g},"
             f" workers.max_busy_sessions), {quota}, workers.max_active_5h_percent);"
-            " try again later",
+            " try again later, or add --queue to the we-worker start: it starts as soon as"
+            " the check passes",
             3,
         )
 
@@ -657,6 +663,42 @@ def apply_context(doc: dict, repo: Path, name: str | None, state: Path) -> dict:
     return doc
 
 
+NEEDS_RE = re.compile(r"^\s*Needs:\s*(.*)$", re.MULTILINE)
+
+
+def brief_needs(brief: str) -> list[str]:
+    """The names of a brief's `Needs: <plugin or MCP server>, …` lines, in order."""
+    names = []
+    for line in NEEDS_RE.findall(brief):
+        names += [n.strip().strip("`") for n in line.split(",") if n.strip().strip("`")]
+    return names
+
+
+def check_needs(brief: str, repo: Path) -> None:
+    """Refuse (exit 2) a brief that needs a plugin `workers.context.disable_plugins` disables (by
+    its id `<plugin>@<marketplace>` or its bare name) or a server `deny_mcp_servers` denies: the
+    worker would start without a tool its brief needs."""
+    needs = brief_needs(brief)
+    if not needs:
+        return
+    ctx = workers_block(repo).get("context")
+    if not isinstance(ctx, dict):
+        return
+    plugins, servers = _names(ctx, "disable_plugins"), _names(ctx, "deny_mcp_servers")
+    for need in needs:
+        hit = next((p for p in plugins if need in (p, p.split("@", 1)[0])), None)
+        key = "disable_plugins"
+        if hit is None and need in servers:
+            hit, key = need, "deny_mcp_servers"
+        if hit is not None:
+            raise LaunchError(
+                f"the brief needs {need}, which workers.context.{key} turns off ({hit}) for"
+                " every worker; drop it from the brief's Needs line or from"
+                f" workers.context.{key}; no worker started",
+                2,
+            )
+
+
 def write_settings(
     repo: Path,
     key: str,
@@ -684,6 +726,7 @@ def launch(worktree: Path, name: str, brief_file: Path, agent: str | None = None
     except OSError as exc:
         raise LaunchError(f"brief: {exc}") from exc
     key = check(name, worktree)
+    check_needs(brief, worktree)
     template = backend(worktree)
     if template == SUBAGENT:
         raise LaunchError(
@@ -943,6 +986,9 @@ def _parser() -> argparse.ArgumentParser:
     p = sub.add_parser("capacity")
     p.add_argument("--repo", type=Path, default=Path.cwd())
     p.add_argument("--prefix", default="worker_launch")
+    p = sub.add_parser("needs")
+    p.add_argument("--repo", type=Path, default=Path.cwd())
+    p.add_argument("--prefix", default="worker_launch")
     p = sub.add_parser("settings")
     p.add_argument("--repo", type=Path, required=True)
     p.add_argument("--key", required=True)
@@ -1038,17 +1084,25 @@ def _tree_verbs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _gate_verb(args: argparse.Namespace) -> int:
+    """`capacity` and `needs`: exit 0, or the refusal under `--prefix` with its code."""
+    try:
+        if args.cmd == "needs":
+            check_needs(sys.stdin.read(), args.repo)
+        else:
+            capacity(args.repo, args.prefix)
+    except LaunchError as exc:
+        print(f"{args.prefix}: {exc}", file=sys.stderr)
+        return exc.code
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.cmd == "check":
         return _check_verb(args)
-    if args.cmd == "capacity":
-        try:
-            capacity(args.repo, args.prefix)
-        except LaunchError as exc:
-            print(f"{args.prefix}: {exc}", file=sys.stderr)
-            return exc.code
-        return 0
+    if args.cmd in ("capacity", "needs"):
+        return _gate_verb(args)
     code = 0
     try:
         if args.cmd == "backend":

@@ -111,7 +111,11 @@ After the check `we-worker` refuses a start (exit 3, nothing starts) while the b
 under 95 % and 5h at or under `workers.max_active_5h_percent`; one account with room lets the start
 through, the rotation switches to it. Without the list the active account's 5h decides; without
 `cswap` the check is skipped (`.weside/config.json`, asked by `/we:setup`; `worker_launch.py
-capacity` owns the rule); there is no override flag.
+capacity` owns the rule); there is no override flag. `we-worker <name> --bg --queue
+[--queue-timeout 2h]` queues a refused start instead: a detached waiter starts it once the check
+passes, first come first served, and tells the starter one line when it starts, fails or times out;
+`we-worker status` lists queued starts, `we-worker stop <name>` removes one
+(`scripts/worker_supervisor.py`, the comment above `queue_dir`).
 
 ### Worker rights
 
@@ -156,13 +160,21 @@ file stays rights and `env` only. Keys (`worker_launch.py apply_context` owns th
 | `deny_mcp_servers: ["<server>"]` | `deniedMcpServers: [{"serverName": <server>}]` |
 | `auto_compact_window: <tokens>` | `autoCompactWindow` (100000–1000000) |
 
+A brief that needs a tool says so in one line, `Needs: <plugin or MCP server>, …`; when
+`disable_plugins` (by id or bare name) or `deny_mcp_servers` turns one of them off, the start
+refuses (exit 2) and names it, instead of a worker that silently lacks it (`worker_launch.py
+needs`).
+
 Every variable the launcher decides stands in the file's `env`, a cleared one as `""`
 (`worker_rights.worker_env`): a `--bg` session inherits the daemon's environment, never the
 caller's shell.
 
 Each start also starts the supervisor, which tells the starter about a worker's stop and cleans up
 after it; `we-worker gc` removes what dead sessions left (`scripts/worker_supervisor.py`, its
-docstring owns both).
+docstring owns both, and the one end reason `we-worker status` prints). `we-worker stop` prints the
+stopped worker's full session id and its resume command; a follow-up brief resumes it with
+`we-worker <name> --bg --resume <name>`, which finds the session through its kept
+`<name>.resume.json` (7 days) after `claude agents` dropped it.
 
 With a template, the Lead:
 
