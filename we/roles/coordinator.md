@@ -22,7 +22,8 @@ You own the question queue and keep the board, the tickets and git telling the s
 - Reconcile board, tickets and git on every sweep (`board.py staging`
   included); fix a mismatch at its source. Check that every open epic has a working master or worker,
   and run `epic_state.py line` on each with `line:`: a reached line without an open "good as is?"
-  question gets one on the board (`references/epic-plan.md` § Finish line).
+  question gets one on the board (`references/epic-plan.md` § Finish line). Run
+  `we-worker close --sweep --apply`: it closes each merged PR whose worker marker still lies.
 - Read a session's `WE_ROLE` and pin before you route to it; its name is not its role.
 - Wake an on-call member when a question needs its field, and {hr|the HR owner} when its holder is
   asleep (you are its fallback).

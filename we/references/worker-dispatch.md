@@ -173,7 +173,8 @@ Every variable the launcher decides stands in the file's `env`, a cleared one as
 caller's shell.
 
 Each start also starts the supervisor, which tells the starter about a worker's stop and cleans up
-after it; `we-worker gc` removes what dead sessions left (`scripts/worker_supervisor.py`, its
+after it; `we-worker close <KEY>` is the one closing step after a merge (In Review, teardown, the
+epic's log line; `scripts/worker_close.py`); `we-worker gc` removes what dead sessions left (`scripts/worker_supervisor.py`, its
 docstring owns both, and the one end reason `we-worker status` prints). `we-worker stop` prints the
 stopped worker's full session id and its resume command; a follow-up brief resumes it with
 `we-worker <name> --bg --resume <name>`, which finds the session through its kept
@@ -199,7 +200,7 @@ With a template, the Lead:
 
 The plugin ships a launcher: `scripts/we-worker` (installed next to `wclaude` by
 `scripts/install_launcher.py`; `we-worker --help`), with the verbs
-`status|stop|logs|waiting|checkpoint|is-worker`; `worker_launch.py stop` uses its `stop` when the template
+`status|stop|logs|waiting|checkpoint|is-worker|close`; `worker_launch.py stop` uses its `stop` when the template
 starts with it. `stop` and `checkpoint` touch workers only: a name that hits a master or companion
 refuses (`stop` names `claude stop <id>`, or `kill <pid>` for a window session); a launcher marker
 counts only for the session it names. `worker_launch.py stop` without `--worktree` refuses a name

@@ -74,7 +74,8 @@ The human approves an epic together with its finish line (L0 §Units); the line 
 The epic plan holds no story table: `/flow` and the `/board` work pane derive it from the story plans
 whose `epic:` names the epic and from their PRs (`hooks/plans/plans.ts`). After a story's merge the
 epic gets exactly one line in `## Updates Log`, committed per `${CLAUDE_PLUGIN_ROOT}/references/plan-commit.md`, and
-`updated:` set:
+`updated:` set; `we-worker close <KEY>` (`scripts/worker_close.py`) writes it on the story's move to
+In Review, naming every merged PR of the story:
 
 ```text
 - YYYY-MM-DD — <KEY> merged (PR #<n>); <epic_state.py line summary, with a line:>; <a learning the next plan needs | none>

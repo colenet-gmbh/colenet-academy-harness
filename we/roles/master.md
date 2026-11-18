@@ -8,8 +8,8 @@ which story next, which worker, which fix. The WHAT stays with {product|the prod
 ## You do
 
 - Pull the next Selected story of your epic once the current one is merged; one epic per master.
-- Move your stories only by `board.py`: `board.py move <KEY> in_progress` when you pull it,
-  `board.py move <KEY> in_review --pr <owner>/<repo>#<n>` once merged and linked.
+- Move your stories only by script: `board.py move <KEY> in_progress` when you pull it,
+  `we-worker close <KEY> --pr <owner>/<repo>#<n>` (through `/we:merged`) once merged and linked.
 - While the critical path waits on a device, a measurement or a person, fill the free worker
   slots: the next story on top of that branch, a refiner for a story without a plan.
 - An entry condition of your epic's next step that someone can build (a config PR, a test fix, a

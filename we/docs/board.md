@@ -653,7 +653,7 @@ computed: <reason>`. Without `risk.command` the gate warns `tier check off` and 
 `tier: none`. `ready_gate.py story` runs the same tier and prints `tier: <line 1>` on stderr.
 
 **Transitions log.** A passing move appends one row to `board-transitions.jsonl` beside the board
-(`O_APPEND`, only grows): `{key, from, to, via?, rc?, ts, by, tier?, carried?, decided?, round?, pr?, reopen?, epic?, ticket}`
+(`O_APPEND`, only grows): `{key, from, to, via?, rc?, ts, by, caller?, tier?, carried?, decided?, round?, pr?, reopen?, epic?, ticket}`
 (`via` and `rc` on `done` rows only; `carried` on a `selected` row only: the WARNINGs a green
 Ready panel carries under `ready_panel.warning_ok_after_rounds`, each `{lens, claim, where}`, also
 printed as `carried: <lens>: <claim> (<where>)` lines; the master's worker brief copies them as
@@ -663,7 +663,10 @@ sentence}`, also printed as `decided: <lens> by <role>: <sentence>` lines; `roun
 verdict file's round was derived from logged runs (`lens_verdict.py` § Derived round), as
 `<N> (derived: …)`, and in a later round `<N> (base: round <M> derived: …)`, also printed as
 `round: …`); `from` is
-the key's previous row's `to`, `by` the calling session's name, `ticket` the transport (`none`,
+the key's previous row's `to`, `by` the calling session's name (`we-worker close` for its move to
+In Review, then with the session as `caller`; `scripts/worker_close.py`, the one closing step after
+a merge; a hand move stays possible and the flow report's `Transition writers: In Review` row
+counts it as a bypass), `ticket` the transport (`none`,
 or `pending` while the session still carries the `carry:` ops and the read-back).
 
 **Ticket.** `board.ticketing` picks the transport (`ticket_adapter.py`). `none`: nothing to carry.
