@@ -14,10 +14,13 @@
   to a file), else as a board news item. A worker stopped with `we-worker stop` (its settings
   file is already gone) ends without a line;
 - then it removes the worker's settings file and timer file, unless a living session of the same
-  name holds them again (a resume). A worker never seen within 5 minutes keeps its files (a start
+  name holds them again, or the worker ended on a usage limit or an auth error: a resumable worker
+  keeps both (the timer file names its starter, limit and deadline), `gc` ages them out after 7 days. A worker never seen within 5 minutes keeps its files (a start
   held by a dialog may still read them); `gc` ages them out.
 
-`gc` touches only the plugin's own files of sessions that no longer live: the settings files
+`gc` touches only the plugin's own files of sessions that no longer live (older than 10 minutes;
+a worker whose last transcript entry is a usage limit or an auth error is resumable, its files stay
+7 days): the settings files
 `<name>.settings.json` and timer files `<name>.json` of the state dir, and the launcher's marker
 (with brief and settings beside it, `worker_launch.clear_marker`) in the repo's worktrees. A
 merged, clean worktree whose marker names no living session keeps its marker and is listed with
@@ -57,6 +60,8 @@ POLL_S = 30
 APPEAR_S = 300
 PROMPT_AGE_S = 15 * 60
 GRACE_S = 10 * 60
+RESUMABLE = ("usage-limit", "auth")  # the ends `we-worker status` prints a resume command for
+RESUMABLE_AGE_S = 7 * 24 * 3600
 BOARD_TIMEOUT_S = 60
 
 
@@ -290,7 +295,7 @@ def supervise(
         again = bool(_living(sessions(), name))
     except wl.LaunchError:
         again = True
-    if not again:
+    if not again and reason not in RESUMABLE:
         _remove_files(state, name)
     return reason or ("stopped" if stopped else "ended")
 
@@ -317,9 +322,23 @@ def spawn(name: str, tree: str) -> int:
 # --- gc --------------------------------------------------------------------------------------
 
 
-def _old(path: Path, now: float) -> bool:
+def _resumable_names(rows: list[dict], living: set[str], projects: Path) -> set[str]:
+    """Dead names whose newest session ended on a usage limit or an auth error."""
+    newest = {}
+    for r in sorted(rows, key=lambda r: r.get("startedAt") or 0):
+        if r.get("name"):
+            newest[str(r["name"])] = r.get("sessionId")
+    return {n for n, sid in newest.items() if n not in living and _resumable(projects, sid)}
+
+
+def _resumable(projects: Path, session_id: str | None) -> bool:
+    entries = _tail_entries(projects, session_id)
+    return api_mark(entries[0] if entries else None) in RESUMABLE
+
+
+def _old(path: Path, now: float, floor: float = GRACE_S) -> bool:
     try:
-        return now - path.stat().st_mtime >= GRACE_S
+        return now - path.stat().st_mtime >= floor
     except OSError:
         return False
 
@@ -380,9 +399,11 @@ def gc(
     sessions: Callable[[], list[dict]] = wl.sessions,
     state: Path | None = None,
     jobs: Path | None = None,
+    projects: Path | None = None,
     now: float | None = None,
 ) -> list[str]:
     state = state or state_dir()
+    projects = projects or projects_dir()
     jobs = jobs or jobs_dir()
     now = time.time() if now is None else now
     rows = sessions()  # a LaunchError refuses: nothing is judged dead on a guess
@@ -392,13 +413,15 @@ def gc(
     listed = {str(r.get(f)) for r in rows for f in ("id", "sessionId") if r.get(f)}
     verb = "removed" if apply else "would remove"
     lines = []
+    resumable = _resumable_names(rows, living, projects)
     for path in sorted(state.glob("*.json")):
         name = (
             path.name[: -len(".settings.json")]
             if path.name.endswith(".settings.json")
             else path.stem
         )
-        if name in living or not _old(path, now):
+        floor = RESUMABLE_AGE_S if name in resumable else GRACE_S
+        if name in living or not _old(path, now, floor):
             continue
         _remove(path, apply)
         lines.append(f"{verb} {path}")

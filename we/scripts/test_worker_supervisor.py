@@ -102,7 +102,9 @@ USAGE = {
         ),
     ],
 )
-def test_an_end_with_a_reason_tells_the_starter_once_and_cleans_up(box, entry, deadline, reason):
+def test_an_end_with_a_reason_tells_the_starter_once_and_keeps_a_resumable_workers_files(
+    box, entry, deadline, reason
+):
     _transcript(box["projects"], [entry])
     (box["state"] / f"{NAME}.json").write_text(json.dumps({"deadline": deadline}))
     assert box["run"](LIVE, LIVE, []) == reason
@@ -110,7 +112,9 @@ def test_an_end_with_a_reason_tells_the_starter_once_and_cleans_up(box, entry, d
     assert (
         f"ended ({reason})" in line and f"we-worker {NAME} --tree /tree --bg --resume s1" in line
     )
-    assert not box["items"] and not list(box["state"].iterdir())
+    assert not box["items"]
+    kept = sorted(p.name for p in box["state"].iterdir())
+    assert kept == ([] if reason == "time-limit" else [f"{NAME}.json", f"{NAME}.settings.json"])
 
 
 def test_a_starter_out_of_reach_gets_the_line_on_the_board(box):
@@ -228,13 +232,26 @@ def test_gc_removes_only_dead_sessions_own_files_and_lists_merged_clean_trees(
         {"name": "AC-1-live", "id": "j-live", "sessionId": "x", "pid": os.getpid()},
         {"name": "AC-2-dead", "id": "old", "sessionId": "y", "pid": DEAD_PID},
     ]
-    run = lambda apply: ws.gc(repo, apply, sessions=lambda: rows, state=state, jobs=jobs)  # noqa: E731
+    # a dead worker on a usage limit is resumable: its files stay 7 days, then go
+    projects = tmp_path / "projects"
+    (projects / "-p").mkdir(parents=True)
+    (projects / "-p" / "z.jsonl").write_text(json.dumps(USAGE) + "\n")
+    rows.append({"name": "AC-7-quota", "id": "q", "sessionId": "z", "pid": DEAD_PID})
+    week = time.time() - 8 * 24 * 3600
+    for n, age in (("AC-7-quota", old), ("AC-8-quota", week)):
+        (state / f"{n}.json").write_text("{}")
+        os.utime(state / f"{n}.json", (age, age))
+    rows.append({"name": "AC-8-quota", "id": "q8", "sessionId": "z", "pid": DEAD_PID})
+    run = lambda apply: ws.gc(  # noqa: E731
+        repo, apply, sessions=lambda: rows, state=state, jobs=jobs, projects=projects
+    )
     dry = run(False)
     assert (state / "AC-2-dead.json").exists() and Path(_gd(open_tree), "we-worker.json").exists()
     lines = run(True)
     assert dry == [x.replace("removed", "would remove") for x in lines]
     assert sorted(p.name for p in state.iterdir()) == sorted(
-        f"{n}{s}" for n in ("AC-1-live", "AC-3-fresh") for s in (".json", ".settings.json")
+        [f"{n}{s}" for n in ("AC-1-live", "AC-3-fresh") for s in (".json", ".settings.json")]
+        + ["AC-7-quota.json"]
     )
     assert sorted(p.name for p in jobs.iterdir()) == ["j-gone", "j-live"]  # never removed
     assert any(x.startswith("1 job directories") for x in lines)
