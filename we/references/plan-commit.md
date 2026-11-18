@@ -76,7 +76,8 @@ Every verb that commits a planning document follows this section: `/we:epic`, `/
          `git -C <scratch> push origin HEAD:refs/heads/<b>`, `gh pr create --base <default> --head
          <b>` with the key and the files in the body, and `${CLAUDE_PLUGIN_ROOT}/scripts/arm_pr.sh
          <number> --method <the repo's merge method>`; act on its final line as `/we:master` § Close
-         the run says. A worker arms nothing: it reports the PR URL to its starter, who arms.
+         the run says. Under the crew's `merge.armer: workflow` the repo's workflow arms the ready PR
+         and `refused: armed by workflow` is that step done, not a failure. A worker arms nothing: it reports the PR URL to its starter, who arms.
 
    A push straight to the default branch only by `plan_push.py` under `plans.land: push`, or where
    the instruction files grant it for docs. Any other rejected push (non-fast-forward included) is
@@ -84,7 +85,7 @@ Every verb that commits a planning document follows this section: `/we:epic`, `/
    once the PR merged; a step that needs it there (a dispatch reading the plan, Selected for
    Development) waits with a background
    `watch-pr-checks.sh <number> --until-merged` until its final line reads `merged`. If `arm_pr.sh`'s
-   verdict line is neither `armed` nor `ready` (auto-merge off in the repo, red, no checks), a required review blocks, or the PR is not merged within
+   verdict line is neither `armed`, `ready` nor `refused: armed by workflow` (auto-merge off in the repo, red, no checks), a required review blocks, or the PR is not merged within
    60 min: report the PR URL to the owner (in a crew: the coordinator) and leave the
    story unselected; never merge by hand (the `ready` line's merge is the arm's, not a hand merge), never force. The PR URL goes into your report before
    step 6, it outlives the scratch tree.

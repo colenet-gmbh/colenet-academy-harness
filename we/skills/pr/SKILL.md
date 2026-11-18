@@ -36,7 +36,8 @@ For a branch built outside `/we:master`; master § Push, PR, CI does the same in
    follow-up PR from `origin/<base>`, never a push to the merged branch. Ticket: link the PR to it and move
    no status (`${CLAUDE_PLUGIN_ROOT}/references/ticketing.md`); In Review follows the merge through
    `/we:merged` (L0 §Lifecycle).
-5. Report the URL. Who arms and when: the table in `/we:master` § Close the run (a `T0` or `T2` PR that is not one-way
+5. Report the URL. Under the crew's `merge.armer: workflow` the repo's workflow arms and its own rules
+   say when a PR opens as a draft; nobody runs `arm_pr.sh` there. Otherwise, who arms and when: the table in `/we:master` § Close the run (a `T0` or `T2` PR that is not one-way
    is armed with `${CLAUDE_PLUGIN_ROOT}/scripts/arm_pr.sh <PR>` right after create, unless it carries a `plan: waits for …` line; the repo's required checks hold the merge).
 6. Arm the watcher as a background command: `${CLAUDE_PLUGIN_ROOT}/scripts/watch-pr-checks.sh <PR> --sha <head>
    --until-merged`. The watch follows L0 §Sessions (a worker until green, its starter until the merge).

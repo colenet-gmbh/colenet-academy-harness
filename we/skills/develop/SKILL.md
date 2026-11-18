@@ -54,7 +54,8 @@ phase:
    system boundaries.
 2. A new field flows end to end, not only into the model.
 3. Regenerate and commit the generated artifacts the brief lists. Leave gate baselines to the Lead.
-4. Commit the phase `<KEY>: phase <N> — <what>` (staging, trailer: `worker-dispatch.md` § Dev-only worker contract).
+4. Commit the phase in the repo's commit format, without one `<KEY>: phase <N> — <what>` (staging,
+   format, trailer: `worker-dispatch.md` § Dev-only worker contract).
 
 A refactor chunk's last step deletes the characterization tests that a test on the new seam now
 asserts; the report's `retired:` field names each one and the test that replaces it.

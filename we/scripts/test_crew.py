@@ -1030,6 +1030,25 @@ def test_the_launch_verb_without_a_crew_prints_the_default(tmp_path):
     assert out.returncode == 0 and out.stdout == "false\n"
 
 
+def test_merge_block_is_validated_where_the_crew_loads(tmp_path):
+    """`merge.armer` is session or workflow, `merge.hold_labels` a list of strings."""
+    assert crew.DEFAULTS["merge"] == {"armer": "session", "hold_labels": []}
+    good, _ = workspace(
+        tmp_path / "g", {**CREW, "merge": {"armer": "workflow", "hold_labels": ["x"]}}
+    )
+    assert run(good, "merge", "armer").stdout == "workflow\n"
+    assert run(good, "merge", "hold_labels").stdout == "x\n"
+    for name, merge, says in (
+        ("a", {"armer": "Workflow"}, "merge.armer must be one of session, workflow"),
+        ("h", {"hold_labels": "review"}, "merge.hold_labels must be a list"),
+        ("n", {"hold_labels": [1]}, "merge.hold_labels must be a list of strings"),
+    ):
+        bad, _ = workspace(tmp_path / name, {**CREW, "merge": merge})
+        out = run(bad, "validate")
+        assert out.returncode == 1 and says in out.stderr, out.stderr
+        assert run(bad, "merge", "armer").returncode == 1
+
+
 def test_launch_worker_mode_is_default_or_bypass(tmp_path):
     """The default says what it does: no --permission-mode; `auto` still validates."""
     assert crew.DEFAULTS["launch"]["worker_mode"] == "default"

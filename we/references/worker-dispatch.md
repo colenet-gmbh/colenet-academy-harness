@@ -239,8 +239,9 @@ arms (the worker card).
   worker in a tree that is not its own; git runs as `git -C <worktree> …`.
 - The worker implements the plan's phases in order, inline, and never fans implementation out to
   sub-agents: one worktree has one git index, and a second committer races `.git/index.lock`.
-- The worker commits per phase and stages by path, never `git add -A`. Every commit carries
-  `Co-Authored-By: <Model> <noreply@anthropic.com>` for the model actually running; the Lead never
+- The worker commits per phase and stages by path, never `git add -A`. Every commit follows the
+  repo's commit format and carries `Co-Authored-By: <Model> <noreply@anthropic.com>` for the model
+  actually running, unless the repo's instructions or hooks refuse attribution; the Lead never
   re-signs a worker's commit.
 - Local gates: the repo's linter, formatter and type-checker on the changed files, plus only the
   tests the change affects (importers of the touched code, its callers' tests, the contract suites

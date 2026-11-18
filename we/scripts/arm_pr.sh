@@ -27,14 +27,21 @@
 #     then one more line, what the merge waits for: `pending: <names>` (the head's required checks
 #     still running or not yet registered), `pending: none`, or `pending: unknown (<error>)`
 #   gh failed: <error>                                                           exit 2  (also usage)
+#   crew: <reason> (the crew file's merge block is unreadable)                   exit 2
 #   ready: all required checks green on <sha> — merge: gh pr merge <PR> --<method> --match-head-commit <sha>
 #                                                                                exit 3
 #   refused: draft | refused: <state>                                            exit 4
+#   refused: label <name> — only the human merges it                             exit 4
+#   refused: armed by workflow — the step is gh pr ready                         exit 4
 #   refused: head moved <old> -> <new>                                           exit 5
 #   refused: one-way <class> — only the human merges it                          exit 6
 #   red: <names> on <sha> — not armed                                            exit 7
 #   no checks on <sha> after <n>s — not armed, run again                         exit 8
 #   not armed on <sha> after <n>s (<mergeStateStatus>, review <decision>) — run again   exit 8
+#
+# The crew's `merge` block (crew.py merge) decides two refusals before any read of the checks:
+# `merge.armer: workflow` (the repo's own workflow arms every ready PR, so no session arms) and a
+# label of `merge.hold_labels` on the PR (a human merges it).
 #
 # Env: ARM_INTERVAL (seconds between reads, default 10), ARM_REGISTER_TIMEOUT (default 300).
 set -uo pipefail
@@ -62,18 +69,30 @@ if [ -z "$REPO" ]; then
 fi
 OWNER=${REPO%%/*} NAME=${REPO#*/}
 
+crew_merge() {  # the crew's merge.$1 (a warning on stderr passes through); a broken crew: crew.py's reason
+  local err rc
+  err=$(mktemp) && python3 "$HERE/crew.py" merge "$1" 2>"$err"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then echo "crew: $(tail -n 1 "$err" | sed 's/^crew: //')"; rm -f "$err"; return 2; fi
+  cat "$err" >&2; rm -f "$err"
+}
+ARMER=$(crew_merge armer) || { echo "$ARMER"; exit 2; }
+if [ "$ARMER" = workflow ]; then echo "refused: armed by workflow — the step is gh pr ready"; exit 4; fi
+HOLD=$(crew_merge hold_labels) || { echo "$HOLD"; exit 2; }
+
 # Line 1: id, state, isDraft, head, base, mergeStateStatus, reviewDecision (NONE when the repo
-# requires no review). Then one line per check on the head:
+# requires no review), the PR's labels joined by a comma. Then one line per check on the head:
 # <pending|pass|fail>\t<required by the PR: true|false>\t<name>. Checks of another commit (the
 # last commit lagging behind the head) are not listed.
 READ='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){
-  id state isDraft headRefOid baseRefName mergeStateStatus reviewDecision
+  id state isDraft headRefOid baseRefName mergeStateStatus reviewDecision labels(first:100){nodes{name}}
   commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){nodes{__typename
     ... on CheckRun{name status conclusion isRequired(pullRequestNumber:$number)}
     ... on StatusContext{context state isRequired(pullRequestNumber:$number)}}}}}}}}}}'
 JQ='.data.repository.pullRequest as $p
   | ([$p.id, $p.state, ($p.isDraft|tostring), $p.headRefOid, $p.baseRefName,
-      ($p.mergeStateStatus // "UNKNOWN"), ($p.reviewDecision // "NONE")] | @tsv),
+      ($p.mergeStateStatus // "UNKNOWN"), ($p.reviewDecision // "NONE"),
+      ([($p.labels.nodes // [])[].name] | join(","))] | @tsv),
     ($p.commits.nodes[0].commit // {} | select(.oid == $p.headRefOid)
      | (.statusCheckRollup.contexts.nodes // [])[]
      | [(if .__typename == "StatusContext" then
@@ -87,15 +106,20 @@ ARM='mutation($id:ID!,$sha:GitObjectID!,$method:PullRequestMergeMethod!){
     pullRequest{autoMergeRequest{enabledAt}}}}'
 
 SHA=""
-read_pr() {  # sets ID STATE DRAFT HEAD BASE MSTATE REVIEW CHECKS; exits on a gh failure or a moved head
+read_pr() {  # sets ID STATE DRAFT HEAD BASE MSTATE REVIEW LABELS CHECKS; exits on a gh failure or a moved head
   local out
   out=$(gh api graphql -f query="$READ" -f owner="$OWNER" -f name="$NAME" -F number="$PR" --jq "$JQ" 2>&1) \
     || { echo "gh failed: $(tail -n 1 <<<"$out")"; exit 2; }
-  IFS=$'\t' read -r ID STATE DRAFT HEAD BASE MSTATE REVIEW <<<"$(head -n 1 <<<"$out")"
+  IFS=$'\t' read -r ID STATE DRAFT HEAD BASE MSTATE REVIEW LABELS <<<"$(head -n 1 <<<"$out")"
   CHECKS=$(tail -n +2 <<<"$out")
   [ -n "${HEAD:-}" ] || { echo "gh failed: no PR $PR in $REPO"; exit 2; }
   [ "$STATE" = OPEN ] || { echo "refused: $(tr "[:upper:]" "[:lower:]" <<<"$STATE")"; exit 4; }
   [ "$DRAFT" = false ] || { echo "refused: draft"; exit 4; }
+  local label
+  while IFS= read -r label; do
+    [ -n "$label" ] || continue
+    if grep -qxF -- "$label" <<<"$HOLD"; then echo "refused: label $label — only the human merges it"; exit 4; fi
+  done < <(tr ',' '\n' <<<"${LABELS:-}")
   if [ -n "$SHA" ] && [ "$HEAD" != "$SHA" ]; then echo "refused: head moved $SHA -> $HEAD"; exit 5; fi
   SHA=$HEAD
 }
