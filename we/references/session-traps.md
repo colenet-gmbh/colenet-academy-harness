@@ -57,7 +57,7 @@ cards point here instead of repeating them.
   fix on main, the other PRs merge main; never patch it per branch.
 - **One heavy gate run at a time per host**, under the repo's gate lock or test slot. "Waiting for
   lock" means wait. A run that ended without a verdict (killed, out of memory) is never restarted
-  automatically: read why, report it.
+  automatically, since the same cause ends it again while it holds everyone's slot: read why, report it.
 
 ## Commands and processes
 

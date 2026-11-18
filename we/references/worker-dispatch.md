@@ -256,7 +256,9 @@ arms (the worker card).
   CI round and let a parallel migration land first (64 of 201 min, 17.10.2026).
 - Finish first: a finding of at most ~30 min on the seam the chunk touches gets fixed in the same
   branch; "pre-existing" is no reason to defer. A money-path finding gets its own commit and a
-  question, so the Lead can revert it. The worker never creates tickets.
+  question, so the Lead can revert it. Follow-ups (worker, Lead, review round) are named in the report
+  with a recommendation, never ticketed unless the user asks, and nobody asks whether to file one: a
+  ticket nobody asked for is work for the product owner, a named follow-up lets the human decide.
 - No local LLM review (no `code-review`, `simplify`, `security-review`, no reviewer agent): CI runs
   the Claude and Codex reviews on the PR, and on 01.10.2026 local QA cost 5.3M tokens against 4.4M
   for building, for few real findings. The one exception is a critical chunk: the Skill tool's
