@@ -591,15 +591,19 @@ class TestAsk:
         first = json.loads(capsys.readouterr().out)
         assert first == {"id": LIVE_NEXT_Q, "outcome": "posted"}
         calls = (crewless / "reader-calls.jsonl").read_bytes()
-        assert go(crewless, *ask_argv(**{"--cause": "info"})) == 0
+        assert go(crewless, *ask_argv()) == 0
         out = capsys.readouterr()
         assert json.loads(out.out) == {"id": LIVE_NEXT_Q, "outcome": "repeat"}
         assert "nothing new was posted" in out.err
         assert (crewless / "reader-calls.jsonl").read_bytes() == calls
         assert [q["id"] for q in board_of(crewless)["owner_queue"]].count(LIVE_NEXT_Q) == 1
-        # past the hour the same text is a new question
-        later = NOW + timedelta(hours=2)
-        assert go(crewless, *ask_argv(**{"--cause": "info"}), now=later) == 0
+        # another recommendation is another question (here: a refused duplicate on the key)
+        assert go(crewless, *ask_argv(**{"--recommendation": "No, Monday."})) == 1
+        capsys.readouterr()
+        # a re-ask after a withdraw posts anew, not a repeat of the withdrawn one
+        assert go(crewless, "withdraw", LIVE_NEXT_Q, "--reason", "wrong key") == 0
+        capsys.readouterr()
+        assert go(crewless, *ask_argv()) == 0
         assert json.loads(capsys.readouterr().out)["outcome"] == "posted"
 
     def test_the_text_comes_from_a_file_or_stdin(self, crewless, capsys, monkeypatch):
@@ -644,6 +648,10 @@ class TestAsk:
             "lead-1",
             "asker",
         )
+        # a question asked for another session carries no id or starter of the caller
+        assert go(crewless, *ask_argv(**{"--key": "PROJ-14", "--session": "other"})) == 0
+        item = board_of(crewless)["owner_queue"][-1]
+        assert "asker_id" not in item and "starter" not in item and item["answer_to"] == "asker"
         (work / ".weside" / "config.json").write_text(json.dumps({"board": {"answer_to": "me"}}))
         assert go(crewless, *ask_argv(**{"--key": "PROJ-13", "--ask": "Other?"})) == 0
         assert "answer_to" not in board_of(crewless)["owner_queue"][-1]

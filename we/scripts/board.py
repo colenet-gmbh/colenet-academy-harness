@@ -74,14 +74,15 @@ ask      posts a question for the owner after a cold reader (`cold_reader.py`) u
          session's line and in the refusal; the owner's news gets nothing. Every run past the field check leaves one line
          in board-questions.jsonl, text included. On success it prints exactly one JSON object on
          stdout, `{"id": "Q<n>", "outcome": "posted"}` (with `carry` for an `ask --to` on jira),
-         everything else on stderr. The same text from the same session within REPEAT_WINDOW
-         (no `--replace`) posts nothing and prints the first id with `"outcome": "repeat"` (a
+         everything else on stderr. The same question again from the same session within
+         REPEAT_WINDOW (text, key, cause, recommendation and `--to`; no `--replace`) while the
+         first is open posts nothing and prints the first id with `"outcome": "repeat"` (a
          `repeat` line in board-questions.jsonl): a retry never doubles a question. Without
          `--session` the asker is this session's own name (as `set` finds it); `--text-file`
          reads the ask from a file or `-` stdin, so a `code span` never meets the shell, and a
          refusal of text that looks shell-mangled names both. The cold reader sees only the
-         asker's text, never a line the tool appends. The item keeps `asker_id`, the launcher
-         marker's `starter` and, when the repo's `.weside/config.json` sets
+         asker's text, never a line the tool appends. The item keeps `asker_id` and the launcher
+         marker's `starter` (only when `--session` is the caller itself) and, when the repo's `.weside/config.json` sets
          `board.answer_to: asker`, `answer_to` (docs/board.md § Delivery). `--urgent` stamps
          `urgent: true` on the item and the log line; `bundle` lists urgent questions first.
          A `merge-go` question needs `--pr` (a URL, `<owner>/<repo>#<n>` or a number) on an OPEN
@@ -1278,20 +1279,22 @@ def cmd_path(state, args, _crew, _now):
     return 0
 
 
-def question_status(state, qid, board=None):
+def question_status(state, qid, board=None, logs=None):
     """(status, queue item or None, log lines, answer lines) of one question: the one definition
     of "open" that `show`, `withdraw`, `close-merged` and `bundle` read; the pane's `isClosed`
     (hooks/board/board.ts) mirrors it. `status` is `answered: <kind>` after an Accept, Deny or
     Withdraw, `withdrawn`/`superseded`, `open` while in `owner_queue`, else the last log outcome
     that took it off (`closed`, `replaced`, `pruned`) or `off the board`; None for an id the board
-    and its logs never had."""
+    and its logs never had. `logs` is (questions, answers) read once by a caller that asks for
+    many ids."""
     board = state.board() if board is None else board
+    questions, every_answer = logs if logs is not None else (state.questions(), state.answers())
     item = next(
         (q for q in board.get("owner_queue") or [] if isinstance(q, dict) and q.get("id") == qid),
         None,
     )
-    lines = [q for q in state.questions() if isinstance(q, dict) and q.get("id") == qid]
-    answers = [a for a in state.answers() if isinstance(a, dict) and a.get("id") == qid]
+    lines = [q for q in questions if isinstance(q, dict) and q.get("id") == qid]
+    answers = [a for a in every_answer if isinstance(a, dict) and a.get("id") == qid]
     if item is None and not lines and not answers:
         return None, None, [], []
     closing = [a for a in answers if a.get("answer") in CLOSING]
@@ -1648,18 +1651,26 @@ def _asked_text(line):
     return asked
 
 
-def _repeat_of(state, session, text, now, to=None):
-    """The id this session posted with the identical text within REPEAT_WINDOW, else None: a
-    retry after an unread success returns the first question instead of a second one."""
-    for line in reversed(state.questions()):
+def _repeat_of(state, fields, now):
+    """The id of an open question this session posted with the same text, key, cause,
+    recommendation and `--to` within REPEAT_WINDOW, else None: a retry after an unread success
+    returns the first question instead of a second one; a re-ask after a withdraw or an answer
+    posts anew."""
+    board = state.board()
+    logs = (state.questions(), state.answers())
+    for line in reversed(logs[0]):
         if not isinstance(line, dict) or line.get("outcome") != "posted":
             continue
         ts = _parse_ts(line.get("ts"))
-        if line.get("session") != session or ts is None or now - ts > REPEAT_WINDOW:
+        if line.get("session") != fields["session"] or ts is None or now - ts > REPEAT_WINDOW:
             continue
-        if (line.get("to") or None) != to and line.get("to"):
+        same = all(
+            str(line.get(f) or "").strip() == str(fields.get(f) or "").strip()
+            for f in ("key", "cause", "recommendation", "to")
+        )
+        if not same or _asked_text(line).strip() != fields["ask"].strip():
             continue
-        if _asked_text(line).strip() == text.strip():
+        if question_status(state, line.get("id"), board, logs)[0] == "open":
             return line.get("id")
     return None
 
@@ -1679,18 +1690,24 @@ def _project_config(start=None):
     return {}
 
 
-def _asker_stamp(env=None, cwd=None):
+def _asker_stamp(session, env=None, cwd=None):
     """Who receives the answer (docs/board.md § Delivery): `asker_id` (the asking session's id),
-    `starter` (the launcher marker's, so a gone worker's answer reaches its starter) and
-    `answer_to` when the repo's `board.answer_to` is `asker`; an unknown value warns and keeps
-    the coordinator."""
+    `starter` (the launcher marker's, so a gone worker's answer reaches its starter), both only
+    when `session` is the caller itself (a coordinator asking for another session stamps
+    neither), and `answer_to` when the repo's `board.answer_to` is `asker`; an unknown value
+    warns and keeps the coordinator."""
     env = os.environ if env is None else env
     stamp = {}
-    if env.get("CLAUDE_CODE_SESSION_ID"):
-        stamp["asker_id"] = env["CLAUDE_CODE_SESSION_ID"]
-    marker = wl.read_marker(cwd or Path.cwd()) or {}
-    if isinstance(marker.get("starter"), str) and marker["starter"].strip():
-        stamp["starter"] = marker["starter"].strip()
+    try:
+        own = own_session_name(env, verb="ask")[0]
+    except BoardError:
+        own = None
+    if own is not None and _same_session(own, session):
+        if env.get("CLAUDE_CODE_SESSION_ID"):
+            stamp["asker_id"] = env["CLAUDE_CODE_SESSION_ID"]
+        marker = wl.read_marker(cwd or Path.cwd()) or {}
+        if isinstance(marker.get("starter"), str) and marker["starter"].strip():
+            stamp["starter"] = marker["starter"].strip()
     value = (_project_config(cwd).get("board") or {}).get("answer_to", "coordinator")
     if value not in ANSWER_TO:
         print(
@@ -1742,8 +1759,9 @@ def _repeated(state, args, now):
     if args.replace or not (args.session or "").strip() or not (args.ask or "").strip():
         return False
     session = args.session.strip()
-    to = (getattr(args, "to", None) or "").strip().lower() or None
-    first = _repeat_of(state, session, args.ask, now, to)
+    fields = {f: (getattr(args, f) or "") for f in ("key", "cause", "recommendation", "ask")}
+    fields["to"] = (getattr(args, "to", None) or "").strip().lower()
+    first = _repeat_of(state, {**fields, "session": session}, now)
     if not first:
         return False
     state.append_question({"id": first, "ts": _iso(now), "outcome": "repeat", "session": session})
@@ -1778,7 +1796,7 @@ def cmd_ask(state, args, crew, now):
     if fields["cause"] == "merge-go":
         fields["checks"] = _required_checks(pr_url)
         fields["ask"] = f"{fields['ask']}\n{fields['checks']}"
-    fields.update(_asker_stamp())
+    fields.update(_asker_stamp(fields["session"]))
     base = {"ts": _iso(now), **fields}
     reader, reason = _cold_read(state, base, asked, fields, crew)
     session = fields["session"]
@@ -2239,12 +2257,13 @@ def _open_questions(state, board):
     """`owner_queue` questions no Accept, Deny or Withdraw closed: (open, obsolete). Open ones
     urgent first, each group oldest `since` first; obsolete ones (a resolved prompt,
     `blocked --clear`) apart."""
+    logs = (state.questions(), state.answers())
     items = [
         q
         for q in board.get("owner_queue") or []
         if isinstance(q, dict)
         and isinstance(q.get("id"), str)
-        and question_status(state, q["id"], board)[0] == "open"
+        and question_status(state, q["id"], board, logs)[0] == "open"
     ]
     items.sort(
         key=lambda q: (

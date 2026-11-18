@@ -349,7 +349,8 @@ minutes. Per line it writes one row per recipient to
 
 **`board.answer_to`** in the asking repo's `.weside/config.json` (`coordinator`, the default, or
 `asker`) decides who carries an answer. `board.py ask` stamps the question with `asker_id` (the
-asking session's id), the launcher marker's `starter` and, under `asker`, `answer_to: asker`. On
+asking session's id) and the launcher marker's `starter`, both only when `--session` is the
+caller itself, and, under `asker`, `answer_to: asker`. On
 such a question the asker gets the answer as above and the coordinator's prompt is one copy line,
 `<id>: <kind> — copy for the queue; the answer goes to <asker> directly, do not relay it` with the
 writer note; an asker that is gone hands it to its starter (role `starter`), and only when that
@@ -451,9 +452,11 @@ form findings: more than one decision, no recommendation, more than three option
 language than the labels. A question that passes lands in `owner_queue` as `Q<n>` (one above every
 `Q` number on the board, in the answers file and in the log), with `since` and `ts` stamped by the
 script, and prints exactly one JSON object on stdout, `{"id": "Q<n>", "outcome": "posted"}` (an
-`ask --to` on jira adds its `carry` list; everything else goes to stderr). The same text from the
-same session within an hour (no `--replace`) posts nothing: it prints the first id with
-`"outcome": "repeat"` and logs a `repeat` line, so a retry never doubles a question. One that does not comes back, never silently: exit 1 with
+`ask --to` on jira adds its `carry` list; everything else goes to stderr). The same question again
+from the same session within an hour (same text, key, cause, recommendation and `--to`, no
+`--replace`) while the first is still open posts nothing: it prints the first id with
+`"outcome": "repeat"` and logs a `repeat` line, so a retry never doubles a question; a re-ask
+after a withdraw or an answer posts anew. One that does not comes back, never silently: exit 1 with
 `returned to <asker>: <reason>`, the same text as the asker's line's `note`; the owner's news gets
 nothing. The asker's next posted question clears a `returned to` note; a note that does not start
 with `returned to` is never overwritten, and the refusal and the `returned` line in
