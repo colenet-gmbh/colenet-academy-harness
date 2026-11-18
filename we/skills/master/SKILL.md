@@ -16,7 +16,7 @@ one, through the template `worker_launch.py backend` prints, as a session of its
 § Worker launch backend). You never build in your own session (one exception: a CI fix of ≤ 5 lines without user-visible text) and never
 through a build subagent: a subagent reads and reviews, never builds. User-visible text never comes from you: its
 owner writes or approves it before a worker builds it. Each story is one PR per repo, in its plan's order (L0 §Units): push once per story, open its PR, watch CI with `scripts/watch-pr-checks.sh`. You never merge by hand; arming auto-merge per
-§ Close the run is the human's standing permission (owner 30.09.2026). You stop only for a protected
+§ Close the run (with its `ready` merge) is the human's standing permission (owner 30.09.2026). You stop only for a protected
 action (release, a staging deploy the epic's Orchestration contract does not grant, anything destructive); an open question parks only the chunk it blocks. Every other
 status note goes into the same message as your next tool call. A question for the human goes, in a
 repo with a crew, as one question line to the coordinator (L0 §Talking and the board); without a crew
@@ -250,12 +250,15 @@ Then one `we:dev-medium` finisher in `<int>` runs the finish sequence.
 
   | Class | Who arms or merges | Condition |
   |---|---|---|
-  | `T0`, `T2` | you: `gh pr merge <PR> --auto --merge`, right after `gh pr create` | the repo's required checks (GitHub waits) |
+  | `T0`, `T2` | you: `${CLAUDE_PLUGIN_ROOT}/scripts/arm_pr.sh <PR>`, right after `gh pr create` | the repo's required checks (GitHub waits) |
   | `T2` with a card hit (`trust-loosening:`, `brake-review:` hit line) | you, the same arm | as `T2`; the security card verdict is a PR comment for the human and the security owner |
   | `T2 one-way <class>` | only the human; you never arm it, in any repo | their approve on the head, then their merge, from a board item |
 
-  - `--squash`/`--rebase` when `.weside/orchestrate.md` names it; gh refuses `--auto` without a
-    method outside a terminal.
+  - `--method squash|rebase` when `.weside/orchestrate.md` names it. The helper arms only the head it
+    read and never merges; act on its final line: `armed` → the watch `--until-merged`; `ready`
+    (every required check already green on that head) → run the `gh pr merge <PR> --<method>
+    --match-head-commit <sha>` it printed; `refused: head moved` → run it again on the new head; any
+    other line → report it.
   - A code PR with a `plan: waits for <docs PR> and Selected` line (§ Build) is armed only once that
     docs PR merged and the story is Selected and pulled; no check holds it until then.
   - **Card hit** (and every one-way PR): start a security card worker on the head

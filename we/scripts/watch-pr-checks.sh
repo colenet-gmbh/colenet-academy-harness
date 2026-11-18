@@ -247,7 +247,7 @@ merge_note() {
   elif [ "$mss" = BEHIND ]; then
     note="$note — behind the base: merge it"
   fi
-  [ -n "$UNTIL_MERGED" ] && [ -z "$HUMAN_MERGE" ] && [ "$(field 4)" = off ] && note="$note · auto-merge off"
+  [ -n "$UNTIL_MERGED" ] && [ -z "$HUMAN_MERGE" ] && [ "$(field 4)" = off ] && note="$note · auto-merge off — arm: arm_pr.sh $PR"
   echo "$note"
 }
 merge_stuck() {  # green, but GitHub will not merge it by itself

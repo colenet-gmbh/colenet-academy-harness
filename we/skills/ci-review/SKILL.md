@@ -13,7 +13,7 @@ Longer than 150 lines because the thread query and the gate checks are load-bear
 2. A required reviewer's BLOCKING or WARNING is fixed. A skip needs cited evidence posted on the PR.
 3. Whether Codex reviews is the repo's setting: its check is the one `review.codex_check` in `.weside/config.json` names (default `Codex Review`), and a repo whose workflows run no such job has none. Where the repo requires it, its check holds the merge. A Codex BLOCKING or WARNING turns that check red until each finding is fixed or skipped with a cited reply (owner 28.10.2026). Read every Codex review and check each finding against the code: fix a real defect, skip the rest with a cited line, and never spend a round on it alone. The report carries `Codex: <n> findings · <x> real · <y> fixed · <z> skipped (<reason>)`; the owner decides the subscription on these numbers.
 4. One round means collect, fix, validate locally, commit once, resolve the threads, merge the base only on a conflict (§ 3), and push once. Wait with a background `scripts/watch-pr-checks.sh` (§ 4) or `gh run watch`, never a sleep loop and never a `Monitor` for a CI job (30-min cap, shorter than a backend test job).
-5. The run stops only in a terminal state (green · cap · blocked) or before a protected action (a merge without `--auto`, a force-push, a rebase). Every other status note goes in the same message as the next tool call.
+5. The run stops only in a terminal state (green · cap · blocked) or before a protected action (a merge other than the one `arm_pr.sh` prints on `ready`, a force-push, a rebase). Every other status note goes in the same message as the next tool call.
 
 The built-in `/autofix-pr` covers the same job and is the benchmark this skill is measured against.
 It needs a real PR. This skill does not call it.
@@ -197,7 +197,7 @@ Terminal states. Report exactly one:
 1. **Green.** The report is `merge-ready`, the PR link and each required check. Findings on the PR's own diff are
    decided per finish-first and reported; none becomes a question to the product owner. If auto-merge is armed, the main session keeps `watch-pr-checks.sh $PR --until-merged` running
    and on its `merged` exit runs `/we:merged $PR` itself, on red or a Codex exit the next round
-   (`/we:master` § Push, PR, CI step 5 and its bounds). On a green end the main session arms auto-merge as `/we:master` § Close the run says (method, exceptions, `user merge: <reason>`). This verb runs in the master or in a worker, never as a subagent (L0 §Sessions: a subagent reads and reviews, never builds); run in a worker, you report `merge-ready` and leave the arm to the master: a worker never merges (worker card). A plain `gh pr merge` without `--auto` still needs the user's word.
+   (`/we:master` § Push, PR, CI step 5 and its bounds). On a green end the main session arms auto-merge as `/we:master` § Close the run says (method, exceptions, `user merge: <reason>`). This verb runs in the master or in a worker, never as a subagent (L0 §Sessions: a subagent reads and reviews, never builds); run in a worker, you report `merge-ready` and leave the arm to the master: a worker never merges (worker card). Any `gh pr merge` other than the one `arm_pr.sh` prints on `ready` still needs the user's word.
 2. **Cap reached, still red.** Report what is open and what you tried.
 3. **Blocked.** Infrastructure is red after a re-run, a required BLOCKING was skipped as wrong, or there are two migration heads.
    The PR needs a human.

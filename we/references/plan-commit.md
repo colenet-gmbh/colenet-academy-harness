@@ -74,18 +74,19 @@ Every verb that commits a planning document follows this section: `/we:epic`, `/
          (`<n>` = your commits), then `git -C <scratch> push origin HEAD:refs/heads/<b>`.
        - **New branch:** `git -C <scratch> fetch origin && git -C <scratch> rebase origin/<default>`,
          `git -C <scratch> push origin HEAD:refs/heads/<b>`, `gh pr create --base <default> --head
-         <b>` with the key and the files in the body, and `gh pr merge <b> --auto` with the repo's
-         merge method.
+         <b>` with the key and the files in the body, and `${CLAUDE_PLUGIN_ROOT}/scripts/arm_pr.sh
+         <number> --method <the repo's merge method>`; act on its final line as `/we:master` § Close
+         the run says. A worker arms nothing: it reports the PR URL to its starter, who arms.
 
    A push straight to the default branch only by `plan_push.py` under `plans.land: push`, or where
    the instruction files grant it for docs. Any other rejected push (non-fast-forward included) is
    reported with its message, never forced. On the PR way the document is on the default branch
    once the PR merged; a step that needs it there (a dispatch reading the plan, Selected for
    Development) waits with a background
-   `watch-pr-checks.sh <number> --until-merged` until its final line reads `merged`. If `gh pr merge --auto` is
-   refused (auto-merge off in the repo), a required review blocks, or the PR is not merged within
+   `watch-pr-checks.sh <number> --until-merged` until its final line reads `merged`. If `arm_pr.sh` ends
+   on any line but `armed` or `ready` (auto-merge off in the repo, red, no checks), a required review blocks, or the PR is not merged within
    60 min: report the PR URL to the owner (in a crew: the coordinator) and leave the
-   story unselected; never merge by hand, never force. The PR URL goes into your report before
+   story unselected; never merge by hand (the `ready` line's merge is the arm's, not a hand merge), never force. The PR URL goes into your report before
    step 6, it outlives the scratch tree.
 6. **Clean up** in a command of its own, only after the push (or `plan_push.py`) exited 0 (and, on the PR path, the PR is open and its URL is in your report): `git worktree remove <scratch>`
    (never `--force`, never chained to the commit or push: a rejected push then deletes the only
