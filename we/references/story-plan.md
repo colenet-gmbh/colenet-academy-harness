@@ -292,7 +292,9 @@ Story checks, each failure one line, the run never stops at the first:
 **Files.** In the short form the bullets of `## Files`; in the full form under each `### Phase <n>:`, the bullets after `**Files:**` up to the next
 `- **<Label>:**` bullet. A backtick span is a path when it holds no whitespace and contains `/`,
 starts with `.`, or is a bullet's first span and ends in an extension; a trailing `:<line>[-<line>]`
-is dropped. A phase line `- **Repo:** <name>` puts its paths in repo `<name>`; without it they are
+is dropped. A media type (`application/pdf`, `image/png`) is no path: a span with no extension whose
+first segment is a top-level media type, when nothing of that name is on `risk.rules_from`; in another
+repo or without that tree it stays a path. A phase line `- **Repo:** <name>` puts its paths in repo `<name>`; without it they are
 the plan's repo, and a path marked `(other repo)` there fails until the phase names its repo.
 
 **Epic plan.** The `*-epic.md` in the story plan's directory whose frontmatter `ticket:` or `epic:`
