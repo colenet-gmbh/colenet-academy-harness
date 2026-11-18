@@ -23,7 +23,8 @@
 `gc` touches only the plugin's own files of sessions that no longer live (older than 10 minutes;
 a worker whose last transcript entry is a usage limit or an auth error is resumable, its files stay
 7 days, as does every `<name>.resume.json`): the settings files
-`<name>.settings.json` and timer files `<name>.json` of the state dir, and the launcher's marker
+`<name>.settings.json` and timer files `<name>.json` of the state dir, queued starts whose waiter
+is gone and whose deadline passed (entry and brief), and the launcher's marker
 (with brief and settings beside it, `worker_launch.clear_marker`) in the repo's worktrees. A
 merged, clean worktree whose marker names no living session keeps its marker and is listed with
 the repo's remove command (`workers.remove_worktree`, else `git worktree remove`); gc never
@@ -773,6 +774,18 @@ def merged(repo: Path, branch: str, base: str) -> bool:
     return False
 
 
+def _gc_queue(state: Path, now: float, apply: bool, verb: str) -> list[str]:
+    """Queued starts whose waiter died and whose deadline passed: entry and brief go."""
+    lines = []
+    for doc in queued(state):
+        if _waiter_lives(doc.get("waiter_pid")) or doc.get("deadline", 0) > now:
+            continue
+        if apply:
+            _drop(state, doc["name"])
+        lines.append(f"{verb} the queued start of {doc['name']} (its waiter is gone)")
+    return lines
+
+
 def gc(
     repo: Path,
     apply: bool = False,
@@ -810,6 +823,7 @@ def gc(
             continue
         _remove(path, apply)
         lines.append(f"{verb} {path}")
+    lines += _gc_queue(state, now, apply, verb)
     unlisted = 0
     for job in (p for p in jobs.glob("*") if p.is_dir()):
         try:

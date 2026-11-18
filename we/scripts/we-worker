@@ -261,7 +261,7 @@ for x in json.load(sys.stdin):
   stop)
     [[ $# -ge 2 && -n "$2" ]] || usage
     key=$2
-    sup=$(plugin_script scripts/worker_supervisor.py)
+    sup=$(plugin_script scripts/worker_supervisor.py 2>/dev/null) || sup=""
     # a queued start of that name: removed, its waiter ends; a session holding the name still stops
     unqueued=0
     [[ -n "$sup" && -f "$sup" ]] && python3 "$sup" unqueue --name "$key" && unqueued=1

@@ -249,6 +249,9 @@ def test_gc_removes_only_dead_sessions_own_files_and_lists_merged_clean_trees(
         (state / f"{n}.resume.json").write_text("{}")
         os.utime(state / f"{n}.resume.json", (age, age))
     rows.append({"name": "AC-8-quota", "id": "q8", "sessionId": "z", "pid": DEAD_PID})
+    # a queued start whose waiter died: gone once its deadline passed, kept before
+    ws.enqueue(state, "AC-11-late", "/t", [], "brief", None, 60, time.time() - 3600)
+    ws.enqueue(state, "AC-12-wait", "/t", [], None, None, 7200, time.time())
     run = lambda apply: ws.gc(  # noqa: E731
         repo, apply, sessions=lambda: rows, state=state, jobs=jobs, projects=projects
     )
@@ -256,10 +259,12 @@ def test_gc_removes_only_dead_sessions_own_files_and_lists_merged_clean_trees(
     assert (state / "AC-2-dead.json").exists() and Path(_gd(open_tree), "we-worker.json").exists()
     lines = run(True)
     assert dry == [x.replace("removed", "would remove") for x in lines]
-    assert sorted(p.name for p in state.iterdir()) == sorted(
+    assert sorted(p.name for p in state.iterdir() if p.is_file()) == sorted(
         [f"{n}{s}" for n in ("AC-1-live", "AC-3-fresh") for s in (".json", ".settings.json")]
         + ["AC-7-quota.json", "AC-9-stopped.resume.json"]
     )
+    assert [d["name"] for d in ws.queued(state)] == ["AC-12-wait"]
+    assert not (state / "queue" / "AC-11-late.brief.md").exists()
     assert sorted(p.name for p in jobs.iterdir()) == ["j-gone", "j-live"]  # never removed
     assert any(x.startswith("1 job directories") for x in lines)
     trees = [x for x in lines if x.startswith("worktree")]
