@@ -42,7 +42,8 @@ The human approves an epic together with its finish line (L0 §Units); the line 
   epic is approved and the key stands on its `line:`; an epic without a line, a key off it, a story
   without an epic, or an epic with `select: owner` leave Selected to the product role. `select: owner`
   is the owner's switch for an independent counter-read before Selected: a green Ready panel never
-  replaces it.
+  replaces it. A crew that sets `select.refiner: false` (`scripts/crew.py` § Schema) leaves every
+  story to the product role, whatever its epic says: the crew-wide form of `select: owner`.
 - **Free inside the line:** a sharper AC, a fix of a defect against an existing AC, small work at the
   place the story already touches. None of it needs a new key.
 - **Beyond the line:** a new story, new visible behaviour or a new place (one more instance of what a

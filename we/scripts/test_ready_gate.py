@@ -401,6 +401,41 @@ def test_a_path_outside_the_fence_is_a_scope_change(tmp_path):
     ]
 
 
+MEDIA_LINE = (
+    "  - `docs/guides/upload.md`: `model/user.py`, `image/logo`, `application/pdf`, `image/png`"
+)
+
+
+def test_a_media_type_is_no_path_unless_its_name_is_on_the_base_tree(tmp_path):
+    """`application/pdf` (nothing there) and `image/png` (`image/` there, no `png`) are skipped;
+    `image/logo` (a directory) and `model/user.py` (an extension) stay paths outside the fence."""
+    root = repo(tmp_path)
+    for rel in ("image/logo/mark.svg", "model/user.py"):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("x\n")
+    shutil.rmtree(root / ".git")
+    for argv in (
+        ["init", "-q"],
+        ["add", "-A"],
+        ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "base"],
+        ["update-ref", "refs/remotes/origin/main", "HEAD"],
+    ):
+        subprocess.run(["git", "-C", str(root), *argv], check=True, capture_output=True)
+    path = add_file(root, "green", MEDIA_LINE, phase="### Phase 1")
+    out = gate(root, "story", path)
+    scoped = [line.split("scope change: ")[1].split(" (")[0] for line in out.stdout.splitlines()]
+    assert scoped == ["model/user.py", "image/logo"], out.stdout
+
+
+def test_a_media_type_stays_a_path_without_a_base_tree(tmp_path):
+    """No readable `risk.rules_from`: the span stays a path, a false scope change over a missed one."""
+    root = repo(tmp_path)
+    path = add_file(root, "green", MEDIA_LINE, phase="### Phase 1")
+    out = gate(root, "story", path)
+    scoped = [line.split("scope change: ")[1].split(" (")[0] for line in out.stdout.splitlines()]
+    assert scoped == ["model/user.py", "image/logo", "application/pdf", "image/png"], out.stdout
+
+
 def test_another_repos_path_is_judged_against_its_repo_globs(tmp_path):
     root = repo(tmp_path)
     path = add_file(root, "green", "  - `src/other.py`")
