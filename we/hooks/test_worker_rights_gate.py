@@ -513,6 +513,8 @@ def test_settings_grant_exactly_the_repos_rights_and_deny_the_never_list(world):
         "WE_STORY_KEY": KEY,
         "WESIDE_COMPANION": "",
         "WE_ROLE_ID": "",
+        "WE_START": "",
+        "WE_WORKER_STARTER": "",
     }
     plain = make_repo(world["tmp"], name="plain", rights=None)
     assert wr.settings(plain, KEY)["permissions"]["allow"] == []

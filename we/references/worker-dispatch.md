@@ -128,6 +128,42 @@ never-list (secrets, delete, `main`, guard bypasses). Rules and limits: `scripts
 (its docstring). A denial names the Lead; the worker reports it and the Lead acts. A brake against a
 misguided worker, no boundary: a script file passes it.
 
+### Tree, context and end (`we-worker`)
+
+A `we-worker <name>` start picks the worker's tree in one of three modes (`we-worker --help` owns
+the flags, `worker_launch.py tree` the rule). `.weside/config.json` `workers.tree` decides what a start
+without a flag does: `caller` (default) stays where the caller stands and, from the main checkout,
+prints a tip; `own` gives a start from the main checkout its own tree.
+
+| Mode | When | Tree |
+|---|---|---|
+| own tree | a build worker started from the main checkout under `workers.tree: own` | a new worktree beside it: `.weside/config.json` `workers.add_worktree` (a template with the tokens `{path}` and `{branch}`), else `git worktree add <repo>-<name> -b feat/<name> origin/<default>`; `--branch` names the branch |
+| `--tree <path>` | an integration worktree, a finisher, a fix round | that existing worktree |
+| `--here` | a worker that only reads: probe, walk, card, pre-sorter | where the caller stands |
+
+A start from a linked worktree or outside a repo, and a `--resume`, stay where they are, as does
+every start through `worker_launch.py launch` (its cwd is the Lead's worktree). The launcher prints
+the tree; a created or named tree gets the marker `we-worker.json` with name, key, role, starter,
+tree and mode, which `/board` shows on the worker's line.
+
+`workers.context` in `.weside/config.json` makes the worker's settings lean; without the block the
+file stays rights and `env` only. Keys (`worker_launch.py apply_context` owns them):
+
+| Key | Settings |
+|---|---|
+| `auto_memory`: `off` (default) · `own` · `shared` | `env.CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` · `autoMemoryDirectory` `<state dir>/<name>.memory` · the repo's memory |
+| `disable_plugins: ["<plugin>@<marketplace>"]` | `enabledPlugins: {<id>: false}` |
+| `deny_mcp_servers: ["<server>"]` | `deniedMcpServers: [{"serverName": <server>}]` |
+| `auto_compact_window: <tokens>` | `autoCompactWindow` (100000–1000000) |
+
+Every variable the launcher decides stands in the file's `env`, a cleared one as `""`
+(`worker_rights.worker_env`): a `--bg` session inherits the daemon's environment, never the
+caller's shell.
+
+Each start also starts the supervisor, which tells the starter about a worker's stop and cleans up
+after it; `we-worker gc` removes what dead sessions left (`scripts/worker_supervisor.py`, its
+docstring owns both).
+
 With a template, the Lead:
 
 1. Creates the worktree: `git fetch origin`, then `git worktree add <repo>-<KEY>[-p<N>] -b

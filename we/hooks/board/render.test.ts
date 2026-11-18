@@ -48,7 +48,7 @@ const PROBE = JSON.stringify({
     { name: 'apps', pid: 2, status: 'busy', weRole: null, profile: null, envRead: true, mode: 'bypassPermissions' },
     { name: 'img', pid: 3, status: 'busy', weRole: 'worker', profile: null, envRead: true, mode: 'bypassPermissions' },
     { name: 'billing', pid: 4, status: 'busy', weRole: 'master', profile: '3-me_example.com', envRead: true, mode: 'bypassPermissions' },
-    { name: 'meter', pid: 5, status: 'busy', weRole: 'worker', profile: null, envRead: true, mode: 'auto' },
+    { name: 'meter', pid: 5, status: 'busy', weRole: 'worker', profile: null, envRead: true, mode: 'auto', role: 'worker', starter: 'billing', tree: '/home/me/work/billing-PROJ-63' },
     { name: 'stray', pid: 6, status: 'idle', envRead: true, mode: 'bypassPermissions' },
   ],
 })
@@ -125,7 +125,7 @@ Finish what is open → money → marketing. The kernel runs on its own.
 │ #562 green (Q12); #564 metering, CI runs; two stories in build. Merge migrations serially        │
 │ P3 · money first                                                                                 │
 │                                                                                                  │
-│ └ ● meter  PROJ-63  #564  busy  ●  CI                                                            │
+│ └ ● meter  PROJ-63  #564  busy  ●  ⌂ billing-PROJ-63  ← billing  CI                              │
 │     mode auto differs (most run bypass)                                                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮

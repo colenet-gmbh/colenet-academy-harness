@@ -236,8 +236,11 @@ gate reads, check 9).
 
 ## What the Ready gate reads
 
-`ready_gate.py story <plan>` prints one line per failure, `<plan>: <place>: <what is missing>`, and
-exits 1; exit 0 is ready, 2 a usage error. Warnings go to stderr, prefixed `warning:`, and never
+`ready_gate.py story <plan>` prints one line per failure, `<plan>:<line>: <place>: <what is
+missing>` (the line to fix; without `:<line>` where nothing in the plan marks the place, such as
+a missing section), and exits 1; exit 0 is ready, 2 a usage error. It reads the plan file it is
+given, the epic plan beside it and the crew of its checkout, never `origin/main`: the refiner runs
+it on its branch before the plan lands; only the tier waits for main (one warning). Warnings go to stderr, prefixed `warning:`, and never
 change the exit. The gate takes the mode and the plan, nothing else: no option turns a check off.
 Every repo value comes from the crew (`scripts/crew.py`).
 

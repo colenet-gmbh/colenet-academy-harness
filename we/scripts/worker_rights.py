@@ -877,10 +877,20 @@ def worker_env(key: str, environ: Any = None) -> dict:
     A `claude --bg` session runs in the daemon's environment, not the launcher's (the daemon may
     carry `WE_ROLE=worker` and another story's key, or a pin), so every variable the start decides
     is stated here; a cleared one is "": readers take it as unset, and an empty `WESIDE_COMPANION`
-    also marks a deliberate worker (`materialize_on_start.py` skips its user warning). `WE_HUMAN` passes on
-    when the launcher has it. Never a credential: this block is written to a file."""
+    also marks a deliberate worker (`materialize_on_start.py` skips its user warning). The
+    launcher's own start variables (`WE_START`, `WE_WORKER_STARTER`) are cleared the same way: a
+    worker never runs its starter's start check, and its own workers name it, not its starter, as
+    theirs. `WE_HUMAN` passes on when the launcher has it. Never a credential: this block is
+    written to a file."""
     env = os.environ if environ is None else environ
-    doc = {"WE_ROLE": "worker", "WE_STORY_KEY": key, "WESIDE_COMPANION": "", "WE_ROLE_ID": ""}
+    doc = {
+        "WE_ROLE": "worker",
+        "WE_STORY_KEY": key,
+        "WESIDE_COMPANION": "",
+        "WE_ROLE_ID": "",
+        "WE_START": "",
+        "WE_WORKER_STARTER": "",
+    }
     if env.get("WE_HUMAN"):
         doc["WE_HUMAN"] = env["WE_HUMAN"]
     return doc

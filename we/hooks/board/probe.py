@@ -14,6 +14,9 @@ pointers share it) stays, one in another crew's repo or in a repo without a
 crew drops out, and one whose `cwd` is missing or no longer exists stays with `crew: "unknown"`.
 Without the flag every session on the host is listed.
 
+A session in a tree whose launcher marker (`we-worker.json` in its git dir, `scripts/worker_launch.py`)
+names it carries the marker's `role`, `starter` and `tree`.
+
 A failing, unparsable or non-list `claude agents --json` prints `{"error": …}`: the pane shows the
 error instead of an empty live column; nothing brakes on it.
 
@@ -50,6 +53,27 @@ def env_keys(pid):
     except OSError:
         return None
     return found
+
+
+def marker_of(cwd, name):
+    """`role`, `starter`, `tree` of the launcher's marker in the git dir of `cwd` when it names
+    `name`, else {}; the git dir is read from `.git` itself (a dir, or a linked worktree's file)."""
+    if not cwd or not name:
+        return {}
+    dot = Path(cwd) / ".git"
+    try:
+        if dot.is_file():
+            line = dot.read_text().strip()
+            gd = Path(line.split(":", 1)[1].strip()) if line.startswith("gitdir:") else None
+            gd = gd if gd is None or gd.is_absolute() else (Path(cwd) / gd)
+        else:
+            gd = dot
+        data = json.loads((gd / "we-worker.json").read_text()) if gd else None
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict) or data.get("name") != name:
+        return {}
+    return {k: str(data[k]) for k in ("role", "starter", "tree") if data.get(k)}
 
 
 def role_class(value):
@@ -145,6 +169,7 @@ def main(argv=None):
                 "mode": mode_of(
                     (env or {}).get("CLAUDE_CONFIG_DIR"), agent.get("cwd"), agent.get("sessionId")
                 ),
+                **marker_of(agent.get("cwd"), agent.get("name")),
                 **({"crew": "unknown"} if crew == "unknown" else {}),
             }
         )

@@ -3,7 +3,9 @@ name: worker-main-checkout
 description: >
   From: 2026-11-17 — a build worker built directly in the shared main checkout instead of a
   worktree, and the human switched the branch there under it; the worker-rights gate braked work on
-  the default branch 52 times between 2026-11-11 and 2026-11-17.
+  the default branch 52 times between 2026-11-11 and 2026-11-17. Since then `we-worker` gives a
+  build worker its own worktree under `workers.tree: own`, and the worker card says what a worker that still finds itself on
+  the default branch of the main checkout does: build nothing, tell its starter, stop.
 tags: [worker, family-2]
 plugins: ["../../we"]
 runs: 2
@@ -29,9 +31,14 @@ execution:
     You have not run anything yet. Before you edit, reply with the first commands you would run, in
     order, in one code block, and one sentence on where you will edit. Do not run them.
 graders:
-  - name: moves-to-a-worktree
+  - name: checks-the-checkout
     type: regex
-    pattern: "git\\s+worktree\\s+add|we-worker"
+    pattern: "git\\s+rev-parse[^\\n]*--git-(common-)?dir"
+  - name: tells-the-starter
+    type: regex
+    # the card's move: build nothing, one line to the starter (by SendMessage or in words)
+    pattern: "SendMessage|(send|tell|message)[^\\n]{0,30}docs-3"
+    flags: i
   - name: no-branch-switch-in-the-checkout
     type: regex
     # a switch in the checkout the worker started in: no worktree add and no cd before it

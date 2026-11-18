@@ -9,7 +9,7 @@ description: >
 
 You run the panel; the lens agents judge. Start it with `lens_verdict.py plan`, spawn every entry in one message, record each answer with `write`, end with `check`.
 You never judge in a lens's place, never edit a verdict file and never pass a lens your own context: a lens is a fresh agent.
-The verdict and the green rule are computed by `lens_verdict.py` (its module docstring owns them); a red panel turns green only through a fresh panel on a new plan blob or head (the Ready exception: its § Carried warnings); a green T2 panel holds for a later head when neither its delta nor the default branch's moves since touch a file the PR's class hit (its § Carried panel).
+The verdict and the green rule are computed by `lens_verdict.py` (its module docstring owns them); a red panel turns green only through a fresh panel on a new plan subject or head (the Ready exceptions: its § Carried warnings and § Round cap); a green T2 panel holds for a later head when neither its delta nor the default branch's moves since touch a file the PR's class hit (its § Carried panel).
 Wanted stop: the `check` lines. Every other status note goes with the next tool call.
 
 ```text
@@ -24,10 +24,17 @@ Scratch files go to the session's scratchpad directory (`$S`).
 ## 1. Start the panel
 
 Run `LV plan ready <KEY>` (`--plan <path>` for a plan outside `docs/plans/<KEY>-story.md`; the panel stays
-bound to that file) or `LV plan t2 <PR>`. It writes a fresh verdict file bound to today's plan blob or
-PR head and prints the dispatch entries as JSON (`id`, `lens`, `agent`, `questions`, `registry`, and `plan`
-plus `plan_blob`, or `pr` plus `head`). Exit 1 (no plan file here nor on `origin/main`, the Ready gate refuses the plan, a Ready panel on the same blob still missing lenses: finish that round, head unknown) or 2 (crew file, verdict
+bound to that file) or `LV plan t2 <PR>`. It writes a fresh verdict file bound to today's plan subject
+(the plan without its updates log, documentation impact, code guidance, `status`, `created` and
+`comments_read_through`: an edit there keeps the panel) or PR head and prints the dispatch entries as JSON
+(`id`, `lens`, `agent`, `questions`, `registry`, and `plan` plus `plan_blob`, or `pr` plus `head`). Exit 1 (no plan file here nor on `origin/main`, the Ready gate refuses the plan, a Ready panel on the same subject still missing lenses: finish that round, head unknown) or 2 (crew file, verdict
 directory): relay the line and stop.
+
+**Round cap.** Above `ready_panel.max_rounds` (default 2) `plan ready` starts no lens: it prints the standing
+findings and `round cap: the lens holder decides` (or `… one holder confirms` when the last round was green)
+and exits 1. Relay the lines to the holder of each red lens (the role named like the lens); the holder runs
+`LV decide <id> <lens> --by <role> "<one sentence>"`, which makes that lens green for today's subject only.
+A capped panel is green once at least one decision names today's subject; the next plan change asks again.
 
 An entry whose `agent` is not one this plugin ships (`we:lens-product`, `we:lens-architecture`,
 `we:lens-acceptance`, `we:lens-security`) is not dispatched: record it with `LV write <id> <lens> --failed "no agent <agent>"`.

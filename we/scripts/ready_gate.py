@@ -7,9 +7,14 @@ Usage:
   ready_gate.py epic <epic plan>    ``serves:``, the goal file, the presence of ``fence:`` and the
                                     finish line (``line:``, ``line_goal:``)
 
-Exit 0 ready, 1 refused (one stdout line per failure, ``<plan>: <place>: <what is missing>``),
-2 usage or an unreadable plan. Warnings go to stderr, each prefixed ``warning:``, and never
-change the exit. There is no option: no caller can switch a check off.
+Exit 0 ready, 1 refused (one stdout line per failure, ``<plan>:<line>: <place>: <what is
+missing>``; the line is the one to fix, left out where nothing in the plan marks the place, such
+as a missing section), 2 usage or an unreadable plan. Warnings go to stderr, each prefixed
+``warning:``, and never change the exit. There is no option: no caller can switch a check off.
+
+The gate reads the plan file it is given, the epic plan beside it and the crew of its checkout,
+never ``origin/main``: it runs on a refiner's branch before the plan lands. Only the tier (check
+10) needs the plan on ``risk.rules_from`` and defers there with one warning.
 
 The grammar it parses is owned by ``references/story-plan.md`` (§ Oracle-class marker, § What the
 Ready gate reads); this docstring only lists the story checks in their order:
@@ -410,20 +415,28 @@ class Gate:
         self.root = root
         self.failures: list[str] = []
         self.warnings: list[str] = []
+        self.text = ""
 
-    def fail(self, place: str, message: str) -> None:
-        self.failures.append(f"{self.plan}: {place}: {message}")
+    def fail(self, place: str, message: str, line: int | None = None) -> None:
+        """One failure line; ``line`` (1-based, in the plan) names the line to fix."""
+        where = f"{self.plan}:{line}" if line else str(self.plan)
+        self.failures.append(f"{where}: {place}: {message}")
 
     def story(self, text: str) -> None:
+        self.text = text
         meta = frontmatter(text)
         if not meta.get("story"):
-            self.fail("frontmatter", "no `story:`")
+            self.fail("frontmatter", "no `story:`", 1)
         present = sections(text)
         for name in REQUIRED_SECTIONS:
             if name not in present:
                 self.fail(f"## {name}", "section missing")
         if "Open Fork" in present:
-            self.fail("## Open Fork", "an open fork stands; answer it and delete the section")
+            self.fail(
+                "## Open Fork",
+                "an open fork stands; answer it and delete the section",
+                heading_line(text, "Open Fork"),
+            )
         found_phases = phases(text)
         markers = self._acs(text)
         self._walk(markers, found_phases)
@@ -435,7 +448,11 @@ class Gate:
         else:
             self._phase_repos(found_phases)
         if "Implementation Phases" in present and not any(ph.paths for ph in found_phases):
-            self.fail("Implementation Phases", "no seams named (no path in any Files list)")
+            self.fail(
+                "Implementation Phases",
+                "no seams named (no path in any Files list)",
+                heading_line(text, "Implementation Phases"),
+            )
         if "Verification" in present:
             self._oracle_line(text)
 
@@ -529,18 +546,27 @@ class Gate:
         markers: dict[int, tuple[Marker, str]] = {}
         acs = acceptance_criteria(text)
         if not acs and "Acceptance Criteria" in sections(text):
-            self.fail("## Acceptance Criteria", "no numbered AC")
+            self.fail(
+                "## Acceptance Criteria",
+                "no numbered AC",
+                heading_line(text, "Acceptance Criteria"),
+            )
+        at = ac_lines(text)
         for n, ac in acs:
             missing = [w for w in ("Given", "When", "Then") if f"**{w}**" not in ac]
             if missing:
-                self.fail(f"AC{n}", "no " + ", ".join(f"`**{w}**`" for w in missing))
+                self.fail(f"AC{n}", "no " + ", ".join(f"`**{w}**`" for w in missing), at.get(n))
             body = marker_body(ac)
             if body is None:
-                self.fail(f"AC{n}", "no oracle-class marker `[receipt]`, `[ci: …]` or `[walk: …]`")
+                self.fail(
+                    f"AC{n}",
+                    "no oracle-class marker `[receipt]`, `[ci: …]` or `[walk: …]`",
+                    at.get(n),
+                )
                 continue
             marker, problem = parse_marker(body)
             if marker is None:
-                self.fail(f"AC{n}", problem or "marker does not parse")
+                self.fail(f"AC{n}", problem or "marker does not parse", at.get(n))
                 continue
             markers[n] = (marker, ac)
         return markers
@@ -549,12 +575,14 @@ class Gate:
         walk_paths = list(self.crew["oracles"].get("walk_paths") or [])
         own = [p for ph in found if ph.repo is None for p, _ in ph.paths]
         on_path = any(matches(p, walk_paths) for p in own)
+        at = ac_lines(self.text)
         for n, (marker, _) in sorted(markers.items()):
             if "walk" in marker.classes() and not walk_why(marker) and not on_path:
                 self.fail(
                     f"AC{n}",
                     "`walk` on a change whose **Files:** touch no walk path "
                     "(crew oracles.walk_paths); add `why: <sentence>` to the marker",
+                    at.get(n),
                 )
 
     def _receipts(self, markers: dict[int, tuple[Marker, str]]) -> None:
@@ -568,17 +596,20 @@ class Gate:
             if said == "boundary" or (said != "not-boundary" and _names_a_term(ac, terms)):
                 boundary.append(n)
         persona = self.crew["acceptance"].get("mock_persona")
+        at = ac_lines(self.text)
         if boundary and not persona:
             listed = ", ".join(f"AC{n}" for n in boundary)
             self.fail(
                 listed,
                 "server-boundary receipt AC but the crew names no acceptance.mock_persona",
+                at.get(boundary[0]),
             )
         command = self.crew["oracles"].get("receipt_check")
         if not command:
             self.fail(
                 ", ".join(f"AC{n}" for n in sorted(receipt)),
                 "receipt AC but the crew names no oracles.receipt_check",
+                at.get(min(receipt)),
             )
             return
         argv = [*shlex.split(command), str(self.plan.resolve())]
@@ -630,7 +661,11 @@ class Gate:
             return None
         if len(hits) > 1:
             names = " and ".join(p.name for p, _ in hits)
-            self.fail("epic", f"`{key}` is named by more than one epic plan: {names}")
+            self.fail(
+                "epic",
+                f"`{key}` is named by more than one epic plan: {names}",
+                frontmatter_line(self.text, "epic"),
+            )
             return None
         return hits[0]
 
@@ -641,6 +676,7 @@ class Gate:
                     self.fail(
                         f"phase {phase.number}",
                         f"`{path}` is marked (other repo): name the repo in a `**Repo:**` line",
+                        path_line(self.text, phase.number, path),
                     )
 
     def _fence(self, epic: tuple[Path, str], key: str, found: list[Phase]) -> None:
@@ -667,10 +703,11 @@ class Gate:
                 if matches(file, globs):
                     continue
                 shown = file if phase.repo is None else f"{phase.repo}:{file}"
-                self.failures.append(
-                    f"{self.plan}: scope change: {shown} (phase {phase.number}) outside the "
-                    f"fence of {key} — approver: {product} (fence change); {human} if it "
-                    "changes the outcome (§Units)"
+                self.fail(
+                    "scope change",
+                    f"{shown} (phase {phase.number}) outside the fence of {key} — approver: "
+                    f"{product} (fence change); {human} if it changes the outcome (§Units)",
+                    path_line(self.text, phase.number, file),
                 )
 
     def _goals(self, epic: tuple[Path, str]) -> None:
@@ -716,6 +753,61 @@ class Gate:
                 self.failures.append(
                     f"{epic_path}: serves: `{part}` names no metric of the goal file {bound}"
                 )
+
+
+def heading_line(text: str, name: str) -> int | None:
+    """The 1-based line of the level-2 heading ``name`` outside a code fence."""
+    fenced = False
+    for number, line in enumerate(text.split("\n"), 1):
+        if line.startswith("```"):
+            fenced = not fenced
+        elif not fenced and line.startswith("## ") and line[3:].strip() == name:
+            return number
+    return None
+
+
+def frontmatter_line(text: str, key: str) -> int | None:
+    """The 1-based line of the frontmatter key ``key``."""
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return None
+    for number, line in enumerate(lines[1:], 2):
+        if line.strip() == "---":
+            return None
+        if line.partition(":")[0].strip() == key and not line.startswith((" ", "\t")):
+            return number
+    return None
+
+
+def ac_lines(text: str) -> dict[int, int]:
+    """AC number -> the 1-based line its item starts on (``acceptance_criteria``'s items)."""
+    out: dict[int, int] = {}
+    in_section = False
+    for number, line in enumerate(text.split("\n"), 1):
+        if line.startswith("#"):
+            if in_section:
+                break
+            in_section = line.strip() == "## Acceptance Criteria"
+            continue
+        start = _AC_ITEM.match(line) if in_section else None
+        if start:
+            out.setdefault(int(start.group(1)), number)
+    return out
+
+
+def path_line(text: str, phase: int, path: str) -> int | None:
+    """The 1-based line under ``### Phase <phase>`` whose backtick span names ``path``."""
+    inside = False
+    for number, line in enumerate(text.split("\n"), 1):
+        heading = _PHASE.match(line)
+        if heading or line.startswith(("## ", "### ")):
+            inside = bool(heading) and int(heading.group(1)) == phase
+        elif inside and any(
+            _LINE_SUFFIX.sub("", span.split("§")[0]).rstrip("/") == path
+            for span in _SPAN.findall(line)
+        ):
+            return number
+    return None
 
 
 def line_keys(meta: dict[str, str]) -> list[str] | None:

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """The one reader and writer of lens verdicts: a panel of fresh lens agents judging a plan
-(Ready) or a PR diff (T2), recorded per subject and checked against today's plan blob or PR head.
+(Ready) or a PR diff (T2), recorded per subject and checked against today's plan subject or PR
+head.
 
 Usage:
   lens_verdict.py plan ready KEY [--plan PATH]   start a Ready panel on the story plan
@@ -12,8 +13,9 @@ Usage:
                                                  origin/main (the lenses would only say so); a
                                                  key with a repo prefix (``repo/KEY``) lives in
                                                  another repo: one warning, no refusal; refused
-                                                 too on the same plan blob while the panel has
-                                                 some but not every lens (no restart mid-round)
+                                                 too on the same subject while the panel has
+                                                 some but not every lens (no restart mid-round),
+                                                 and above the round cap (see Round cap)
   lens_verdict.py plan t2 PR                     start a T2 panel on the PR's head (``gh``)
   lens_verdict.py arm [COMMAND]                  exit 0 when COMMAND (else stdin) is a red arm in
                                                  test form (the skill may run it), else 1 with why
@@ -22,6 +24,8 @@ Usage:
                                                  write that completes the panel prints ``check``
                                                  after its line (the exit stays 0)
   lens_verdict.py write ID LENS --failed REASON  record the lens red without findings
+  lens_verdict.py decide ID LENS --by ROLE TEXT  the lens holder's one-sentence decision on a
+                                                 panel above the round cap (see Round cap)
   lens_verdict.py check ID                       one line per lens and the panel; exit 0 only green
   lens_verdict.py post t2-prN                    post the panel comment on the PR's head (PASS or
                                                  FAIL); exit 0 only for a posted PASS
@@ -36,19 +40,23 @@ the crew file unusable.
 Where: one JSON file per subject in ``<git common dir>/we-lens/`` (shared by every worktree of the
 repo, never in the tree, so a PR cannot carry its own verdict), plus ``samples.jsonl`` there.
 
-Schema, version 1, closed: an unknown key anywhere refuses the file or the answer, naming the key.
-File: ``version``, ``kind`` (ready|t2), ``subject``, ``bound_to`` (``plan_blob`` for ready, the
-output of ``git hash-object`` on the plan; ``head`` for t2, the PR's head SHA), ``expected`` (the
+Schema, version 2, closed: an unknown key anywhere refuses the file or the answer, naming the key.
+Every write is version 2; a version-1 file is read as before (see Subject). File: ``version``,
+``kind`` (ready|t2), ``subject``, ``bound_to`` (ready: ``plan_blob``, the output of ``git
+hash-object`` on the plan, and ``plan_subject``, its subject hash; t2: ``head``, the PR's head
+SHA), ``capped_from`` (ready only, see Round cap: ``round`` and ``plan_blob`` of the round whose
+verdicts the capped panel keeps), ``expected`` (the
 lenses copied from the crew when the panel started, so a crew edit cannot shrink a running panel),
 optional ``plan`` (ready only: the plan's path relative to the repo root when ``--plan`` named
 one, so ``write`` and ``check`` re-hash that file), ``round`` (ready only: the panel's round, 1 for
-the first plan version; ``plan ready`` on a new plan blob writes the stored round plus one, on the
-same blob it keeps it, so a restart is no round; a file without ``round`` takes its round from
+the first plan version; ``plan ready`` on a new subject writes the stored round plus one, on the
+same subject it keeps it, so a restart is no round; a file without ``round`` takes its round from
 evidence, see Derived round), ``round_derived`` (ready only: where the round's base came from when
 it was derived, e.g. ``base: round 2 derived: 2 plan blobs with logged lens verdicts: e82588a3,
 e0d2159d``) and ``verdicts.<lens>``: ``verdict``
-(green|red), ``agent``, ``ran_at``, ``sample``, ``sampled``, ``findings``, and ``failure`` (why a
-lens was recorded red without findings). A finding:
+(green|red), ``agent``, ``ran_at``, ``sample``, ``sampled``, ``findings``, ``failure`` (why a
+lens was recorded red without findings) and ``decision`` (ready only: ``by``, a role key,
+``sentence``, ``subject``, the subject hash it was given on, ``at``). A finding:
 ``severity`` (BLOCKING|WARNING|NOTE), ``claim``, ``where``, ``question`` (the question-file line it
 answers; required on Ready), ``red_arm`` (``command``, ``exit``, ``run``) and ``status``
 (standing|refuted). An answer is ``{"findings": [...]}`` whose findings carry only ``severity``,
@@ -57,13 +65,46 @@ it); strings are capped at ``TEXT_CHARS`` with control characters stripped.
 
 Green rule (Vyra 04.11.): a lens is red when a BLOCKING or WARNING finding stands, else green; a
 NOTE is listed and never red; a ``refuted`` finding does not count. The panel is green only when
-every expected lens has a verdict, every verdict is green, and the binding is today's plan blob or
-PR head; a missing lens, a red lens and a stale binding each print a line and count red. The
+every expected lens has a verdict, every verdict is green, and the binding is today's plan subject
+or PR head; a missing lens, a red lens and a stale binding each print a line and count red. The
 verdict and the status are computed here from the findings, never taken from the caller, and
 ``check`` recomputes them from the stored findings.
 
-Carried warnings (Ready only, crew ``ready_panel.warning_ok_after_rounds`` = N): from round N on,
-a lens that is red only through standing WARNINGs (no BLOCKING, no ``failure``) prints ``lens
+Subject (Ready): a panel judges the plan without the sections ``## Updates Log``, ``## Documentation
+Impact`` and ``## Code Guidance`` (a level-2 heading outside a code fence, up to the next one) and
+the frontmatter keys ``status``, ``created`` and ``comments_read_through`` (with their indented
+continuation lines); everything else counts, trailing whitespace dropped. Code Guidance is left
+out on purpose: its DO/DON'T lines are the refiner's hints to the builder, while the ACs, phases,
+fence and out of scope that a lens judges are what the build is accepted against. ``subject_hash`` is the
+one normalisation (sha256 of ``subject_text``); ``plan``, ``write``, ``decide``, ``check`` and the
+round compare it, never the blob, so a status flip or an updates-log line keeps the panel and a
+changed AC makes it stale. A moved blob with the same subject prints ``panel <ID>: plan blob <a> ->
+<b>, subject unchanged``. A binding without ``plan_subject`` (a version-1 file, or ``board.py
+select``'s blob on main) takes the hash of its blob, read from the copy beside the verdict files
+(``<we-lens>/plans/<blob>.md``), else from the object store; a blob in neither compares by blob.
+So an open version-1 panel survives the upgrade without a new round when only excluded parts
+changed.
+
+Round cap (Ready only, crew ``ready_panel.max_rounds`` = M, default 2, null = off): ``plan ready``
+whose next round lies above M starts no lens. It rebinds the file to today's subject with every
+verdict kept, writes the round and ``capped_from`` (the round and blob those verdicts were given
+on, kept by every later capped round), prints the standing findings and the line ``round cap: the
+lens holder decides`` (or, when every lens was green, ``round cap: changed after the last round;
+one holder confirms``) and exits 1. ``decide ID LENS --by ROLE "<one sentence>"`` records the
+holder's decision on that lens for today's subject hash: ``ROLE`` is a role key, the lens's own
+when the lens key is one; refused within the cap, on a stale panel, on a lens without a verdict
+(record it with ``write --failed``), and on a green lens while another is red. A decided lens
+prints ``lens <lens>: green (decided by <role>: <sentence>)`` (``confirmed`` on a green one); a
+lens green from the earlier round prints ``green (judged round N @ <blob>, round cap)``. A capped
+panel is green only when at least one decision names today's subject hash; a decision never holds
+for a later subject, so the next plan change makes the panel stale and, after ``plan ready``, red
+until a holder decides again. ``decide`` appends ``kind: "decision"`` to ``samples.jsonl`` (``id``,
+``lens``, ``bound``, ``subject``, ``round``, ``by``, ``sentence``, ``at``); ``rounds`` lists it,
+and ``check_ready`` returns the decisions for the board's Selected row (``decided``).
+
+Carried warnings (Ready only, crew ``ready_panel.warning_ok_after_rounds`` = N; an N above
+``ready_panel.max_rounds`` never carries, since no lens runs there and the holder decides, see
+Round cap): from round N on, a lens that is red only through standing WARNINGs (no BLOCKING, no ``failure``) prints ``lens
 <lens>: green (warnings carried: …)`` and counts green; the panel line then reads ``green
 (warnings carried)`` and ``check_panel`` returns the warnings (lens, claim, where) for the board's
 Selected row. A BLOCKING stays red in every round; without the key, and on every T2 panel, a
@@ -104,7 +145,8 @@ computed on every ``check``; nothing is written.
 
 No skip, no override: no field can skip, confirm, waive or lift anything; ``skip``, ``override``,
 ``one_way``, ``go`` and every other unknown key are refused. A red panel turns green only through a
-fresh panel on a new plan blob or head; a green T2 panel is carried only as above. Any session
+fresh panel on a new subject or head, or above the round cap through a holder's recorded
+decision bound to the subject hash; a green T2 panel is carried only as above. Any session
 can write this file, so it gates only the move to Selected; no merge reads it.
 
 Panel comment (T2): ``post`` puts the panel's state on GitHub as the owner's input on a one-way PR,
@@ -125,8 +167,8 @@ Severity log (Ready only): every ``write`` on a Ready panel appends one line wit
 ``verdict``, ``failure`` (true when recorded with ``--failed``), ``ran_at`` and the counts
 ``blocking``, ``warning``, ``note`` (every finding, refuted ones too; a Ready finding is never
 refuted). ``rounds KEY`` reads them: one line per round and lens, the last write on that blob
-winning. Every other reader of the file (sample counter, ``samples``, the derived round) reads
-only lines without ``kind``: a severity line, red or green, counts no sample and no round. The
+winning, plus the round's decision lines. Every other reader of the file (sample counter, ``samples``, the derived round) reads
+only lines without ``kind``: a severity or decision line counts no sample and no round. The
 derived round stays the count of 8.10.0's green lines on purpose: it rebuilds rounds of files
 written before ``round`` existed, and a severity line is only ever written next to a file that
 already stores its round.
@@ -141,6 +183,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -162,7 +205,8 @@ import crew as crew_mod  # noqa: E402
 import ready_gate  # noqa: E402
 import risk_runner  # noqa: E402
 
-VERSION = 1
+VERSION = 2
+READ_VERSIONS = (1, 2)
 TEXT_CHARS = 500
 SEVERITIES = ("BLOCKING", "WARNING", "NOTE")
 COUNTING = ("BLOCKING", "WARNING")
@@ -181,8 +225,27 @@ FILE_KEYS = (
     "plan",
     "round",
     "round_derived",
+    "capped_from",
 )
-VERDICT_KEYS = ("verdict", "agent", "ran_at", "sample", "sampled", "findings", "failure")
+VERDICT_KEYS = (
+    "verdict",
+    "agent",
+    "ran_at",
+    "sample",
+    "sampled",
+    "findings",
+    "failure",
+    "decision",
+)
+DECISION_KEYS = ("by", "sentence", "subject", "at")
+CAPPED_KEYS = ("round", "plan_blob")
+DECISION_KIND = "decision"
+CAP_LINE = "round cap: the lens holder decides"
+CONFIRM_LINE = "round cap: changed after the last round; one holder confirms"
+# what a Ready panel's subject leaves out (see Subject)
+SUBJECT_SECTIONS = ("Updates Log", "Documentation Impact", "Code Guidance")
+SUBJECT_KEYS = ("status", "created", "comments_read_through")
+_HEX = re.compile(r"[0-9a-f]{40,64}")
 FINDING_KEYS = ("severity", "claim", "where", "question", "red_arm", "status")
 ANSWER_FINDING_KEYS = ("severity", "claim", "where", "question", "red_arm")
 ARM_KEYS = ("command", "exit", "run")
@@ -281,19 +344,99 @@ def plan_source(root: Path, subject: str, rel: str | None, blob: str) -> tuple[P
     return copy, PLAN_FALLBACK_REF
 
 
+def subject_text(text: str) -> str:
+    """The part of a plan a Ready panel judges (see Subject): the plan without the sections
+    ``SUBJECT_SECTIONS`` and the frontmatter keys ``SUBJECT_KEYS``, trailing whitespace dropped."""
+    lines = text.replace("\r\n", "\n").split("\n")
+    out: list[str] = []
+    start = 0
+    if lines and lines[0].strip() == "---":
+        out.append(lines[0])
+        start, dropping = 1, False
+        while start < len(lines):
+            line = lines[start]
+            start += 1
+            if line.strip() == "---":
+                out.append(line)
+                break
+            if line[:1] not in (" ", "\t"):
+                key, sep, _value = line.partition(":")
+                dropping = bool(sep) and key.strip() in SUBJECT_KEYS
+            if not dropping:
+                out.append(line)
+    fenced = dropping = False
+    for line in lines[start:]:
+        if line.startswith("```"):
+            fenced = not fenced
+        elif not fenced and line.startswith("## "):
+            dropping = line[3:].strip() in SUBJECT_SECTIONS
+        if not dropping:
+            out.append(line)
+    return "\n".join(out).rstrip() + "\n"
+
+
+def subject_hash(text: str) -> str:
+    """The one normalisation of a Ready panel's subject: sha256 of ``subject_text``."""
+    return hashlib.sha256(subject_text(text).encode("utf-8")).hexdigest()
+
+
+def _blob_text(root: Path, blob: str) -> str | None:
+    """A plan blob's text: the copy beside the verdict files (``<we-lens>/plans/<blob>.md``),
+    else the object store; None when neither holds it."""
+    try:
+        copy = verdict_dir(root) / "plans" / f"{blob}.md"
+        if copy.is_file():
+            return copy.read_text(encoding="utf-8")
+    except (OSError, UnusableError):
+        pass
+    out = subprocess.run(
+        ["git", "-C", str(root), "cat-file", "blob", blob],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return out.stdout if out.returncode == 0 else None
+
+
+def bound_subject(root: Path, bound: dict[str, str]) -> str | None:
+    """The subject hash of a Ready binding: stored (schema 2), else computed from the bound blob
+    (a schema-1 file, or a caller that passes only the blob); None when the blob is unreadable."""
+    if bound.get("plan_subject"):
+        return bound["plan_subject"]
+    blob = bound.get("plan_blob")
+    text = _blob_text(root, blob) if blob else None
+    return subject_hash(text) if text is not None else None
+
+
+def same_subject(root: Path, kind: str, a: dict[str, str], b: dict[str, str]) -> bool:
+    """Whether two bindings name the same subject: the subject hash on Ready (the blob when a
+    hash cannot be computed), the head on T2."""
+    if kind != "ready":
+        return a == b
+    sa, sb = bound_subject(root, a), bound_subject(root, b)
+    if sa is None or sb is None:
+        return a.get("plan_blob") == b.get("plan_blob")
+    return sa == sb
+
+
 def current_binding(
     root: Path, kind: str, subject: str, plan: str | None = None
 ) -> dict[str, str]:
     if kind == "ready":
         path = plan_path(root, subject, plan)
         if path.is_file():
-            return {"plan_blob": _git(root, "hash-object", str(path))}
+            text = path.read_text(encoding="utf-8")
+            return {
+                "plan_blob": _git(root, "hash-object", str(path)),
+                "plan_subject": subject_hash(text),
+            }
         blob = _origin_blob(root, path.relative_to(root).as_posix())
-        if blob is None:
+        text = _blob_text(root, blob) if blob else None
+        if blob is None or text is None:
             raise RefusedError(
                 f"plan {path.relative_to(root)}: missing (here and on {PLAN_FALLBACK_REF})"
             )
-        return {"plan_blob": blob}
+        return {"plan_blob": blob, "plan_subject": subject_hash(text)}
     gh = shutil.which("gh")
     out = (
         subprocess.run(
@@ -456,7 +599,11 @@ def read_file(path: Path) -> dict[str, Any]:
         raise RefusedError(f"panel {path.stem}: verdict file unreadable") from None
     doc = _closed(data, FILE_KEYS, path.stem)
     kind, subject = parse_id(path.stem)
-    if doc.get("version") != VERSION or doc.get("kind") != kind or doc.get("subject") != subject:
+    if (
+        doc.get("version") not in READ_VERSIONS
+        or doc.get("kind") != kind
+        or doc.get("subject") != subject
+    ):
         raise RefusedError(f"panel {path.stem}: version, kind or subject does not match")
     rel = doc.get("plan")
     if rel is not None and (
@@ -467,8 +614,11 @@ def read_file(path: Path) -> dict[str, Any]:
     ):
         raise RefusedError(f"panel {path.stem}: plan needs a path inside the repo (ready only)")
     bound = _closed(
-        doc.get("bound_to"), ("plan_blob",) if kind == "ready" else ("head",), "bound_to"
+        doc.get("bound_to"),
+        ("plan_blob", "plan_subject") if kind == "ready" else ("head",),
+        "bound_to",
     )
+    _subject_fields(path.stem, kind, bound, doc.get("capped_from"))
     round_ = doc.get("round", 1)
     if (kind != "ready" and "round" in doc) or not (
         isinstance(round_, int) and not isinstance(round_, bool) and round_ >= 1
@@ -497,7 +647,40 @@ def read_file(path: Path) -> dict[str, Any]:
             "failure": failure,
             "verdict": lens_verdict(stored, failure),
         }
+        if v.get("decision") is not None:
+            clean[lens]["decision"] = _decision(v["decision"], f"verdicts.{lens}.decision", kind)
     return {**doc, "bound_to": dict(bound), "verdicts": clean}
+
+
+def _subject_fields(stem: str, kind: str, bound: dict[str, Any], capped: Any) -> None:
+    """``bound_to.plan_subject`` and ``capped_from`` of a stored panel; RefusedError otherwise."""
+    if "plan_subject" in bound and not (
+        isinstance(bound["plan_subject"], str) and _HEX.fullmatch(bound["plan_subject"])
+    ):
+        raise RefusedError(f"panel {stem}: bound_to.plan_subject needs a hex hash")
+    if capped is None:
+        return
+    capped = _closed(capped, CAPPED_KEYS, "capped_from")
+    if kind != "ready" or not (
+        isinstance(capped.get("round"), int)
+        and not isinstance(capped.get("round"), bool)
+        and isinstance(capped.get("plan_blob"), str)
+    ):
+        raise RefusedError(f"panel {stem}: capped_from needs a round and a plan blob (ready only)")
+
+
+def _decision(raw: Any, where: str, kind: str) -> dict[str, Any]:
+    d = _closed(raw, DECISION_KEYS, where)
+    if kind != "ready" or d.get("by") not in crew_mod.ROLE_KEYS:
+        raise RefusedError(f"{where}: needs a role key in by (ready only)")
+    if not (isinstance(d.get("subject"), str) and _HEX.fullmatch(d["subject"])):
+        raise RefusedError(f"{where}.subject: needs a hex hash")
+    return {
+        "by": d["by"],
+        "sentence": _text(d.get("sentence"), f"{where}.sentence", required=True),
+        "subject": d["subject"],
+        "at": _text(d.get("at"), f"{where}.at"),
+    }
 
 
 def _write_atomic(path: Path, doc: dict[str, Any]) -> None:
@@ -530,9 +713,10 @@ def plan(root: Path, kind: str, subject: str, plan_arg: str | None = None) -> di
     bound = current_binding(root, kind, subject, rel)
     path = verdict_dir(root) / f"{vid}.json"
     if kind == "ready":
-        _no_restart_mid_round(path, vid, bound)
+        _no_restart_mid_round(root, path, vid, bound)
         _ready_gate_first(root, subject, rel, bound["plan_blob"])
         _depends_on_main(root, subject, rel, bound["plan_blob"])
+        _round_cap(root, path, vid, bound, crew)
     doc: dict[str, Any] = {
         "version": VERSION,
         "kind": kind,
@@ -544,7 +728,7 @@ def plan(root: Path, kind: str, subject: str, plan_arg: str | None = None) -> di
     if rel is not None:
         doc["plan"] = rel
     if kind == "ready":
-        doc["round"], origin = next_round(path, bound)
+        doc["round"], origin = next_round(root, path, bound)
         if origin is not None:
             doc["round_derived"] = origin
     _write_atomic(path, doc)
@@ -569,16 +753,21 @@ def plan(root: Path, kind: str, subject: str, plan_arg: str | None = None) -> di
     return {"id": vid, "kind": kind, "bound_to": bound, "entries": entries}
 
 
-def _no_restart_mid_round(path: Path, vid: str, bound: dict[str, str]) -> None:
-    """A Ready panel on the same plan blob with some but not every lens written is mid-round: a
+def _no_restart_mid_round(root: Path, path: Path, vid: str, bound: dict[str, str]) -> None:
+    """A Ready panel on the same subject with some but not every lens written is mid-round: a
     restart would drop those verdicts and run the lenses again on the same plan. RefusedError
-    names the missing lenses."""
+    names the missing lenses. A panel above the round cap is left to ``_round_cap``."""
     try:
         old = read_file(path)
     except (RefusedError, UnusableError):
         return
     missing = [lens for lens in old["expected"] if lens not in old["verdicts"]]
-    if old["bound_to"] != bound or not old["verdicts"] or not missing:
+    if (
+        "capped_from" in old
+        or not same_subject(root, "ready", old["bound_to"], bound)
+        or not old["verdicts"]
+        or not missing
+    ):
         return
     round_, _origin = panel_round(path.parent, old)
     raise RefusedError(
@@ -644,10 +833,10 @@ def _depends_on_main(root: Path, subject: str, rel: str | None, blob: str) -> No
         )
 
 
-def next_round(path: Path, bound: dict[str, str]) -> tuple[int, str | None]:
+def next_round(root: Path, path: Path, bound: dict[str, str]) -> tuple[int, str | None]:
     """The round of a Ready panel started on ``bound`` and, when its base was derived, where it
-    came from: 1 without a readable earlier panel, the stored round on the same plan blob (a
-    restart), the stored round plus one on a new blob."""
+    came from: 1 without a readable earlier panel, the stored round on the same subject (a
+    restart), the stored round plus one on a new subject."""
     try:
         old = read_file(path)
     except (RefusedError, UnusableError):
@@ -655,7 +844,65 @@ def next_round(path: Path, bound: dict[str, str]) -> tuple[int, str | None]:
     stored, origin = panel_round(path.parent, old)
     if origin is not None and "round" not in old:
         origin = f"base: round {stored} {origin}"
-    return (stored if old["bound_to"] == bound else stored + 1), origin
+    same = same_subject(root, "ready", old["bound_to"], bound)
+    return (stored if same else stored + 1), origin
+
+
+def max_rounds(crew: dict[str, Any]) -> int | None:
+    """``ready_panel.max_rounds``: the last round lenses run in; None turns the cap off."""
+    cap = (crew.get("ready_panel") or {}).get("max_rounds")
+    return cap if isinstance(cap, int) and not isinstance(cap, bool) else None
+
+
+def _round_cap(
+    root: Path, path: Path, vid: str, bound: dict[str, str], crew: dict[str, Any]
+) -> None:
+    """A Ready panel whose next round lies above ``ready_panel.max_rounds`` starts no lens (see
+    Round cap): the file is rebound to today's subject with every verdict kept, and RefusedError
+    prints the standing findings and the cap line."""
+    cap = max_rounds(crew)
+    if cap is None or not path.is_file():
+        return
+    with _locked(path):
+        round_, origin = next_round(root, path, bound)
+        if round_ <= cap:
+            return
+        old = read_file(path)
+        old_round = panel_round(path.parent, old)[0]
+        doc = {**old, "version": VERSION, "bound_to": bound, "round": round_}
+        doc.setdefault(
+            "capped_from", {"round": old_round, "plan_blob": old["bound_to"]["plan_blob"]}
+        )
+        if origin is not None:
+            doc["round_derived"] = origin
+        _write_atomic(path, doc)
+    lines = [f"panel {vid}: round {round_} is above the round cap of {cap}, no lens runs"]
+    red = False
+    for lens in doc["expected"]:
+        v = doc["verdicts"].get(lens)
+        if v is None:
+            red = True
+            lines.append(
+                f"  lens {lens}: missing (record it: lens_verdict.py write {vid} {lens} --failed"
+                ' "<why>")'
+            )
+        elif v["verdict"] == "red":
+            red = True
+            lines.append(f"  lens {lens}: red" + (f" ({v['failure']})" if v["failure"] else ""))
+            lines += [
+                f"    {f['severity']} {f['where'] or '-'}: {f['claim']}"
+                for f in v["findings"]
+                if f["severity"] in COUNTING and f["status"] == "standing"
+            ]
+        else:
+            capped = doc["capped_from"]
+            lines.append(
+                f"  lens {lens}: green (judged round {capped['round']} @"
+                f" {capped['plan_blob'][:8]}, round cap)"
+            )
+    lines.append(CAP_LINE if red else CONFIRM_LINE)
+    lines.append(f'  lens_verdict.py decide {vid} <lens> --by <role> "<one sentence>"')
+    raise RefusedError("\n".join(lines))
 
 
 def panel_round(vdir: Path, doc: dict[str, Any]) -> tuple[int, str | None]:
@@ -737,8 +984,9 @@ def _write_locked(
         if kind != "ready" or not blob or _git_ok(root, "cat-file", "-e", blob) is False:
             raise
         now_bound = doc["bound_to"]
-    if now_bound != doc["bound_to"]:
+    if not same_subject(root, kind, now_bound, doc["bound_to"]):
         raise RefusedError(f"panel {vid}: stale (start a fresh panel with plan)")
+    _upgrade(root, kind, doc)
     if failed is not None:
         findings: list[dict[str, Any]] = []
         failure = _text(failed, "--failed", required=True)
@@ -774,6 +1022,16 @@ def _write_locked(
     return doc["verdicts"][lens]
 
 
+def _upgrade(root: Path, kind: str, doc: dict[str, Any]) -> None:
+    """Every write is schema 2: a Ready binding gains its subject hash, computed from the bound
+    blob, when the blob is readable."""
+    doc["version"] = VERSION
+    if kind == "ready" and "plan_subject" not in doc["bound_to"]:
+        found = bound_subject(root, doc["bound_to"])
+        if found is not None:
+            doc["bound_to"]["plan_subject"] = found
+
+
 def severity_line(
     vdir: Path, doc: dict[str, Any], vid: str, lens: str, binding: str
 ) -> dict[str, Any]:
@@ -795,20 +1053,83 @@ def severity_line(
     }
 
 
+def decide(
+    root: Path, vid: str, lens: str, by: str, sentence: str, now: str | None = None
+) -> dict[str, Any]:
+    """Record the lens holder's decision on a panel above the round cap (see Round cap)."""
+    kind, subject = parse_id(vid)
+    if kind != "ready":
+        raise UnusableError(f"decide: {vid} is no Ready panel (ready-<KEY>)")
+    if by not in crew_mod.ROLE_KEYS:
+        raise RefusedError(f"decide: --by {by!r} is no role key ({', '.join(crew_mod.ROLE_KEYS)})")
+    if lens in crew_mod.ROLE_KEYS and by != lens:
+        raise RefusedError(f"decide: lens {lens} is held by the role {lens}, not {by}")
+    text = _text(sentence, "decide: the sentence", required=True)
+    vdir = verdict_dir(root)
+    path = vdir / f"{vid}.json"
+    with _locked(path):
+        doc = read_file(path)
+        if lens not in doc["expected"]:
+            raise RefusedError(f"lens {lens}: not expected in panel {vid}")
+        if "capped_from" not in doc:
+            round_ = panel_round(vdir, doc)[0]
+            raise RefusedError(
+                f"decide: panel {vid} is in round {round_}, within the round cap: the lenses judge"
+            )
+        now_bound = current_binding(root, kind, subject, doc.get("plan"))
+        if not same_subject(root, kind, now_bound, doc["bound_to"]):
+            raise RefusedError(
+                f"decide: panel {vid} is stale (the plan changed): run plan ready {subject} first"
+            )
+        v = doc["verdicts"].get(lens)
+        if v is None:
+            raise RefusedError(
+                f"decide: lens {lens} has no verdict: record it first"
+                f' (lens_verdict.py write {vid} {lens} --failed "<why>")'
+            )
+        red = [k for k in doc["expected"] if doc["verdicts"].get(k, {}).get("verdict") != "green"]
+        if v["verdict"] == "green" and red:
+            raise RefusedError(
+                f"decide: lens {lens} is green; the red lenses decide: {', '.join(red)}"
+            )
+        _upgrade(root, kind, doc)
+        doc["bound_to"] = now_bound
+        subject_now = now_bound["plan_subject"]
+        at = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        v["decision"] = {"by": by, "sentence": text, "subject": subject_now, "at": at}
+        _write_atomic(path, doc)
+        _append(
+            vdir / "samples.jsonl",
+            {
+                "kind": DECISION_KIND,
+                "id": vid,
+                "lens": lens,
+                "bound": now_bound["plan_blob"],
+                "subject": subject_now,
+                "round": panel_round(vdir, doc)[0],
+                "by": by,
+                "sentence": text,
+                "at": at,
+            },
+        )
+    return v["decision"]
+
+
 def rounds(root: Path, key: str) -> list[dict[str, Any]]:
-    """The story's Ready rounds from the severity log, oldest first: ``round``, ``bound`` and
-    ``lenses`` (lens -> its last severity line on that blob)."""
+    """The story's Ready rounds from the severity log, oldest first: ``round``, ``bound``,
+    ``lenses`` (lens -> its last severity line on that blob) and ``decided`` (lens -> its last
+    decision line in that round)."""
     vid = f"ready-{key}"
     parse_id(vid)
     out: dict[tuple[int, str], dict[str, Any]] = {}
     for x in _log_lines(verdict_dir(root)):
-        if x.get("kind") != SEVERITY_KIND or x.get("id") != vid:
+        if x.get("kind") not in (SEVERITY_KIND, DECISION_KIND) or x.get("id") != vid:
             continue
         r, bound, lens = x.get("round"), x.get("bound"), x.get("lens")
         if not (isinstance(r, int) and isinstance(bound, str) and isinstance(lens, str)):
             continue
-        row = out.setdefault((r, bound), {"round": r, "bound": bound, "lenses": {}})
-        row["lenses"][lens] = x
+        row = out.setdefault((r, bound), {"round": r, "bound": bound, "lenses": {}, "decided": {}})
+        row["lenses" if x["kind"] == SEVERITY_KIND else "decided"][lens] = x
     return [out[k] for k in sorted(out, key=lambda k: k[0])]
 
 
@@ -821,6 +1142,8 @@ def rounds_lines(rows: list[dict[str, Any]]) -> list[str]:
             parts.append(
                 f"{lens} {x.get('verdict')} {n}" + (" failed" if x.get("failure") else "")
             )
+        for lens, x in row["decided"].items():
+            parts.append(f"{lens} decided by {x.get('by')}: {x.get('sentence')}")
         lines.append(f"round {row['round']} @ {row['bound'][:8]}: " + "; ".join(parts))
     return lines
 
@@ -916,9 +1239,19 @@ def check_panel(
 ) -> tuple[bool, list[str], list[dict[str, Any]]]:
     """``check`` plus the warnings a green Ready panel carries (``lens``, ``claim``, ``where``);
     the list is empty whenever the panel is red. ``binding`` replaces today's binding read from
-    the checkout (``board.py select`` passes the plan blob on main)."""
-    green, lines, carried, _from = _check(root, vid, binding=binding)
+    the checkout (``board.py select`` passes the plan blob on main; the subject hash is computed
+    from it)."""
+    green, lines, carried, _decided = check_ready(root, vid, binding)
     return green, lines, carried
+
+
+def check_ready(
+    root: Path, vid: str, binding: dict[str, str] | None = None
+) -> tuple[bool, list[str], list[dict[str, Any]], list[dict[str, Any]]]:
+    """``check_panel`` plus the holders' decisions a green panel stands on (``lens``, ``by``,
+    ``sentence``; see Round cap), empty whenever the panel is red."""
+    green, lines, carried, _from, decided = _check(root, vid, binding=binding)
+    return green, lines, carried, decided
 
 
 def check_t2(
@@ -926,23 +1259,23 @@ def check_t2(
 ) -> tuple[bool, list[str], str | None]:
     """``check`` plus the head a green T2 panel was carried from (see Carried panel), else None.
     ``git`` and ``timeout`` are the caller's, so a caller can keep the carry inside a time budget."""
-    green, lines, _carried, carried_from = _check(root, vid, git, timeout)
+    green, lines, _carried, carried_from, _decided = _check(root, vid, git, timeout)
     return green, lines, carried_from
 
 
-def _check(
+def _check(  # noqa: PLR0912, PLR0915
     root: Path,
     vid: str,
     git: risk_runner.Git | None = None,
     timeout: float | None = None,
     binding: dict[str, str] | None = None,
-) -> tuple[bool, list[str], list[dict[str, Any]], str | None]:
+) -> tuple[bool, list[str], list[dict[str, Any]], str | None, list[dict[str, Any]]]:
     kind, subject = parse_id(vid)
     try:
         doc = read_file(verdict_dir(root) / f"{vid}.json")
     except RefusedError as exc:
-        return False, [str(exc), f"panel {vid}: red"], [], None
-    lines, green, carried = [], True, []
+        return False, [str(exc), f"panel {vid}: red"], [], None, []
+    lines, green, carried, decided = [], True, [], []
     carry_after: int | None = None
     round_, origin = panel_round(verdict_dir(root), doc)
     if origin is not None:
@@ -952,13 +1285,25 @@ def _check(
     except RefusedError as exc:
         now, green = None, False
         lines.append(str(exc))
-    stale_at, stale = len(lines), now is not None and now != doc["bound_to"]
+    stale_at = len(lines)
+    stale = now is not None and not same_subject(root, kind, now, doc["bound_to"])
+    now_subject = bound_subject(root, now) if kind == "ready" and now is not None else None
+    if kind == "ready" and now is not None and not stale and now != doc["bound_to"]:
+        was, is_ = doc["bound_to"]["plan_blob"], now["plan_blob"]
+        if was != is_:
+            lines.append(f"panel {vid}: plan blob {was[:8]} -> {is_[:8]}, subject unchanged")
+    capped = doc.get("capped_from")
+    red_lenses = []
     for lens in doc["expected"]:
         v = doc["verdicts"].get(lens)
         if v is None:
             green = False
+            red_lenses.append(lens)
             lines.append(f"lens {lens}: missing")
             continue
+        decision = v.get("decision")
+        if decision is not None and (now_subject is None or decision["subject"] != now_subject):
+            decision = None  # a decision holds for the subject it was given on, never later
         standing = [
             f for f in v["findings"] if f["severity"] in COUNTING and f["status"] == "standing"
         ]
@@ -970,19 +1315,34 @@ def _check(
         )
         if only_warnings and carry_after is None:
             carry_after = _carry_after(root) or 0
-        if only_warnings and carry_after and round_ >= carry_after:
+        if decision is not None:
+            decided.append({"lens": lens, "by": decision["by"], "sentence": decision["sentence"]})
+            word = "decided" if v["verdict"] == "red" else "confirmed"
+            lines.append(
+                f"lens {lens}: green ({word} by {decision['by']}: {decision['sentence']})"
+            )
+        elif only_warnings and carry_after and round_ >= carry_after:
             carried += [{"lens": lens, "claim": f["claim"], "where": f["where"]} for f in standing]
             why = ", ".join(f"WARNING {f['where'] or ''}".strip() for f in standing)
             lines.append(f"lens {lens}: green (warnings carried: {why})")
         elif v["verdict"] == "red":
             green = False
+            red_lenses.append(lens)
             why = v["failure"] or ", ".join(
                 f"{f['severity']} {f['where'] or ''}".strip() for f in standing
             )
             lines.append(f"lens {lens}: red ({why})")
         else:
             notes = sum(1 for f in v["findings"] if f["severity"] == "NOTE")
-            lines.append(f"lens {lens}: green" + (f" ({notes} note)" if notes else ""))
+            extra = [f"{notes} note"] if notes else []
+            if capped is not None:
+                extra.append(
+                    f"judged round {capped['round']} @ {capped['plan_blob'][:8]}, round cap"
+                )
+            lines.append(f"lens {lens}: green" + (f" ({'; '.join(extra)})" if extra else ""))
+    if capped is not None and not stale and not decided:
+        green = False  # a capped subject stands on at least one holder's decision for it
+        lines.append(f"panel {vid}: {CAP_LINE if red_lenses else CONFIRM_LINE}")
     carried_from = None
     if stale:
         rows, carried_from = _stale_rows(
@@ -991,10 +1351,11 @@ def _check(
         green = green and carried_from is not None
         lines[stale_at:stale_at] = rows
     if not green:
-        carried = []
-    state = "red" if not green else "green (warnings carried)" if carried else "green"
+        carried, decided = [], []
+    marks = [m for m, on in (("warnings carried", carried), ("decided", decided)) if on]
+    state = "red" if not green else "green" + (f" ({', '.join(marks)})" if marks else "")
     lines.append(f"panel {vid}: {state}")
-    return green, lines, carried, carried_from
+    return green, lines, carried, carried_from, decided
 
 
 # --- the carried T2 panel --------------------------------------------------------------------
@@ -1113,6 +1474,7 @@ def sampled(root: Path, vid: str, lens: str) -> None:
             verdict = doc["verdicts"].get(lens)
             if verdict is not None and verdict.get("sample"):
                 verdict["sampled"] = True
+                _upgrade(root, doc["kind"], doc)
                 _write_atomic(path, doc)
 
 
@@ -1206,7 +1568,7 @@ def _main(argv: list[str], stdin: Any) -> int:
         print(f"arm: {'run' if reason is None else 'not run: ' + reason}")
         return 0 if reason is None else 1
     root = repo_root(Path.cwd())
-    args = _positional(rest, ("--failed", "--keeper", "--plan"))
+    args = _positional(rest, ("--failed", "--keeper", "--plan", "--by"))
     unknown = [a for a in args if a.startswith("--")]
     if "--plan" in rest and not (verb == "plan" and args[:1] == ["ready"]):
         unknown = ["--plan (only for plan ready)"]
@@ -1224,10 +1586,10 @@ def _main(argv: list[str], stdin: Any) -> int:
         if all(lens in doc["verdicts"] for lens in doc["expected"]):
             print("\n".join(check(root, args[0])[1]))
         return 0
-    if verb in ("check", "post") and len(args) == 1:
-        green, lines = (check if verb == "check" else post)(root, args[0])
+    if verb in ("check", "post", "decide") and len(args) == (3 if verb == "decide" else 1):
+        green, lines = _verdict_verb(root, verb, args, rest)
         print("\n".join(lines))
-        return 0 if green else 1
+        return 0 if green or verb == "decide" else 1
     if (verb == "samples" and not args) or (verb == "rounds" and len(args) == 1):
         for line in _listing(root, verb, args, rest):
             print(line)
@@ -1237,6 +1599,20 @@ def _main(argv: list[str], stdin: Any) -> int:
         print(f"sample {args[0]} {args[1]}: read")
         return 0
     raise UnusableError(f"{verb or '(no verb)'}: wrong arguments\n{_usage()}")
+
+
+def _verdict_verb(
+    root: Path, verb: str, args: list[str], rest: list[str]
+) -> tuple[bool, list[str]]:
+    """``check``, ``post`` and ``decide`` (which prints its line and the ``check`` after it)."""
+    if verb != "decide":
+        return (check if verb == "check" else post)(root, args[0])
+    by = _opt(rest, "--by")
+    if not by:
+        raise UnusableError(f"decide: --by ROLE is required\n{_usage()}")
+    d = decide(root, args[0], args[1], by, args[2])
+    green, lines = check(root, args[0])
+    return green, [f"lens {args[1]}: decided by {d['by']} for subject {d['subject'][:12]}", *lines]
 
 
 def _listing(root: Path, verb: str, args: list[str], rest: list[str]) -> list[str]:

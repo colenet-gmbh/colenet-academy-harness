@@ -85,7 +85,8 @@ breaks a header line between its parts, never inside a frame, so it stays readab
 prod live, an epic done), what blocks (`gate`) and what the owner must do (`todo`). The coordinator
 writes one with `board.py news add --title "<one line>" [--body "<detail>"] [--kind info|gate|todo]`
 (at the top, id `N<n>`), the machinery writes `todo` items itself (bundle, staging past its SLA,
-signals):
+signals, and the launcher's supervisor with `board.py news worker --id W-… --title T`: a worker's
+stop its starter could not be told, a permission prompt older than 15 minutes; once per id):
 
 ```json
 "news": [
@@ -598,7 +599,7 @@ adds. Every rule runs before any write; a refusal writes no row, calls no adapte
 
 | Verb | Rule as the script checks it | Refusal |
 |---|---|---|
-| `select <KEY> [--plan PATH]` | `ENTRY_RULES["selected"]`, in order: the plan on `risk.rules_from` after one fetch (default path `docs/plans/<KEY>-story.md` under `git rev-parse --show-toplevel`), the Ready gate's story checks on that blob, the plan-only tier, a green `ready-<KEY>` lens verdict bound to that blob (green with carried warnings counts, `lens_verdict.py` § Carried warnings); the checkout's copy of the plan is never read, so a stale or missing one selects what main carries | `board.py select <KEY>: refused (plan on main\|ready gate\|tier\|lenses)`, then the group's lines; a later group does not run |
+| `select <KEY> [--plan PATH]` | `ENTRY_RULES["selected"]`, in order: the plan on `risk.rules_from` after one fetch (default path `docs/plans/<KEY>-story.md` under `git rev-parse --show-toplevel`), the Ready gate's story checks on that blob, the plan-only tier, a green `ready-<KEY>` lens verdict whose subject hash is that blob's (an edit of the excluded parts, such as the updates log or `status:`, keeps it, `lens_verdict.py` § Subject; green with carried warnings counts, § Carried warnings; above the round cap green through a holder's decision, § Round cap); the checkout's copy of the plan is never read, so a stale or missing one selects what main carries | `board.py select <KEY>: refused (plan on main\|ready gate\|tier\|lenses)`, then the group's lines; a later group does not run |
 | `move <KEY> on_hold --reopen T` | a non-blank reopen trigger, kept in the row as `reopen` | `board.py move <KEY> <state>: refused: <reason>`, one line per failure |
 | `move <KEY> backlog --epic EPIC` | exactly one `*-epic.md` under `docs/plans/` names `EPIC` (`ticket:`, `epic:` or `linked_epics:`), and its `status:` starts `approved` | as above |
 | `move <KEY> selected` | always refused: `use board.py select` | as above |
@@ -623,11 +624,13 @@ computed: <reason>`. Without `risk.command` the gate warns `tier check off` and 
 `tier: none`. `ready_gate.py story` runs the same tier and prints `tier: <line 1>` on stderr.
 
 **Transitions log.** A passing move appends one row to `board-transitions.jsonl` beside the board
-(`O_APPEND`, only grows): `{key, from, to, via?, rc?, ts, by, tier?, carried?, round?, pr?, reopen?, epic?, ticket}`
+(`O_APPEND`, only grows): `{key, from, to, via?, rc?, ts, by, tier?, carried?, decided?, round?, pr?, reopen?, epic?, ticket}`
 (`via` and `rc` on `done` rows only; `carried` on a `selected` row only: the WARNINGs a green
 Ready panel carries under `ready_panel.warning_ok_after_rounds`, each `{lens, claim, where}`, also
 printed as `carried: <lens>: <claim> (<where>)` lines; the master's worker brief copies them as
-must-dos, `skills/master/SKILL.md` § Build (worker brief); `round` on a `selected` row only, when the
+must-dos, `skills/master/SKILL.md` § Build (worker brief); `decided` on a `selected` row only: the
+lens holders' decisions a Ready panel above `ready_panel.max_rounds` stands on, each `{lens, by,
+sentence}`, also printed as `decided: <lens> by <role>: <sentence>` lines; `round` on a `selected` row only, when the
 verdict file's round was derived from logged runs (`lens_verdict.py` § Derived round), as
 `<N> (derived: …)`, and in a later round `<N> (base: round <M> derived: …)`, also printed as
 `round: …`); `from` is

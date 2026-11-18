@@ -335,8 +335,9 @@ def check_agents_config() -> None:
             fail(f"{rel} reads agents.{key}, which skills/setup/SKILL.md § 3 does not list")
 
     source = (WE / "scripts" / "worker_launch.py").read_text()
-    known = re.search(r"^PLACEHOLDERS = \(([^)]*)\)", source, re.M)
-    placeholders = set(re.findall(r"\"(\w+)\"", known.group(1))) if known else set()
+    # the launch template's placeholders and the worktree template's (`workers.add_worktree`)
+    known = re.findall(r"^(?:TREE_)?PLACEHOLDERS = \(([^)]*)\)", source, re.M)
+    placeholders = {name for group in known for name in re.findall(r"\"(\w+)\"", group)}
     dispatch = (WE / "references" / "worker-dispatch.md").read_text()
     section = re.search(r"^## Worker launch backend\n(.*?)(?=^## |\Z)", dispatch, re.S | re.M)
     if not section:
