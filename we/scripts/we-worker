@@ -51,16 +51,14 @@
 #   -b <branch> origin/<default>`); a start from a linked worktree or outside a repo, and a --resume,
 #   stay where they are. The tree is printed; a created or named tree gets the launcher's marker
 #   (name, key, role, starter, tree, mode; `worker_launch.py marker`).
-#   Supervisor: every start also starts `worker_supervisor.py spawn` (detached): it tells the starter
-#   when the worker ends on a usage limit, an auth error or past its time limit, puts a permission
-#   prompt older than 15 min on the board once, and removes the worker's settings and timer file
-#   when it ends ($WE_WORKER_NO_SUPERVISOR=1 skips it).
+#   Supervisor: every start also starts `worker_supervisor.py spawn` (detached; its docstring owns what
+#   it does); $WE_WORKER_NO_SUPERVISOR=1 skips it.
 #   --resume/-r <id|name>  a short id or name resolves to the full session id; ambiguous, unknown or still
 #                          running (its pid lives: claude would start a copy) refuses without starting
 # A start under a name a running session of any kind holds, or a tmux window already carries, refuses
 # as well, naming that session's tree and state: steer it, or stop it first.
 # A flag before the claude args that neither we-worker nor `claude --help` knows refuses (a typo like
-# `--cwd` would otherwise reach claude as a prompt): run `cd <tree> && we-worker …` instead.
+# `--cwd` would otherwise reach claude as a prompt): run `we-worker <name> --tree <tree> …` instead.
 # A start refuses (exit 2, before any claude call) a name that does not start with the story key (crew
 # `naming.key`, `<key>-<chunk>`; `worker_launch.py check`). The brief is the last argument; one
 # starting with `-`, or none, is an empty brief; a last argument that is blank (`"$(cat <brief>)"` of an empty or unwritten
@@ -523,6 +521,10 @@ mark=0
 if [[ -n "$tree" ]]; then
   tree=$(cd "$tree" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null) ||
     { echo "we-worker: --tree: no git worktree there; no worker started" >&2; exit 2; }
+  if python3 "$wl" tree --main-checkout --repo "$tree" --name "$name" >/dev/null 2>&1; then
+    echo "we-worker: --tree $tree is the main checkout, no worker's tree; a reading worker starts there with --here; no worker started" >&2
+    exit 2
+  fi
   mark=1
 elif [[ $here -eq 0 && $resuming -eq 0 ]] && python3 "$wl" tree --main-checkout --repo "$PWD" --name "$name" >/dev/null 2>&1; then
   tree=$(python3 "$wl" tree --repo "$PWD" --name "$name" ${branch:+--branch "$branch"}) || exit 2

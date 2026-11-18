@@ -149,7 +149,12 @@ WHEN = {
 
 
 def notice(name: str, reason: str, session_id: str | None, tree: str) -> str:
-    resume = f"we-worker {name} --tree {tree} --bg --resume {session_id or '<session id>'}"
+    where = (
+        f"cd {tree} && we-worker {name} --here"
+        if wl.main_checkout(Path(tree))
+        else f"we-worker {name} --tree {tree}"
+    )
+    resume = f"{where} --bg --resume {session_id or '<session id>'}"
     return f"we-worker: {name} ended ({reason}) in {tree}. Resume {WHEN[reason]}: {resume}"
 
 

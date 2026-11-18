@@ -158,14 +158,9 @@ Every variable the launcher decides stands in the file's `env`, a cleared one as
 (`worker_rights.worker_env`): a `--bg` session inherits the daemon's environment, never the
 caller's shell.
 
-Each start also starts the supervisor (`worker_supervisor.py`, detached, no model). A permission
-prompt that holds the same tool call for 15 minutes becomes one board news item; an end on a usage
-limit, an auth error or past the time limit becomes one line with the resume command to the starter
-(its inbox, else the board); then it removes the worker's settings and timer file. `we-worker gc`
-removes the plugin's own files of sessions that no longer live (settings, timer file, marker), lists
-merged clean worktrees whose marker names no living worker with their remove command
-(`workers.remove_worktree`, else `git worktree remove`) and only counts Claude Code's job
-directories; without `--apply` it only prints.
+Each start also starts the supervisor, which tells the starter about a worker's stop and cleans up
+after it; `we-worker gc` removes what dead sessions left (`scripts/worker_supervisor.py`, its
+docstring owns both).
 
 With a template, the Lead:
 

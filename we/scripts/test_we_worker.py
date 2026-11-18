@@ -977,3 +977,5 @@ def test_here_a_linked_worktree_and_tree_choose_the_tree_without_creating_one(tm
     assert [c["cwd"] for c in started(tmp_path)] == [str(project), str(linked), str(linked)]
     assert _git(project, "worktree", "list").count("\n") == 1  # main checkout and linked only
     assert _marker(linked)["name"] == "AC-12-fix"
+    main = run(linked, env, "AC-12-back", "--tree", str(project), "--bg", GO)
+    assert main.returncode == 2 and "--here" in main.stderr
