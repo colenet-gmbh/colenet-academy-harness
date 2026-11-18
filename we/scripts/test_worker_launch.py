@@ -566,6 +566,7 @@ class TestCheckName:
         assert exc.value.code == 2
         assert str(exc.value) == (
             f"worker name {name} carries no story key ([A-Z]+-\\d+), e.g. AB-2856-{name}"
+            " (close, the board and the supervisor find a story's workers by that key)"
         )
 
     def test_the_crews_key_pattern_decides(self, env):

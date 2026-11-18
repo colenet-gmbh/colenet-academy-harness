@@ -86,7 +86,8 @@ So an open version-1 panel survives the upgrade without a new round when only ex
 changed.
 
 Round cap (Ready only, crew ``ready_panel.max_rounds`` = M, default 2, null = off): ``plan ready``
-whose next round lies above M starts no lens. It rebinds the file to today's subject with every
+whose next round lies above M starts no lens. In the measured runs a third round on the same plan
+moved wording, not the verdict, so the holder's decision is the cheaper step. It rebinds the file to today's subject with every
 verdict kept, writes the round and ``capped_from`` (the round and blob those verdicts were given
 on, kept by every later capped round), prints the standing findings and the line ``round cap: the
 lens holder decides`` (or, when every lens was green, ``round cap: changed after the last round;
