@@ -82,6 +82,7 @@ Written always, also when step 4 is declined. Only keys a verb reads:
   "review": { "available": ["claude"] },
   "agents": { "visible_teammates": false, "worker_launch": "subagent" },
   "workers": { "max_busy_sessions": 10, "max_active_5h_percent": 80,
+               "blocked_notify_minutes": 15, "idle_stop_minutes": 30,
                "tree": "caller|own",
                "add_worktree": "<command with {path} {branch}, or null>",
                "remove_worktree": "<command with {path}, or null>",

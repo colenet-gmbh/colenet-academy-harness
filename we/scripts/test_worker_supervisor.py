@@ -65,10 +65,12 @@ def box(tmp_path):
     sent, items = [], []
     clock = Clock()
 
-    def run(*frames, send_ok=True):
+    stops = []
+
+    def run(*frames, send_ok=True, limits=None, tree="/tree"):
         return ws.supervise(
             NAME,
-            "/tree",
+            tree,
             sessions=_feed(*frames),
             clock=clock,
             sleep=clock.sleep,
@@ -76,9 +78,18 @@ def box(tmp_path):
             board=lambda _tree, iid, title, _body="": items.append((iid, title)) or True,
             state=state,
             projects=projects,
+            stop=lambda row: stops.append(row["id"]) or True,
+            limits=limits,
         )
 
-    return {"state": state, "projects": projects, "sent": sent, "items": items, "run": run}
+    return {
+        "state": state,
+        "projects": projects,
+        "sent": sent,
+        "items": items,
+        "stops": stops,
+        "run": run,
+    }
 
 
 LIVE, GONE = [_row(os.getpid())], [_row(DEAD_PID)]
@@ -158,6 +169,122 @@ def test_a_permission_prompt_older_than_15_min_is_one_board_item(box):
     frames = [LIVE] + [waiting] * 40 + [GONE]  # 40 polls of 30 s: 20 minutes on one prompt
     box["run"](*frames)
     assert [iid for iid, _t in box["items"]] == [f"W-{NAME}-0001abcd"]
+
+
+# --- blocked notice and idle stop: one sample is 30 s, so 2 frames are a minute ----------------
+
+ON = {"blocked_notify_minutes": 15 * 60.0, "idle_stop_minutes": 30 * 60.0}
+SAID = {"type": "assistant", "message": {"content": [{"type": "text", "text": "x\nwaits on gh"}]}}
+
+
+def _minutes(n, **row):
+    return [[_row(os.getpid(), **row)]] * (2 * n)
+
+
+def test_a_worker_blocked_15_min_is_named_to_its_starter_once_per_block(box):
+    """Red: 312 of 485 worker hours were `blocked` and the starter was never told."""
+    _transcript(box["projects"], [SAID])
+    blocked = _minutes(20, state="blocked")
+    box["run"](
+        LIVE,
+        *blocked,
+        *_minutes(1, state="working"),
+        *blocked,
+        *_minutes(10, state="blocked"),
+        GONE,
+        limits=ON,
+    )
+    lines = [t for t in box["sent"] if "blocked" in t]
+    assert len(lines) == 2, box["sent"]  # two blocks of 20 and 30 min, one line each
+    assert lines[0].startswith(f"we-worker: {NAME} blocked since ") and lines[0].endswith(
+        " UTC: waits on gh"
+    ), lines[0]
+
+
+def test_a_block_shorter_than_the_limit_or_a_notice_turned_off_says_nothing(box):
+    box["run"](LIVE, *_minutes(14, state="blocked"), GONE, limits=ON)
+    box["run"](
+        LIVE, *_minutes(60, state="blocked"), GONE, limits={**ON, "blocked_notify_minutes": None}
+    )
+    assert not box["sent"] and not box["stops"]
+
+
+def test_a_blocked_notice_the_socket_refuses_goes_to_the_board(box):
+    box["run"](LIVE, *_minutes(16, state="blocked"), GONE, limits=ON, send_ok=False)
+    ((iid, title),) = box["items"]
+    assert iid.startswith(f"W-{NAME}-blocked-") and "no status line" in title
+
+
+def test_a_done_worker_idle_30_min_is_stopped_once_and_its_starter_told(box):
+    """Red: 161 workers sat idle after their report, median 0.84 h, p90 4 h."""
+    box["run"](LIVE, *_minutes(29, state="done"), *_minutes(2, state="done"), GONE, limits=ON)
+    assert box["stops"] == ["bg1"]
+    assert any("stopped after 30 min idle" in t and "tree stays: /tree" in t for t in box["sent"])
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        _minutes(60, state="blocked"),
+        _minutes(60, state="working", status="idle"),
+        _minutes(29, state="done") + _minutes(1, state="working") + _minutes(29, state="done"),
+        _minutes(60, status="idle"),  # a window worker that sent no report
+    ],
+    ids=["blocked", "working", "done-twice-under-the-limit", "window-without-report"],
+)
+def test_never_stopped_while_blocked_working_or_without_its_report(box, rows):
+    box["run"](LIVE, *rows, GONE, limits=ON)
+    assert not box["stops"]
+
+
+def test_never_stopped_with_a_queued_start_of_its_name_or_the_stop_turned_off(box):
+    (box["state"] / "queue").mkdir()
+    (box["state"] / "queue" / f"{NAME}.json").write_text(
+        json.dumps({"name": NAME, "queued_at": 1})
+    )
+    box["run"](LIVE, *_minutes(60, state="done"), GONE, limits=ON)
+    (box["state"] / "queue" / f"{NAME}.json").unlink()
+    box["run"](LIVE, *_minutes(60, state="done"), GONE, limits={**ON, "idle_stop_minutes": None})
+    assert not box["stops"]
+
+
+def test_never_stopped_when_its_marker_says_parked(box, repo):
+    ws.wl.write_marker(repo, name=NAME, starter="lead", parked="checkpoint pending")
+    box["run"](LIVE, *_minutes(60, state="done"), GONE, limits=ON, tree=str(repo))
+    assert not box["stops"]
+
+
+def test_a_window_worker_idle_after_its_report_is_stopped(box, repo):
+    ws.wl.write_marker(repo, name=NAME, starter="lead")
+    report = {
+        "type": "assistant",
+        "message": {
+            "content": [{"type": "tool_use", "name": "SendMessage", "input": {"to": "lead"}}]
+        },
+    }
+    _transcript(box["projects"], [{"type": "user", "message": {"content": "go"}}, report])
+    box["run"](LIVE, *_minutes(31, status="idle"), GONE, limits=ON, tree=str(repo))
+    assert box["stops"] == ["bg1"]
+
+
+@pytest.mark.parametrize(
+    "block, want",
+    [
+        ({}, {"blocked_notify_minutes": 900.0, "idle_stop_minutes": 1800.0}),
+        (
+            {"blocked_notify_minutes": 0, "idle_stop_minutes": None},
+            {"blocked_notify_minutes": None, "idle_stop_minutes": None},
+        ),
+        (
+            {"blocked_notify_minutes": 5, "idle_stop_minutes": "soon"},
+            {"blocked_notify_minutes": 300.0, "idle_stop_minutes": 1800.0},
+        ),
+    ],
+)
+def test_idle_limits_read_the_workers_block(repo, block, want):
+    (repo / ".weside").mkdir(exist_ok=True)
+    (repo / ".weside" / "config.json").write_text(json.dumps({"workers": block}))
+    assert ws.idle_limits(str(repo)) == want
 
 
 def test_a_session_that_never_shows_up_keeps_its_files(box):
