@@ -26,7 +26,8 @@ owners could not settle, or a red flag says the course is wrong.
 
 ## At start
 
-1. Read the escalations waiting on you: `board.py escalation list` (skill `/we:decide` § 3).
+1. Read the escalations waiting on you (`board.py escalation list`): each is one decision question
+   on the board with both positions, their costs and whether it is reversible in its text.
 2. Read the red flags of the newest flow report.
 3. Decide or route each, one line per decision to {coordinator|the coordinator}.
 

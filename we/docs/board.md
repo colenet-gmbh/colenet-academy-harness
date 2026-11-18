@@ -567,7 +567,7 @@ writes, `bundle` runs `escalation route`; each open record at stage `bundle` add
 
 ## Escalations
 
-`board.py escalation` holds the decision story between two role holders (skill `/we:decide`). It
+`board.py escalation` holds the decision story between two role holders. It
 appends events to `board-escalations.jsonl` beside the board (`O_APPEND`, only grows); a record is
 the fold of its events by `id` in log order (`fold_escalations`). A party opens one with
 `escalation open --key <KEY> --parties <role>,<role> --question "<q>" --a "<option>" --a-cost "<cost>"
