@@ -15,9 +15,10 @@ execution:
   timeout_seconds: 240
   allowed_tools: [Read, Glob, Grep, Skill]
   prompt: |
-    You are the refiner for ACME-14. Your plan is written at /tmp/plan/ACME-14-story.md and goes to
-    docs/plans/ACME-14-story.md on main. The current directory is the shared main checkout; other
-    sessions work in it. Read this repo's .weside/config.json, then land the plan on main.
+    You run /we:master for ACME-14. Its refiner wrote the plan at /tmp/plan/ACME-14-story.md (no
+    staging-check file); the DoR scan and the claim check passed and you set `status: approved`. The
+    plan goes to docs/plans/ACME-14-story.md on main. The current directory is the shared main
+    checkout; other sessions work in it. Commit and land the plan the way /we:master says for this repo.
     Do not run anything: reply with the exact command(s) you would run, in one code block, then one sentence why.
 graders:
   - name: scratch-worktree
