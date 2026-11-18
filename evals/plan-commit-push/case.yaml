@@ -1,0 +1,38 @@
+schema_version: "1.1"
+name: plan-commit-push
+description: |
+  From: November 2026 (plan family 7) — every plan cost a docs PR, its review runs and a wait for the
+  merge before anyone could build. A repo whose config says `plans.land: push` lands the plan from
+  the scratch worktree by `plan_push.py`, without a PR.
+tags: [plan, family-7]
+plugins: ["../../we"]
+runs: 2
+context:
+  scaffold_script: scaffold.sh
+execution:
+  model: claude-opus-5-5
+  max_turns: 8
+  timeout_seconds: 240
+  allowed_tools: [Read, Glob, Grep, Skill]
+  prompt: |
+    You are the refiner for ACME-14. Your plan is written at /tmp/plan/ACME-14-story.md and goes to
+    docs/plans/ACME-14-story.md on main. The current directory is the shared main checkout; other
+    sessions work in it. Read this repo's .weside/config.json, then land the plan on main.
+    Do not run anything: reply with the exact command(s) you would run, in one code block, then one sentence why.
+graders:
+  - name: scratch-worktree
+    type: regex
+    pattern: "git[^\\n]*\\bworktree\\s+add\\b"
+  - name: lands-by-plan-push
+    type: regex
+    pattern: "plan_push\\.py"
+  - name: no-docs-pr
+    type: regex
+    pattern: "^\\s*(\\$\\s*)?gh\\s+pr\\s+create\\b"
+    flags: "m"
+    match: "not_contains"
+  - name: no-commit-in-the-shared-checkout
+    type: regex
+    pattern: "^\\s*git\\s+(add|commit)\\b"
+    flags: "m"
+    match: "not_contains"

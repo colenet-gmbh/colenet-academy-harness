@@ -33,7 +33,8 @@ A store exists only where a human created it (`/we:setup` asks). A verb that fin
 
 **Where store commits land.** `references/plan-commit.md` step 1 decides from the repo's own
 instruction files. When they say nothing, its default (a docs PR) does not apply here: a manual
-verb asks once, `--auto` stages.
+verb asks once, `--auto` stages. Under `plans.land: push` a store commit lands by `plan_push.py` only
+where `plans.push_paths` covers `.weside/optimization/**`; its path refusal sends it the PR way.
 
 **Staging.** An automatic retro cannot ask and cannot open a PR. Where the repo's instruction files
 grant no direct docs commit, it writes its entries to `~/.claude/we-inbox/<repo>/` instead, in the

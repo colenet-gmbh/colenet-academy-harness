@@ -1,12 +1,13 @@
 ---
 name: plan-commit
-description: Where and how a plan or planning doc (story plan, epic plan, mirror refresh, optimization store) is committed — repo fact first, else a detached scratch worktree that lands by a docs PR with auto-merge.
+description: Where and how a plan or planning doc (story plan, epic plan, mirror refresh, optimization store) is committed — repo fact first, else a detached scratch worktree that lands by push (plans.land push) or by a docs PR with auto-merge.
 ---
 
 # Plan commit
 
 Every verb that commits a planning document follows this section: `/we:epic` (also a mirror
-refresh), `/we:master` (the plans its refiner workers wrote), `/we:merged`,
+refresh), `/we:master` (the plans its refiner workers wrote), `/we:plan-story` (when its brief makes
+it commit), `/we:merged`,
 `/we:retro`, `/we:instruction-audit`, `/we:optimize`.
 
 1. **Repo fact first.** `.weside/orchestrate.md` § *Where plan commits land*, else the instruction
@@ -40,34 +41,49 @@ refresh), `/we:master` (the plans its refiner workers wrote), `/we:merged`,
 
    A commit that did not move HEAD was aborted by an auto-fixing hook: `add` again and commit again,
    never `--amend`.
-5. **Land by PR.** A default branch under a ruleset takes no push, a bot's included, so docs reach
-   it through a PR that merges itself:
-   - a repo fact that names a docs-PR verb wins (one command that rebases, refuses non-docs and
-     arms auto-merge, often onto one rolling PR per session and UTC day); run it in `<scratch>`
-     and follow its refusals, the fallback below is only for repos without one;
-   - else pick the branch `<b>`: `docs/<KEY>-<slug>`, or `docs/<verb>-<UTC date>` for a verb with
-     no story key (`/we:retro`, `/we:optimize`, `/we:instruction-audit`; the PR body names the
-     verb). `<b>` exists without an open PR (`gh pr list --head <b> --state open`): suffix it with
-     the UTC date, still taken, with `-<n>`.
-     - A document that waits on a decision goes up as a draft PR (`gh pr create --draft`), armed once decided.
-     - **Open PR on `<b>`:** add your commits to it, no new PR. A second change to a file already on
-       the open PR starts from `origin/<b>`, not from the default branch:
-       `git -C <scratch> fetch origin <b> && git -C <scratch> rebase --onto origin/<b> HEAD~<n>`
-       (`<n>` = your commits), then `git -C <scratch> push origin HEAD:refs/heads/<b>`.
-     - **New branch:** `git -C <scratch> fetch origin && git -C <scratch> rebase origin/<default>`,
-       `git -C <scratch> push origin HEAD:refs/heads/<b>`, `gh pr create --base <default> --head
-       <b>` with the key and the files in the body, and `gh pr merge <b> --auto` with the repo's
-       merge method.
+5. **Land.** `plans.land` in `.weside/config.json` picks the way: `push` or `pr` (default; also
+   every repo without the key). A repo fact of step 1 wins over both.
+   - **`push`:** run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/plan_push.py` in `<scratch>`. It rebases
+     onto `origin/<default>`, refuses paths outside `plans.push_paths` (default `docs/plans/**`, plus
+     a staging-check file still in its planned state travelling with its plan), runs the secret scan
+     (`plans.secret_scan`, default gitleaks) and pushes, retrying a lost race up to three times.
+     - Exit 0: the document is on the default branch. A step that needs it there (Ready gate,
+       `board.py select`, a dispatch reading the plan) runs at once, after `git fetch origin`, on
+       `origin/<default>`; no PR, no wait.
+     - Exit 1, refused: a secret finding names file and line; take the value out and commit again
+       (never set `plans.secret_scan` to `"none"` to get past a finding). Paths outside the globs:
+       land these commits the PR way below. Nothing was pushed.
+     - Exit 3, "this repo takes no direct push": the PR way below, same commits.
+     - Exit 2: a git error or a rebase conflict; report its line, nothing was pushed.
+   - **`pr`** (and exit 3, or a path refusal): a default branch under a ruleset takes no push from
+     an account without a bypass, so docs reach it through a PR that merges itself:
+     - a repo fact that names a docs-PR verb wins (one command that rebases, refuses non-docs and
+       arms auto-merge, often onto one rolling PR per session and UTC day); run it in `<scratch>`
+       and follow its refusals, the fallback below is only for repos without one;
+     - else pick the branch `<b>`: `docs/<KEY>-<slug>`, or `docs/<verb>-<UTC date>` for a verb with
+       no story key (`/we:retro`, `/we:optimize`, `/we:instruction-audit`; the PR body names the
+       verb). `<b>` exists without an open PR (`gh pr list --head <b> --state open`): suffix it with
+       the UTC date, still taken, with `-<n>`.
+       - A document that waits on a decision goes up as a draft PR (`gh pr create --draft`), armed once decided.
+       - **Open PR on `<b>`:** add your commits to it, no new PR. A second change to a file already on
+         the open PR starts from `origin/<b>`, not from the default branch:
+         `git -C <scratch> fetch origin <b> && git -C <scratch> rebase --onto origin/<b> HEAD~<n>`
+         (`<n>` = your commits), then `git -C <scratch> push origin HEAD:refs/heads/<b>`.
+       - **New branch:** `git -C <scratch> fetch origin && git -C <scratch> rebase origin/<default>`,
+         `git -C <scratch> push origin HEAD:refs/heads/<b>`, `gh pr create --base <default> --head
+         <b>` with the key and the files in the body, and `gh pr merge <b> --auto` with the repo's
+         merge method.
 
-   A push straight to the default branch only where the instruction files grant it for docs. A
-   rejected push (non-fast-forward included) is reported with its message, never forced. The
-   document is on the default branch once the PR merged. A step that needs it there (a dispatch
-   reading the plan, Selected for Development) waits with a background
+   A push straight to the default branch only by `plan_push.py` under `plans.land: push`, or where
+   the instruction files grant it for docs. Any other rejected push (non-fast-forward included) is
+   reported with its message, never forced. On the PR way the document is on the default branch
+   once the PR merged; a step that needs it there (a dispatch reading the plan, Selected for
+   Development) waits with a background
    `watch-pr-checks.sh <number> --until-merged` until its final line reads `merged`. If `gh pr merge --auto` is
    refused (auto-merge off in the repo), a required review blocks, or the PR is not merged within
    60 min: report the PR URL to the owner (in a crew: the coordinator) and leave the
    story unselected; never merge by hand, never force. The PR URL goes into your report before
    step 6, it outlives the scratch tree.
-6. **Clean up** in a command of its own, only after the push exited 0 (and, on the PR path, the PR is open and its URL is in your report): `git worktree remove <scratch>`
+6. **Clean up** in a command of its own, only after the push (or `plan_push.py`) exited 0 (and, on the PR path, the PR is open and its URL is in your report): `git worktree remove <scratch>`
    (never `--force`, never chained to the commit or push: a rejected push then deletes the only
    copy). Remove a refiner's worktree with the repo's own worktree verb when it has one.
