@@ -206,7 +206,8 @@ forms; the short form names them in the AC's `ci:` detail.
 
 The Ready gate accepts it only while `## Files` names at most `plans.short_max_files` paths
 (`.weside/config.json`, default 3), none of them marked `(other repo)`, and none on a `path` rule
-of any section of the checkout's `.weside/risk-paths` (a repo without the file gets no short form).
+of any section of `.weside/risk-paths` (a repo without the file gets no short form). Both files are
+read on the crew's `risk.rules_from` (default `origin/main`), never in the tree that holds the plan.
 Everything else refuses with "use the full form": rewrite the plan in § Sections, never trim the
 files to fit.
 
@@ -260,8 +261,9 @@ gate reads, check 9).
 `ready_gate.py story <plan>` prints one line per failure, `<plan>:<line>: <place>: <what is
 missing>` (the line to fix; without `:<line>` where nothing in the plan marks the place, such as
 a missing section), and exits 1; exit 0 is ready, 2 a usage error. It reads the plan file it is
-given, the epic plan beside it and the crew of its checkout, never `origin/main`: the refiner runs
-it on its branch before the plan lands; only the tier waits for main (one warning). Warnings go to stderr, prefixed `warning:`, and never
+given, the epic plan beside it and the crew of its checkout, not the plan from `origin/main`: the refiner runs
+it on its branch before the plan lands; only the tier waits for main (one warning), and the short
+form's two limits are read there. Warnings go to stderr, prefixed `warning:`, and never
 change the exit. The gate takes the mode and the plan, nothing else: no option turns a check off.
 Every repo value comes from the crew (`scripts/crew.py`).
 

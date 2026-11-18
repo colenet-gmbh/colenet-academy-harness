@@ -780,11 +780,21 @@ RULES = (
 
 
 def short_repo(tmp_path: Path, rules: str | None = RULES, config: dict | None = None) -> Path:
+    """The fixture repo as a real git repo whose `origin/main` carries the rules and the config:
+    the short form reads both there, never in the tree."""
     root = repo(tmp_path)
     if rules is not None:
         (root / ".weside" / "risk-paths").write_text(rules)
     if config is not None:
         (root / ".weside" / "config.json").write_text(json.dumps(config))
+    shutil.rmtree(root / ".git")
+    for argv in (
+        ["init", "-q"],
+        ["add", "-A"],
+        ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "base"],
+        ["update-ref", "refs/remotes/origin/main", "HEAD"],
+    ):
+        subprocess.run(["git", "-C", str(root), *argv], check=True, capture_output=True)
     return root
 
 
@@ -854,7 +864,11 @@ def test_a_line_rule_judges_a_diff_not_a_short_plan(tmp_path):
 @pytest.mark.parametrize(
     ("rules", "edit", "expected"),
     [
-        (None, None, "## Files: no {rules} to check the files against; {full}"),
+        (
+            None,
+            None,
+            "## Files: no .weside/risk-paths on origin/main to check the files against; {full}",
+        ),
         (RULES, ("## Should\n", "## Shall\n"), "## Should: section missing"),
         (RULES, ("## Files\n", "## Paths\n"), "## Files: section missing"),
         (
@@ -879,9 +893,32 @@ def test_the_short_form_refusals(tmp_path, rules, edit, expected):
     root = short_repo(tmp_path, rules=rules)
     path = short_with(root, *edit) if edit else root / plan(root, "short")
     out = gate(root, "story", str(path))
-    want = expected.format(rules=root / ".weside" / "risk-paths", full=ready_gate.FULL_FORM)
+    want = expected.format(full=ready_gate.FULL_FORM)
     assert out.returncode == 1
     assert [line for line in out.stdout.splitlines() if want in line], out.stdout
+
+
+def test_rules_and_limit_in_the_tree_do_not_count(tmp_path):
+    root = short_repo(tmp_path)
+    (root / ".weside" / "risk-paths").write_text("# emptied in the tree\n")
+    (root / ".weside" / "config.json").write_text(json.dumps({"plans": {"short_max_files": 9}}))
+    extra = "".join(f"- `src/auth/{n}.py`\n" for n in range(3))
+    path = short_with(root, FILES_ANCHOR, extra + FILES_ANCHOR)
+    out = gate(root, "story", str(path))
+    assert out.returncode == 1
+    assert "5 files, the short form holds at most 3" in out.stdout
+    assert "is on the risk path `src/auth/**`" in out.stdout
+
+
+def test_a_standalone_short_plan_in_another_repo_gets_one_fix(tmp_path):
+    root = short_repo(tmp_path)
+    path = short_with(root, "epic: PROJ-1\n", "")
+    short_with(root, FILES_ANCHOR, "- `lib/csv/parse.py` (other repo)")
+    out = gate(root, "story", str(path))
+    assert out.returncode == 1
+    assert out.stdout.splitlines() == [
+        f"{path}:29: ## Files: `lib/csv/parse.py` is in another repo; {ready_gate.FULL_FORM}"
+    ]
 
 
 def test_a_full_plan_ignores_the_short_form_rules(tmp_path):

@@ -13,8 +13,9 @@ as a missing section), 2 usage or an unreadable plan. Warnings go to stderr, eac
 ``warning:``, and never change the exit. There is no option: no caller can switch a check off.
 
 The gate reads the plan file it is given, the epic plan beside it and the crew of its checkout,
-never ``origin/main``: it runs on a refiner's branch before the plan lands. Only the tier (check
-10) needs the plan on ``risk.rules_from`` and defers there with one warning.
+not the plan from ``origin/main``: it runs on a refiner's branch before the plan lands. Only the
+tier (check 10) needs the plan on ``risk.rules_from`` and defers there with one warning; the short
+form's limits (check 9c) are read there too.
 
 The grammar it parses is owned by ``references/story-plan.md`` (§ Oracle-class marker, § What the
 Ready gate reads); this docstring only lists the story checks in their order:
@@ -35,8 +36,9 @@ Ready gate reads); this docstring only lists the story checks in their order:
    there);
 9c. the short form (``form: short``): the sections ``SHORT_SECTIONS`` replace the full set, the
    paths come from ``## Files`` (at most ``plans.short_max_files`` of ``.weside/config.json``,
-   default 3), and a path on a rule of the checkout's ``.weside/risk-paths``, a path marked
-   ``(other repo)``, or no rules file at all refuses with "use the full form";
+   default 3), and a path on a rule of ``.weside/risk-paths``, a path marked ``(other repo)``,
+   or no rules file at all refuses with "use the full form"; both files are read from
+   ``risk.rules_from`` (default ``origin/main``), never from the tree that holds the plan;
 10. the plan's tier (``plan_tier.py``): the repo's ``risk.command`` on the plan alone, in a
     scratch tree at ``risk.rules_from``. A success prints ``tier: <line 1>`` on stderr, a
     failure is one stdout line ``<plan>: tier: tier not computed: <reason>``; without a
@@ -51,7 +53,7 @@ keys than the crew's ``limits.epic_stories`` upper bound is one warning.
 ``story_failures(plan)`` runs checks 1-9c for ``board.py select``, which runs the tier itself.
 
 Every repo value comes from the crew through ``crew.py`` (a ``CrewError`` is a refusal), except
-the short form's two: ``plans.short_max_files`` and the rules file, both read in the checkout. Python
+the short form's two: ``plans.short_max_files`` and the rules file, both read on ``risk.rules_from``. Python
 3.9, stdlib only.
 """
 
@@ -100,6 +102,7 @@ REQUIRED_SECTIONS = (
 SHORT = "short"
 SHORT_SECTIONS = ("Is", "Should", "Acceptance Criteria", "Files", "Verification")
 SHORT_MAX_FILES = 3
+RISK_RULES = ".weside/risk-paths"
 FULL_FORM = "use the full form (references/story-plan.md § Short form)"
 CLASSES = ("receipt", "ci", "walk")
 RECEIPT_TIMEOUT = 60
@@ -481,7 +484,7 @@ class Gate:
         if epic is not None:
             self._fence(epic, meta["epic"], found_phases)
             self._goals(epic)
-        else:
+        elif not short:  # the short form refuses an (other repo) path itself
             self._phase_repos(found_phases)
         if "Implementation Phases" in present and not any(ph.paths for ph in found_phases):
             self.fail(
@@ -513,12 +516,15 @@ class Gate:
                     f"`{path}` is in another repo; {FULL_FORM}",
                     path_line(self.text, 0, path),
                 )
-        rules = self.root / ".weside" / "risk-paths"
-        try:
-            globs = risk_globs(rules.read_text(encoding="utf-8"))
-        except OSError:
-            self.fail("## Files", f"no {rules} to check the files against; {FULL_FORM}", at)
+        text = self._on_ref(RISK_RULES)
+        if text is None:
+            self.fail(
+                "## Files",
+                f"no {RISK_RULES} on {self._ref()} to check the files against; {FULL_FORM}",
+                at,
+            )
             return
+        globs = risk_globs(text)
         for path in paths:
             hit = next((g for g, pattern in globs if pattern.match(path)), None)
             if hit is not None:
@@ -529,13 +535,11 @@ class Gate:
                 )
 
     def _short_max_files(self) -> int | None:
-        """``plans.short_max_files`` of the checkout's ``.weside/config.json``, default 3; a value
-        that is no positive integer is one failure and None."""
+        """``plans.short_max_files`` of ``.weside/config.json`` on ``risk.rules_from``, default 3; a
+        value that is no positive integer is one failure and None."""
         try:
-            config = json.loads(
-                (self.root / ".weside" / "config.json").read_text(encoding="utf-8")
-            )
-        except (OSError, ValueError):
+            config = json.loads(self._on_ref(".weside/config.json") or "{}")
+        except ValueError:
             config = {}
         plans = config.get("plans") if isinstance(config, dict) else None
         value = (
@@ -547,6 +551,24 @@ class Gate:
             self.fail("config", f"plans.short_max_files {value!r} is no positive integer")
             return None
         return value
+
+    def _ref(self) -> str:
+        return str((self.crew.get("risk") or {}).get("rules_from") or "origin/main")
+
+    def _on_ref(self, rel: str) -> str | None:
+        """``rel`` as committed on ``risk.rules_from``, None when absent or unreadable: the short
+        form's limits come from the default branch, never from the tree whose plan they judge."""
+        try:
+            done = subprocess.run(
+                ["git", "-C", str(self.root), "show", f"{self._ref()}:{rel}"],
+                capture_output=True,
+                text=True,
+                timeout=RECEIPT_TIMEOUT,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return done.stdout if done.returncode == 0 else None
 
     def _oracle_line(self, text: str) -> None:
         """Check 9b: warn now what the PR hook refuses at `gh pr create`."""

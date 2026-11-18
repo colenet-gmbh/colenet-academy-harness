@@ -116,7 +116,7 @@ Read, search and write only with the Read, Grep, Glob, Edit and Write tools unde
 The refiner gates, lands, runs the Ready panel, fixes within the round cap and selects
 (`/we:plan-story` § Carry to Selected); its land step checks the code claims, you run no explore pass
 over its plan. While it runs: a docs PR URL it sends you is armed per `plan-commit.md` step 5. On its
-report: `selected` → the story builds (§ Build), its ticket moved per `ticketing.md`, which names the mover for every state; `capped` → its standing findings go to each holder it
+report: `selected` → the story builds (§ Build), its ticket already moved by the refiner (`ticketing.md`, which names the mover for every state); `capped` → its standing findings go to each holder it
 names (`/we:lens` § Round cap); `selected: no` → one line to the role it names; `blocked` → the fork
 goes to its owner. Then remove the refiner's worktree (`plan-commit.md` step 6).
 
