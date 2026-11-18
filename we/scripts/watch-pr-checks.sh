@@ -12,7 +12,8 @@
 #                     no review does not end it while the PR can still merge (armed, mergeStateStatus
 #                     CLEAN, UNSTABLE or HAS_HOOKS: GitHub merges past a red non-required check).
 #                     Green with auto-merge off prints `waiting <sha>: green · merge: <state> · auto-merge
-#                     off — <who arms it> — watching to the merge` once per head and keeps polling, and a
+#                     off — <who arms it> — watching to the merge` once per head and keeps polling (a
+#                     BLOCKED past WATCH_BLOCKED_GRACE still ends it, armed or not), and a
 #                     moved head prints `head moved <old> -> <new> — watching it` and is followed: a
 #                     watcher that ended there left its master sitting next to a PR that merged later.
 #   --human-merge     for a PR only a human merges (one-way, never armed): --until-merged that
@@ -517,7 +518,8 @@ while :; do
       # Auto-merge off is said once and watched past: the caller arms it (or the human merges) and
       # still gets the `merged` exit; DIRTY, BEHIND and a long BLOCKED need the session, so they end.
       if [ -n "$UNTIL_MERGED" ] && [ -z "$HUMAN_MERGE" ] && [ "$(field 4)" = off ] \
-        && [ "$(field 1)" != DIRTY ] && [ "$(field 1)" != BEHIND ]; then
+        && [ "$(field 1)" != DIRTY ] && [ "$(field 1)" != BEHIND ] \
+        && ! { [ "$(field 1)" = BLOCKED ] && [ $(($(date +%s) - STABLE_SINCE)) -ge "$BLOCKED_GRACE" ]; }; then
         [ "$OFF_SAID" = "$SHA" ] || echo "waiting $SHA: green · $(merge_note) — watching to the merge"
         OFF_SAID=$SHA
       elif [ -z "$UNTIL_MERGED" ] || merge_stuck; then

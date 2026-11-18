@@ -542,6 +542,14 @@ def test_until_merged_says_auto_merge_off_once_and_watches_to_the_merge(tmp_path
     )
 
 
+def test_until_merged_ends_an_unarmed_pr_blocked_past_the_grace(tmp_path, monkeypatch):
+    """A required review holds an unarmed PR too: polling it to the lifetime cap helps nobody."""
+    monkeypatch.setenv("WATCH_BLOCKED_GRACE", "0")
+    unarmed = {**_green(), "mergeStateStatus": "BLOCKED"}
+    code, out = run(tmp_path, [unarmed] * 6, "--until-merged")
+    assert code == 0 and out[-1].startswith(f"final {SHA}: green") and "BLOCKED" in out[-1], out
+
+
 def test_until_merged_follows_a_moved_head_to_the_merge(tmp_path):
     """Red: a push during the watch ended it with exit 3 and nobody watched the new head."""
     new = "b" * 40
