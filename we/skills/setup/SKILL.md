@@ -105,7 +105,8 @@ receipt for the acceptance keeper; `lenses.acceptance.sample` stays the lens sam
 `workers.tree`, `add_worktree`, `remove_worktree` and `context` shape a `we-worker` start: whether
 a start from the main checkout gets its own tree (`own`; default `caller`, it stays there), the repo's
 worktree commands and the worker's lean settings (`${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md`
-§ Tree, context and end). Write them only when the repo has a worktree command of its own or the
+§ Tree, context and end). Write them only when the repo has a worktree command of its own, the
+user wants every worker started from the main checkout in a tree of its own (`tree: own`), or the
 user names plugins or MCP servers a worker never needs; absent, the plugin's defaults hold.
 
 `plans.secret_scan` stays `null` (gitleaks) unless the user names a scanner: a command with `{range}`

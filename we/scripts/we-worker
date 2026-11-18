@@ -531,8 +531,8 @@ elif [[ $here -eq 0 && $resuming -eq 0 ]]; then
   created=$(python3 "$wl" tree --auto --repo "$PWD" --name "$name" ${branch:+--branch "$branch"}) || rc=$?
   case $rc in
     0) tree=$created; mark=1 ;;
-    1) ;;
-    *) exit 2 ;;
+    3) ;;
+    *) echo "we-worker: no tree for $name (above); no worker started" >&2; exit 2 ;;
   esac
 fi
 if [[ -n "$tree" ]]; then

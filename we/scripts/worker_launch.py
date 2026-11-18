@@ -61,7 +61,8 @@ Usage:
                                                    creates the worker's own worktree beside the
                                                    main checkout (`add_tree`) and prints its path;
                                                    --auto only under `workers.tree: own`
-                                                   (`auto_tree`), exit 1 when it creates none;
+                                                   (`auto_tree`), exit 3 when it creates none
+                                                   (any other non-zero: the start stops);
                                                    --main-checkout only prints the main
                                                    checkout's top, exit 1 when <dir> is none
   worker_launch.py marker --tree <wt> --name <n> [--key K] [--role R] [--starter S] [--mode M]
@@ -519,6 +520,7 @@ def tree_path(top: Path, name: str) -> Path:
 
 
 TREE_MODES = ("caller", "own")
+NO_TREE = 3  # `tree --auto`: no tree to create, the start stays where it is
 
 
 def tree_mode(repo: Path) -> str:
@@ -1024,7 +1026,10 @@ def _tree_verbs(args: argparse.Namespace) -> int:
     if args.main_checkout:
         top = main_checkout(args.repo.resolve())
     elif args.auto:
+        # 3, never 1: an exit 1 is also a failed creation, which must stop the start
         top = auto_tree(args.repo.resolve(), args.name, args.branch)
+        if top is None:
+            return NO_TREE
     else:
         top = add_tree(args.repo.resolve(), args.name, args.branch)
     if top is None:

@@ -968,6 +968,10 @@ def test_under_tree_own_a_build_start_in_the_main_checkout_lands_in_a_new_worktr
     }
     again = run(project, env, "AC-12-impl", "--bg", GO)
     assert again.returncode == 2 and f"--tree {tree}" in again.stderr
+    _git(project, "branch", "feat/AC-12-left")  # a branch left after its tree went: add fails
+    left = run(project, env, "AC-12-left", "--bg", GO)
+    assert left.returncode == 2 and "no worker started" in left.stderr
+    assert len(started(tmp_path)) == 1  # never a start in the main checkout
 
 
 def test_here_a_linked_worktree_and_tree_choose_the_tree_without_creating_one(tmp_path):
