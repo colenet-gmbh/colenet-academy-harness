@@ -36,6 +36,19 @@ TRANSCRIPT = [
             "tools": [{"name": "Read", "description": "TOOL-TEXT", "input_schema": {}}],
         },
     },
+    {"type": "user", "message": {"content": "hi"}},
+    {
+        "type": "assistant",
+        "message": {
+            "usage": {
+                "input_tokens": 10,
+                "cache_creation_input_tokens": 2_000,
+                "cache_read_input_tokens": 38_000,
+                "output_tokens": 99,
+            }
+        },
+    },
+    {"type": "assistant", "message": {"usage": {"input_tokens": 5}}},
 ]
 
 
@@ -70,11 +83,15 @@ def test_worker_table_sums_the_gate_count_plus_memory_and_transcript_sizes(
     crew_path, crew = crewlib.find_and_load(repo)
     [total] = render_process.total_rows(crew_path, crew, "worker", home)
     memory = len(f"MEMORY-TEXT\n{FROM_MEMORY}\n")
-    shape = TRANSCRIPT[-1]["shape"]
+    shape = next(e for e in TRANSCRIPT if e["type"] == "api-request-shape")["shape"]
     system = len(shape["system"][0]["text"])
     tools = len(json.dumps(shape["tools"][0]))
     real = total.total + memory + system + tools + 300 + 40
-    assert f"the budget gate counts {total.total:,} chars, the table sums {real:,}" in out
+    assert f"measured start: 40,010 tokens (estimated sum {cl.tokens(real):,})" in out
+    assert (
+        f"the budget gate counts {total.total:,} chars (≈ {cl.tokens(total.total):,} tokens)"
+        f" of a measured start of 40,010 tokens ({cl.tokens(total.total) * 100 // 40_010} % counted)"
+    ) in out
     assert "transcript: s1.jsonl" in out
     for text in ("MEMORY-TEXT", "SYSTEM-TEXT", "TOOL-TEXT", "SSSS"):
         assert text not in out, text
@@ -84,8 +101,12 @@ def test_without_a_transcript_the_parts_read_na_and_the_sum_is_a_floor(
     tmp_path, monkeypatch, capsys
 ):
     repo, home = world(tmp_path, monkeypatch, transcript=False)
+    resumed = [{"type": "assistant", "message": {"usage": {"input_tokens": 1}}}, *TRANSCRIPT]
+    project = tmp_path / "cfg" / "projects" / cl.project_slug(repo.resolve())
+    (project / "resumed.jsonl").write_text("\n".join(json.dumps(e) for e in resumed) + "\n")
     out = run(repo, home, capsys).out
     assert f"transcript: {cl.NA}" in out and "the table sums ≥ " in out
+    assert "measured start: n/a tokens" in out
 
 
 def test_duplicates_quote_repo_files_and_never_the_memory_index(tmp_path, monkeypatch, capsys):

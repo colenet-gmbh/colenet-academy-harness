@@ -5,8 +5,10 @@ Usage: context_load.py [--from DIR] [--role R ...] [--home DIR] [--md]
 
 Per session of each role (default: every role of ``render_process.all_roles``) one table: part,
 source, characters, estimated tokens (characters ÷ 4) and the delta to the last report. Then the
-line ``counted vs real`` (what ``check-instruction-budget.py --role-totals`` counts against what
-the table sums), the five largest single files and the duplicate sentences.
+line ``measured start`` (the tokens of the transcript's first request: input, cache creation and
+cache read of its first assistant entry's usage; ``n/a`` without one), the line ``counted vs real``
+(what ``check-instruction-budget.py --role-totals`` counts against the measured start, else against
+what the table sums), the five largest single files and the duplicate sentences.
 
 Sources:
   disk        the counted parts, from ``render_process.total_rows`` (the gate's own counter): L0,
@@ -16,8 +18,8 @@ Sources:
               Claude Code loads it: the first 200 lines, at most 25,000 characters. Its content is
               never shown; only its size.
   transcript  the newest transcript of a session of that role under ``<config dir>/projects/``
-              (the workplace's directory and its worktrees'), everything before its first
-              ``api-request-shape`` line: system prompt and tool schemas (that shape), skill
+              (the workplace's directory and its worktrees') whose first ``api-request-shape``
+              line comes before any assistant entry (a cold start), everything before it: system prompt and tool schemas (that shape), skill
               listing, agent listing, deferred tool names, MCP instructions (the attachments).
               Only sizes leave the file. No transcript: ``n/a (no transcript)``. The tool starts
               no session.
@@ -58,11 +60,14 @@ MIN_SENTENCE = 60
 QUOTE = 80
 TOP = 5
 HEAD_LINES = 2_000  # a transcript's first request lies within its first lines
-SCAN_FILES = 400  # transcripts looked at per workplace, newest first
+SCAN_FILES = 5_000  # transcripts looked at per workplace, newest first
 WORKER_MARK = "You are a worker:"  # the first line of process/L0-worker.md
 L0_MARK = "The crew process (L0)"  # the heading of process/L0.md
 DATA = "<!-- context-load "
 NA = "n/a (no transcript)"
+MEASURED = (
+    "measured start"  # the first assistant entry's usage: input + cache creation + cache read
+)
 TRANSCRIPT_PARTS = (
     "system prompt",
     "tool schemas",
@@ -88,6 +93,7 @@ class Session(NamedTuple):
     counted: int
     texts: list[tuple[str, str, bool]]  # (place, text, quotable)
     transcript: str  # the transcript's file name, or NA
+    measured: int | None = None  # tokens of the first request, from the transcript
 
 
 # --- disk ----------------------------------------------------------------------------------
@@ -255,9 +261,12 @@ def session_role(path: Path, names: dict[str, str]) -> str | None:
 
 
 def transcript_sizes(path: Path) -> dict[str, int] | None:
-    """Sizes of the first request's blocks; None without an ``api-request-shape`` line."""
+    """Sizes of the first request's blocks; None without an ``api-request-shape`` line or when
+    an assistant entry comes before it (a resumed session, not a cold start)."""
     sizes = dict.fromkeys(TRANSCRIPT_PARTS, 0)
     for entry in _lines(path):
+        if entry.get("type") == "assistant":
+            return None  # an answer before the first recorded request: no cold start in this file
         att = entry.get("attachment")
         if isinstance(att, dict):
             kind = att.get("type")
@@ -281,8 +290,30 @@ def transcript_sizes(path: Path) -> dict[str, int] | None:
             sizes["tool schemas"] = sum(
                 len(json.dumps(t, ensure_ascii=False)) for t in shape.get("tools") or []
             )
-            return sizes
-    return None
+            break
+    else:
+        return None
+    for entry in _lines_after(path):
+        usage = (
+            (entry.get("message") or {}).get("usage") if entry.get("type") == "assistant" else None
+        )
+        if isinstance(usage, dict):
+            sizes[MEASURED] = sum(
+                int(usage.get(k) or 0)
+                for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+            )
+            break
+    return sizes
+
+
+def _lines_after(path: Path):
+    """The entries after the first ``api-request-shape`` line."""
+    seen = False
+    for entry in _lines(path):
+        if seen:
+            yield entry
+        elif entry.get("type") == "api-request-shape":
+            seen = True
 
 
 def newest_transcripts(
@@ -358,10 +389,17 @@ def measure(
                 cache[work] = newest_transcripts(files, names, set(roles))
             found = cache[work].get(role)
             if found:
-                rows += [Row(p, "transcript", n) for p, n in found[1].items()]
+                rows += [Row(p, "transcript", found[1][p]) for p in TRANSCRIPT_PARTS]
             else:
                 rows += [Row(p, "transcript", None) for p in TRANSCRIPT_PARTS]
-            session = Session(total.label, rows, total.total, texts, found[0] if found else NA)
+            session = Session(
+                total.label,
+                rows,
+                total.total,
+                texts,
+                found[0] if found else NA,
+                found[1].get(MEASURED) if found else None,
+            )
             rules = [r for r in total.rows if r[0] == "rules"]
             out.append((role, session, largest(rows, rules), duplicates(texts)))
         out += [(role, Session(label, [], 0, [], NA), [], []) for label in absent]
@@ -443,7 +481,7 @@ def render(results: list, before: dict, repo: Path, home: Path, md: bool) -> str
         )
         last = before.get(session.label, {})
         rows = merged_rows(session, repo, home)
-        table = [("part", "source", "chars", "≈ tokens", "Δ chars")]
+        table = [("part", "source", "chars", "≈ tokens (chars ÷ 4, low for JSON)", "Δ chars")]
         for key, row in rows.items():
             n = row.chars
             table.append(
@@ -458,12 +496,25 @@ def render(results: list, before: dict, repo: Path, home: Path, md: bool) -> str
         real, unknown = summed(rows)
         table.append(("sum", "", fmt(real), fmt(tokens(real)), delta(real, last.get("sum"))))
         out.append(_table(table, md))
-        share = f"{session.counted * 100 // real} %" if real else "—"
+        measured = session.measured
         out.append(
             ("\n" if md else "")
-            + f"counted vs real: the budget gate counts {session.counted:,} chars, the table sums "
-            f"{'≥ ' if unknown else ''}{real:,} ({share} counted)"
+            + f"measured start: {fmt(measured)} tokens"
+            + ("" if measured is None else f" (estimated sum {tokens(real):,})")
         )
+        if measured:
+            line = (
+                f"the budget gate counts {session.counted:,} chars (≈ {tokens(session.counted):,}"
+                f" tokens) of a measured start of {measured:,} tokens"
+                f" ({tokens(session.counted) * 100 // measured} % counted)"
+            )
+        else:
+            share = f"{session.counted * 100 // real} %" if real else "—"
+            line = (
+                f"the budget gate counts {session.counted:,} chars, the table sums "
+                f"{'≥ ' if unknown else ''}{real:,} ({share} counted)"
+            )
+        out.append(f"counted vs real: {line}")
         out.append(
             "largest files: " + "; ".join(f"{shown(p, repo, home)} {n:,}" for p, n in files)
         )
