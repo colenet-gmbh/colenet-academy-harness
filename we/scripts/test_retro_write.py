@@ -50,6 +50,18 @@ def test_a_known_line_is_not_appended_twice(tmp_path):
     assert out.startswith("appended 0 evidence line(s)")
 
 
+def test_an_expired_entry_revives_on_a_new_evidence_line_only(tmp_path):
+    expired = tmp_path / "expired" / "2026-10-20-gap--agents-md.md"
+    expired.parent.mkdir()
+    expired.write_text(body("2026-10-20 retro | session a: first"))
+    out = rw.write(tmp_path, body("2026-10-20 retro | session a: first"), "2026-11-18")
+    assert out == f"appended 0 evidence line(s) to {expired}" and expired.exists()
+    out = rw.write(tmp_path, body("2026-11-18 retro | session b: second"), "2026-11-18")
+    live = tmp_path / "2026-10-20-gap--agents-md.md"
+    assert out == f"revived {live} (1 new evidence line(s))"
+    assert not expired.exists() and len(rw.evidence_lines(live.read_text())) == 2
+
+
 def test_evidence_goes_under_its_section_not_after_a_later_one(tmp_path):
     path = tmp_path / "2026-11-01-gap--agents-md.md"
     path.write_text(body("old") + "\n## Note\n\nkept below\n")

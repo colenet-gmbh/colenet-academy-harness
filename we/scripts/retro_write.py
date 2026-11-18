@@ -12,6 +12,11 @@ its frontmatter `key:` names the entry. In <dir> (the inbox or its staging):
   appended <n> evidence line(s) to <path> exit 0  a file `*-<key>.md` exists, or appeared between the
                                                   look and the create: the body's `## Evidence` lines
                                                   it lacks go under its `## Evidence`, under a lock
+  revived <path> (<n> new evidence line(s))  exit 0  no live file, but `<dir>/expired/*-<key>.md`
+                                                  (`optimization_close.py` put it there) lacks one of
+                                                  the body's evidence lines: it moves back to <dir>
+                                                  (open again) and gains them; a body whose lines it
+                                                  already holds leaves it expired (`appended 0 …`)
   <reason>                                exit 2  no key, no evidence line, unreadable file
 
 A shell `cat > <file>` after an `ls` is a check-then-write race: a dozen sessions of one broadcast
@@ -31,6 +36,7 @@ from pathlib import Path
 
 KEY = re.compile(r"^key:\s*([a-z0-9][a-z0-9:-]*)\s*(?:#.*)?$", re.MULTILINE)
 EVIDENCE = "## Evidence"
+EXPIRED = "expired"  # the subfolder optimization_close.py moves an expired entry into
 
 
 class WriteError(Exception):
@@ -103,17 +109,41 @@ def _link_new(path: Path, text: str) -> bool:
         os.unlink(tmp)
 
 
+def revive(folder: Path, key: str, lines: list[str]) -> str | None:
+    """Move an expired entry of ``key`` back into ``folder`` and append the new lines; None when
+    there is none. A body with no line the entry lacks leaves it where it is."""
+    for old in sorted((folder / EXPIRED).glob(f"????-??-??-{key}.md")):
+        have = set(evidence_lines(old.read_text(encoding="utf-8")))
+        if all(line in have for line in lines):
+            return f"appended 0 evidence line(s) to {old}"
+        target = folder / old.name
+        try:
+            os.link(old, target)
+        except FileExistsError:
+            return None  # a parallel writer revived it: append to the live file
+        except FileNotFoundError:
+            continue
+        old.unlink(missing_ok=True)
+        return f"revived {target} ({append(target, lines)} new evidence line(s))"
+    return None
+
+
 def write(folder: Path, body: str, date: str) -> str:
     key = key_of(body)
     lines = evidence_lines(body)
     if not lines:
         raise WriteError("the body has no `- …` line under `## Evidence`")
     folder.mkdir(parents=True, exist_ok=True)
-    for _ in range(2):
+    for _ in range(3):
         existing = sorted(folder.glob(f"????-??-??-{key}.md"))
         if existing:
             n = append(existing[0], lines)
             return f"appended {n} evidence line(s) to {existing[0]}"
+        revived = revive(folder, key, lines)
+        if revived is not None:
+            return revived
+        if sorted(folder.glob(f"????-??-??-{key}.md")):
+            continue
         path = folder / f"{date}-{key}.md"
         if _link_new(path, body if body.endswith("\n") else body + "\n"):
             return f"created {path}"

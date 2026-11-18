@@ -30,7 +30,8 @@ local parts and the friction inbox. You are on call, with one fixed slot a week.
 ## At start
 
 1. Read why you were woken, or the inbox if it is your slot.
-2. Check the role totals and the card sizes (`render_process.py --all-roles`).
+2. Read what each role's cold start loads, counted vs real: the store's newest
+   `reports/context-<date>.md`; in your weekly slot write a fresh one (`context_load.py --md`).
 3. Decide the oldest entry, then report in one line to {coordinator|the coordinator}.
 
 ## You wait on / others wait on you

@@ -148,6 +148,7 @@ ANSWERS = [
 BRAKES = [
     {"ts": "2026-11-09T10:00:00Z", "type": "deny", "gate": "worker_rights_gate"},
     {"ts": "2026-11-09T10:05:00Z", "type": "brief", "ok": True},
+    {"ts": "2026-11-09T10:06:00Z", "type": "outcome", "kind": "card", "pr": "7", "danger": "no"},
     {"ts": "2026-10-01T10:00:00Z", "type": "brief", "ok": True},
 ]
 SEVERITY = [

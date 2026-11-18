@@ -21,11 +21,13 @@ Plugin checkout and workspace.
 | `CHARTER.md` | goal, decisions, current findings, next steps; frontmatter `last_optimize: YYYY-MM-DD` | `/we:optimize` |
 | `LEDGER.md` | one row per decided candidate | `/we:optimize` |
 | `inbox/<YYYY-MM-DD>-<key>.md` | one open finding per file | `/we:retro`, `/we:instruction-audit` |
+| `inbox/expired/<YYYY-MM-DD>-<key>.md` | an expired entry, readable until a new evidence line revives it | `scripts/optimization_close.py` |
 | `audits/<YYYY-MM-DD>-<repo>.md` | frozen audit report: gate output plus the `/doctor prompt-audit` report | `/we:instruction-audit` |
 | `sources.md` | optional repo-specific source URLs, one Markdown list item each | the user |
 | `sources.lock` | hashes of the fetched sources and the last audit's context | `/we:instruction-audit` |
 | `measure/README.md` | the repo's measurement adapter | the user |
 | `reports/flow-<YYYY-MM-DD>.md` | the flow report's table (UTC date) | `scripts/flow_report.py --md` |
+| `reports/context-<YYYY-MM-DD>.md` | what each role's cold start loads (UTC date) | `scripts/context_load.py --md` |
 | `feedback-sources.md` | optional: other repos that run the plugin, one local path per Markdown list item; `/we:optimize` reads only their plugin findings | the user |
 
 A store exists only where a human created it (`/we:setup` asks). A verb that finds no
@@ -98,7 +100,9 @@ The quoted line, why it no longer fits, and the proposed replacement text.
   closes two kinds by rule (its docstring owns the row it writes): an entry whose key a merged PR's
   title or body names, merged on or after the entry's first-seen date and changing no file under
   `.weside/optimization/`, is `applied` with that PR as evidence; an entry with fewer than two evidence lines whose first-seen date is
-  `optimization.expire_days` or more days old is `expired`. A later finding on a rejected key is a fresh file under
+  `optimization.expire_days` or more days old is `expired` (`--expire-all-before <date>`: every entry
+  first seen before it, in one run). An expired entry moves to `inbox/expired/`; a new evidence line
+  under its key revives it to `inbox/` through `retro_write.py`. A later finding on a rejected key is a fresh file under
   that key; `/we:optimize` § 3 puts it to the user only when it answers the rejection's reason.
 
 ## Ledger row
@@ -109,7 +113,7 @@ The quoted line, why it no longer fits, and the proposed replacement text.
 
 - `decision`: `applied` · `rejected` · `upstream` (reported to the plugin's
   maintainers) · `removed` (a later sunset or ablation removal took the change out) · `expired`
-  (closed unconfirmed by `optimization_close.py`; a later finding under its key is a fresh file).
+  (closed unconfirmed by `optimization_close.py`; a new evidence line under its key reopens it, the row stays).
 - `metric`: what shows the effect (the adapter command, or the re-check of a repo fact); every
   applied row that adds or rewords text has one. An applied removal has `—` here and in `review_by`.
 - `before → after`: the metric's numbers; `after` is `pending` until step 4 of `/we:optimize`
