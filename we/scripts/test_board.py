@@ -1031,6 +1031,15 @@ class TestNewsAdd:
         assert message in capsys.readouterr().err
         assert (crewed / "board.json").read_bytes() == before
 
+    def test_a_worker_item_needs_no_coordinator_and_comes_once(self, crewed, monkeypatch, capsys):
+        pin(monkeypatch, "ada")
+        args = ("news", "worker", "--id", "W-AC-1-x-ab12", "--title", "AC-1-x waits 15 min")
+        assert go(crewed, *args, "--body", "claude attach ab12") == 0
+        assert go(crewed, *args) == 0
+        assert capsys.readouterr().out.splitlines()[-1] == "unchanged"
+        items = [n for n in board_of(crewed)["news"] if n["id"] == "W-AC-1-x-ab12"]
+        assert len(items) == 1 and items[0]["kind"] == "todo"
+
 
 class TestBundle:
     def test_bundles_new_decisions_by_area_and_open_questions(self, crewed, monkeypatch):

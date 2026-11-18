@@ -898,10 +898,13 @@ export const registerBoard = (on: On, options: PluginOptions) => {
         <Box key={key} paddingLeft={indent}><Text color={START[start.level]}>{start.reason}</Text></Box>
       ) : null
 
-    // A worker in its master's frame: lamp, name, key, PR, live status, start lamp, and what it does, cut to the line.
+    // A worker in its master's frame: lamp, name, key, PR, live status, start lamp, age, then its tree and
+    // starter (launcher marker) where they fit, and what it does, cut to the line.
     const workerLine = (w: BoardSession) => {
       const { lamp, liveness, start } = verdictOf(w)
       const keys = (w.keys ?? []).filter(Boolean).join(' ')
+      const own = liveMap?.get(w.name)
+      const tree = own?.tree ? own.tree.split('/').filter(Boolean).pop() : undefined
       const parts: Part[] = [
         { text: '└ ', dim: true },
         { text: lamp.glyph, color: lamp.color, bold: true },
@@ -912,6 +915,11 @@ export const registerBoard = (on: On, options: PluginOptions) => {
         ...(start.level !== 'none' ? [{ text: '  ●', color: START[start.level] }] : []),
         ...ageParts(w).map(p => ({ ...p, text: `  ${p.text}` })),
       ]
+      const marked: Part[] = [
+        ...(tree ? [{ text: `  ⌂ ${tree}`, dim: true }] : []),
+        ...(own?.starter ? [{ text: `  ← ${own.starter}`, dim: true }] : []),
+      ]
+      if (widthOf([...parts, ...marked]) <= inner - 2) parts.push(...marked)
       const room = inner - widthOf(parts) - 2
       if (w.now && room >= 8) parts.push({ text: `  ${clip(w.now, room)}`, dim: true })
       return (

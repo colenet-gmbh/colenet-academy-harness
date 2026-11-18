@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # we-worker — start and steer a process worker on the global login (references/worker-dispatch.md).
-#   we-worker <name> [--bg] [--limit <duration>] [claude args...]   start a worker session named <name>
+#   we-worker <name> [--bg] [--limit <duration>] [--tree <path> | --here] [--branch <b>] [claude args...]
+#                                  start a worker session named <name>
 #   we-worker status [<name|id>]   one line per worker, background or window (a session started with
 #                                  WE_ROLE=worker or named by its tree's launcher marker, marked
 #                                  `window`): id, name, pid, state, last=HH:MM (UTC
@@ -23,6 +24,11 @@
 #                                  the last N (default 5) assistant texts from its transcript, plain;
 #                                  --raw (or no transcript) prints `claude logs` with ANSI codes removed
 #   we-worker waiting              sessions waiting on a permission prompt, with the tool call they wait on
+#   we-worker gc [--apply]         removes the plugin's own files of sessions that no longer live
+#                                  (settings, timer file, marker) and lists merged, clean worktrees
+#                                  whose marker names no living worker, with their remove command;
+#                                  Claude Code's job directories are only counted
+#                                  (scripts/worker_supervisor.py); without --apply it only prints
 #   we-worker is-worker <name|id|sessionId>
 #                                  exit 0 when that session is a worker (the one owner of the rule;
 #                                  worker_launch.is_worker asks it): a background session, a worktree
@@ -37,12 +43,22 @@
 #   default  interactive in a tmux window <name> (the caller's tmux session, else the attached one)
 #   --bg     a background session (`claude --bg`): listed in `claude agents`, steered with SendMessage
 #   --limit  the time limit handed to the timer (default 3h; 90m, 2h30m; a bare number is minutes)
+#   --tree <path>  start in that existing worktree (an integration tree, a finisher, a fix round)
+#   --here   start where the caller stands: a worker that only reads (probe, walk, card, pre-sorter)
+#   --branch <b>  the branch of a tree the launcher creates (default feat/<name>; workers.tree: own)
+#   Tree: without --tree or --here a start stays where the caller stands; only under `.weside/config.json`
+#   `workers.tree: own` a start from the main checkout gets its own worktree (`worker_launch.py tree`:
+#   the repo's `workers.add_worktree`, else `git worktree add <repo>-<name> -b <branch> origin/<default>`).
+#   A start from a linked worktree or outside a repo, and a --resume, stay where they are. The tree is printed; a created or named tree gets the launcher's marker
+#   (name, key, role, starter, tree, mode; `worker_launch.py marker`).
+#   Supervisor: every start also starts `worker_supervisor.py spawn` (detached; its docstring owns what
+#   it does); $WE_WORKER_NO_SUPERVISOR=1 skips it.
 #   --resume/-r <id|name>  a short id or name resolves to the full session id; ambiguous, unknown or still
 #                          running (its pid lives: claude would start a copy) refuses without starting
 # A start under a name a running session of any kind holds, or a tmux window already carries, refuses
-# as well: steer it, or stop it first.
+# as well, naming that session's tree and state: steer it, or stop it first.
 # A flag before the claude args that neither we-worker nor `claude --help` knows refuses (a typo like
-# `--cwd` would otherwise reach claude as a prompt): run `cd <tree> && we-worker …` instead.
+# `--cwd` would otherwise reach claude as a prompt): run `we-worker <name> --tree <tree> …` instead.
 # A start refuses (exit 2, before any claude call) a name that does not start with the story key (crew
 # `naming.key`, `<key>-<chunk>`; `worker_launch.py check`). The brief is the last argument; one
 # starting with `-`, or none, is an empty brief; a last argument that is blank (`"$(cat <brief>)"` of an empty or unwritten
@@ -62,7 +78,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: we-worker <name> [--bg] [--limit <duration>] [claude args...] | status [<name|id>] | stop <name|id> | checkpoint <name|id> | logs <name|id> [-n N] [--raw] | waiting  (help: we-worker --help)" >&2
+  echo "usage: we-worker <name> [--bg] [--limit <duration>] [--tree <path> | --here] [--branch <b>] [claude args...] | gc [--apply] | status [<name|id>] | stop <name|id> | checkpoint <name|id> | logs <name|id> [-n N] [--raw] | waiting  (help: we-worker --help)" >&2
   exit 2
 }
 
@@ -366,6 +382,11 @@ for hm, t in out[-int(sys.argv[3]):]:
       env -u CLAUDE_CONFIG_DIR claude logs "$id" 2>&1 | sed -E $'s/\x1b\\[[0-9;?]*[ -\\/]*[@-~]//g; s/\x1b\\][^\x07]*\x07//g; s/\r//g'
       exit "${PIPESTATUS[0]}"
     ;;
+  gc)
+    sup=$(plugin_script scripts/worker_supervisor.py)
+    [[ -n "$sup" && -f "$sup" ]] || { echo "we-worker: plugin we not installed (no worker_supervisor.py)" >&2; exit 2; }
+    exec python3 "$sup" gc --repo "$PWD" "${@:2}"
+    ;;
   -h | --help)
     sed -n '2,/^set /{/^#/s/^# \{0,1\}//p}' "$0"
     exit 0
@@ -379,9 +400,17 @@ shift
 
 bg=0
 limit=3h
+tree=""
+here=0
+branch=""
 while [[ $# -gt 0 ]]; do
   case $1 in
     --bg) bg=1; shift ;;
+    --here) here=1; shift ;;
+    --tree) [[ $# -ge 2 && -n "$2" ]] || { echo "we-worker: --tree needs a worktree path" >&2; exit 2; }; tree=$2; shift 2 ;;
+    --tree=*) tree=${1#--tree=}; shift ;;
+    --branch) [[ $# -ge 2 && -n "$2" ]] || { echo "we-worker: --branch needs a branch name" >&2; exit 2; }; branch=$2; shift 2 ;;
+    --branch=*) branch=${1#--branch=}; shift ;;
     --limit) [[ $# -ge 2 ]] || { echo "we-worker: --limit needs a duration (3h, 90m)" >&2; exit 2; }; limit=$2; shift 2 ;;
     --limit=*) limit=${1#--limit=}; shift ;;
     *) break ;;
@@ -390,9 +419,13 @@ done
 
 # A living session under this name, of any kind, or a tmux window of that name: a second start
 # would make two workers answer to one name (and write in one worktree).
-IFS=$'\t' read -r held_id held_pid _k _sid _s _n _c <<<"$(_resolve_any "$name")" || true
+if [[ -n "$tree" && $here -eq 1 ]]; then
+  echo "we-worker: --tree and --here exclude each other" >&2
+  exit 2
+fi
+IFS=$'\t' read -r held_id held_pid _k _sid held_state _n held_cwd <<<"$(_resolve_any "$name")" || true
 if [[ -n "${held_id:-}" && "${held_pid:-}" != - ]] && kill -0 "$held_pid" 2>/dev/null; then
-  echo "we-worker: a running session already holds the name $name ($held_id, pid $held_pid); steer it with SendMessage, read it with 'we-worker logs $name', or 'we-worker stop $name' first" >&2
+  echo "we-worker: a running session already holds the name $name ($held_id, pid $held_pid, state ${held_state:--}, tree ${held_cwd:--}); steer it with SendMessage, read it with 'we-worker logs $name', or 'we-worker stop $name' first" >&2
   exit 2
 fi
 held_window=$(tmux list-windows -a -F '#{session_name}:#{window_index} #{window_name}' 2>/dev/null | awk -v n="$name" '$2 == n {print $1; exit}' || true)
@@ -440,7 +473,7 @@ if [[ -n "$known_flags" && $# -gt 0 ]]; then
     [[ "$arg" == --* ]] || continue
     flag=${arg%%=*}
     if ! grep -qxF -- "$flag" <<<"$known_flags"; then
-      echo "we-worker: $flag is neither a we-worker flag (--bg, --limit) nor one claude knows; to start in another tree run: cd <tree> && we-worker $name …" >&2
+      echo "we-worker: $flag is neither a we-worker flag (--bg, --limit, --tree, --here, --branch) nor one claude knows; to start in another tree: we-worker $name --tree <tree> …" >&2
       exit 2
     fi
   done
@@ -482,6 +515,42 @@ while [[ $# -gt 0 ]]; do
 done
 set -- ${cargs[@]+"${cargs[@]}"}
 
+# The worker's tree: named (--tree), the caller's (--here, a linked worktree, no repo, a resume), or
+# created beside the main checkout. A created or named tree carries the launcher's marker.
+mark=0
+if [[ -n "$tree" ]]; then
+  tree=$(cd "$tree" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null) ||
+    { echo "we-worker: --tree: no git worktree there; no worker started" >&2; exit 2; }
+  if python3 "$wl" tree --main-checkout --repo "$tree" --name "$name" >/dev/null 2>&1; then
+    echo "we-worker: --tree $tree is the main checkout, no worker's tree; a reading worker starts there with --here; no worker started" >&2
+    exit 2
+  fi
+  mark=1
+elif [[ $here -eq 0 && $resuming -eq 0 ]]; then
+  rc=0
+  created=$(python3 "$wl" tree --auto --repo "$PWD" --name "$name" ${branch:+--branch "$branch"}) || rc=$?
+  case $rc in
+    0) tree=$created; mark=1 ;;
+    3) ;;
+    *) echo "we-worker: no tree for $name (above); no worker started" >&2; exit 2 ;;
+  esac
+fi
+if [[ -n "$tree" ]]; then
+  cd "$tree"
+fi
+echo "we-worker: $name works in $PWD"
+starter=${WE_WORKER_STARTER:-}
+if [[ -z "$starter" && -n "${CLAUDE_CODE_SESSION_ID:-}" ]]; then
+  starter=$(_agents | python3 -I -c 'import json,sys
+print(next((a.get("name") or "" for a in json.load(sys.stdin) if a.get("sessionId")==sys.argv[1]), ""))' "$CLAUDE_CODE_SESSION_ID" 2>/dev/null || true)
+fi
+mode="tmux"
+[[ $bg -eq 1 ]] && mode="bg"
+if [[ $mark -eq 1 ]]; then
+  python3 "$wl" marker --tree "$PWD" --name "$name" --key "$key" --role worker ${starter:+--starter "$starter"} --mode "$mode" ||
+    { echo "we-worker: the marker of $name could not be written in $PWD; no worker started" >&2; exit 2; }
+fi
+
 extra=()
 # The crew's value wins; only where no crew answers (no crew file) does the variable count.
 allow=$(crew_launch allow_bypass)
@@ -495,8 +564,6 @@ fi
 hook=""
 timer=${WE_WORKER_TIMER:-$(crew_launch worker_timer)}
 timer=${timer/#\~/$HOME}
-mode="tmux"
-[[ $bg -eq 1 ]] && mode="bg"
 if [[ -n "$timer" ]]; then
   if [[ -f "$timer" ]]; then
     # Before the CLAUDE* variables go: the caller's session id names the starter.
@@ -511,9 +578,18 @@ fi
 
 # The worker's rights and never-list as its settings file, the timer's hook in it.
 settings_file="${WE_WORKER_STATE_DIR:-$HOME/.claude/we-state/workers}/$name.settings.json"
-python3 "$wl" settings --repo "$PWD" --key "$key" --out "$settings_file" ${hook:+--session-start "$hook"} >/dev/null ||
+python3 "$wl" settings --repo "$PWD" --key "$key" --name "$name" --out "$settings_file" ${hook:+--session-start "$hook"} >/dev/null ||
   { echo "we-worker: the settings of $name could not be written; no worker started" >&2; exit 2; }
 extra+=(--settings "$settings_file")
+
+# The supervisor inherits the starter's inbox socket and token from this shell before they go.
+if [[ "${WE_WORKER_NO_SUPERVISOR:-}" != 1 ]]; then
+  sup=$(plugin_script scripts/worker_supervisor.py 2>/dev/null)
+  if [[ -n "$sup" && -f "$sup" ]]; then
+    python3 "$sup" spawn --name "$name" --tree "$PWD" >/dev/null ||
+      echo "we-worker: warning: no supervisor for $name; its stop reaches nobody" >&2
+  fi
+fi
 
 for var in $(compgen -e | grep -E '^CLAUDE' || true); do unset "$var"; done
 unset WESIDE_COMPANION WE_ROLE_ID

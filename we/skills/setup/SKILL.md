@@ -82,7 +82,12 @@ Written always, also when step 4 is declined. Only keys a verb reads:
                     "pre_merge_receipt": "<command with {KEY}: prints report:/skip:/not-run:, exit 0 green, 1 red>" },
   "review": { "available": ["claude"] },
   "agents": { "visible_teammates": false, "worker_launch": "subagent" },
-  "workers": { "max_busy_sessions": 10, "max_active_5h_percent": 80 },
+  "workers": { "max_busy_sessions": 10, "max_active_5h_percent": 80,
+               "tree": "caller|own",
+               "add_worktree": "<command with {path} {branch}, or null>",
+               "remove_worktree": "<command with {path}, or null>",
+               "context": { "auto_memory": "off", "disable_plugins": [], "deny_mcp_servers": [],
+                            "auto_compact_window": null } },
   "plans": { "land": "pr", "push_paths": ["docs/plans/**"], "secret_scan": null },
   "acceptance": { "receipts_workflow": "<workflow path whose RC run uploads accept.json, or null>",
                   "rc_tag_glob": "<RC tag glob, e.g. v*-rc.*>" }
@@ -96,6 +101,13 @@ receipt for the acceptance keeper; `lenses.acceptance.sample` stays the lens sam
 
 `/we:merged` moves a landed story to In Review, never to Done (L0 §Lifecycle;
 `${CLAUDE_PLUGIN_ROOT}/skills/merged/SKILL.md` § 5).
+
+`workers.tree`, `add_worktree`, `remove_worktree` and `context` shape a `we-worker` start: whether
+a start from the main checkout gets its own tree (`own`; default `caller`, it stays there), the repo's
+worktree commands and the worker's lean settings (`${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md`
+§ Tree, context and end). Write them only when the repo has a worktree command of its own, the
+user wants every worker started from the main checkout in a tree of its own (`tree: own`), or the
+user names plugins or MCP servers a worker never needs; absent, the plugin's defaults hold.
 
 `plans.secret_scan` stays `null` (gitleaks) unless the user names a scanner: a command with `{range}`
 and an optional `{report}`, or `"none"` (`${CLAUDE_PLUGIN_ROOT}/scripts/plan_push.py`).

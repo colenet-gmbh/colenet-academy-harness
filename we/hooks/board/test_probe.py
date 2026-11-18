@@ -132,9 +132,21 @@ def test_a_worker_in_a_worktree_of_the_crew_repo_stays(tmp_path, monkeypatch, ca
             {"name": "foreign", "cwd": str(other)},
         ],
     )
+    gd = subprocess.run(
+        ["git", "-C", str(tree), "rev-parse", "--absolute-git-dir"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    marker = {"name": "worker", "role": "worker", "starter": "master", "tree": str(tree)}
+    Path(gd, "we-worker.json").write_text(json.dumps(marker))
     assert probe.main(["--crew", str(repo / ".weside" / "crew.json")]) == 0
     rows = json.loads(capsys.readouterr().out)["sessions"]
     assert [r["name"] for r in rows] == ["master", "worker"]
+    assert {k: rows[1].get(k) for k in ("role", "starter", "tree")} == {
+        k: marker[k] for k in ("role", "starter", "tree")
+    }
+    assert "starter" not in rows[0]
 
 
 def test_an_answer_that_is_no_list_is_an_error_not_an_empty_host(monkeypatch, capsys):
