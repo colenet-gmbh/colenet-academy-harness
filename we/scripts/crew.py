@@ -25,8 +25,11 @@ Usage:
   crew.py launch FIELD [--from DIR]         the value of ``launch.FIELD`` for a shell: a bool as
                                             ``true``/``false``, null as an empty line; without a
                                             crew file the default (exit 0), a broken crew exit 1
-  crew.py merge FIELD [--from DIR]          the value of ``merge.FIELD`` for a shell: a string, or a
-                                            list one item per line; without a crew file the default
+  crew.py merge FIELD [--from DIR] [--rev REV]
+                                            the value of ``merge.FIELD`` for a shell: a string, or a
+                                            list one item per line; without a crew file the default;
+                                            ``--rev`` reads the crew file as commit REV has it
+                                            (``find_at_rev``), the checkout's only when REV has none
   crew.py human [--from DIR]                this session's human (``current_human``):
                                             "<slug>\t<name>\t<runs, comma-separated>", exit 1 when
                                             the crew cannot tell (the reason on stderr)
@@ -159,6 +162,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -1119,6 +1123,49 @@ def at(root: str | Path) -> Path | None:
     return found if isinstance(found, Path) else None
 
 
+def find_at_rev(rev: str, start: str | Path | None = None) -> tuple[str, str] | None:
+    """(path in the tree, text) of the crew file ``find`` would pick, as commit ``rev`` has it.
+
+    The same walk as ``find`` from ``start`` up to the repo root, over ``rev``'s tree instead of
+    the working tree; None when ``rev`` is unreadable, declares no crew, or points outside the repo.
+    """
+    cwd = Path(start or Path.cwd()).resolve()
+
+    def git(*args: str) -> str | None:
+        try:
+            res = subprocess.run(
+                ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=30, check=False
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return res.stdout if res.returncode == 0 else None
+
+    prefix = git("rev-parse", "--show-prefix")
+    if prefix is None or git("rev-parse", "-q", "--verify", f"{rev}^{{commit}}") is None:
+        return None
+    parts = [p for p in prefix.strip().strip("/").split("/") if p]
+    for n in range(len(parts), -1, -1):
+        here = "/".join(parts[:n])
+        weside = f"{here}/.weside" if here else ".weside"
+        text = git("show", f"{rev}:{weside}/crew.json")
+        if text is not None:
+            return f"{weside}/crew.json", text
+        config = git("show", f"{rev}:{weside}/config.json")
+        if config is None:
+            continue
+        try:
+            pointer = json.loads(config).get("crew")
+        except (ValueError, AttributeError):
+            pointer = None
+        if isinstance(pointer, str) and pointer.strip():
+            target = os.path.normpath(os.path.join(here, pointer.strip()))
+            if target.startswith("..") or os.path.isabs(target):
+                return None
+            text = git("show", f"{rev}:{target}")
+            return (target, text) if text is not None else None
+    return None
+
+
 def find_and_load(start: str | Path | None = None) -> tuple[Path | None, dict[str, Any] | None]:
     path = find(start)
     if path is None:
@@ -1645,13 +1692,29 @@ def _launch_cli(argv: list[str]) -> int:
     return 0
 
 
+def _load_text(label: str, text: str) -> dict[str, Any]:
+    """``load`` over a crew file's text that has no working-tree path (``find_at_rev``)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "crew.json"
+        path.write_text(text, encoding="utf-8")
+        try:
+            return load(path)
+        except CrewError as exc:
+            raise CrewError(str(exc).replace(str(path), label)) from None
+
+
 def _merge_cli(argv: list[str]) -> int:
-    field = _positional(argv[1:], ("--from",))
+    field = _positional(argv[1:], ("--from", "--rev"))
     if field not in DEFAULTS["merge"]:
         print(f"crew: merge takes one of {', '.join(DEFAULTS['merge'])}", file=sys.stderr)
         return 2
+    rev = _opt(argv, "--rev")
     try:
-        _path, crew = find_and_load(_opt(argv, "--from"))
+        at_rev = find_at_rev(rev, _opt(argv, "--from")) if rev else None
+        if at_rev is not None:
+            crew = _load_text(f"{rev}:{at_rev[0]}", at_rev[1])
+        else:
+            _path, crew = find_and_load(_opt(argv, "--from"))
     except CrewError as exc:
         print(f"crew: {exc}", file=sys.stderr)
         return 1

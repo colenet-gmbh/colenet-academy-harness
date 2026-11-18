@@ -1049,6 +1049,29 @@ def test_merge_block_is_validated_where_the_crew_loads(tmp_path):
         assert run(bad, "merge", "armer").returncode == 1
 
 
+def test_merge_rev_reads_the_crew_the_commit_has_through_its_pointer(tmp_path):
+    """`--rev` walks the commit's tree like `find` walks the disk; the working tree only decides
+    when the commit has no crew file or is unreadable."""
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t"}
+    env.update(GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+    repo = tmp_path / "repo"
+    (repo / ".weside").mkdir(parents=True)
+    (repo / "team").mkdir()
+    (repo / "src" / "deep").mkdir(parents=True)
+    (repo / ".weside" / "config.json").write_text(json.dumps({"crew": "team/crew.json"}))
+    held = {**CREW, "merge": {"hold_labels": ["review"]}}
+    (repo / "team" / "crew.json").write_text(json.dumps(held))
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "c"], check=True, env=env)
+    (repo / "team" / "crew.json").write_text(json.dumps({**CREW, "merge": {"hold_labels": []}}))
+    deep = repo / "src" / "deep"
+    assert crew.find_at_rev("HEAD", deep)[0] == "team/crew.json"
+    assert run(deep, "merge", "hold_labels", "--rev", "HEAD").stdout == "review\n"
+    assert run(deep, "merge", "hold_labels").stdout == "\n"
+    assert run(deep, "merge", "hold_labels", "--rev", "origin/nope").stdout == "\n"
+
+
 def test_launch_worker_mode_is_default_or_bypass(tmp_path):
     """The default says what it does: no --permission-mode; `auto` still validates."""
     assert crew.DEFAULTS["launch"]["worker_mode"] == "default"

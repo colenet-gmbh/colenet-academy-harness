@@ -245,3 +245,46 @@ def test_a_broken_crew_merge_block_is_a_crew_error_not_a_gh_failure(tmp_path):
     )
     assert code == 2 and out[-1].startswith("crew: ") and "merge.armer must be one of" in out[-1]
     assert arm_calls(calls) == []
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+
+def base_crew(tmp_path, base_merge, head_merge):
+    """A git checkout whose origin/main holds a crew with `base_merge` (None: no crew file) and
+    whose working tree, the PR's own, holds a crew with `head_merge`."""
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "config", "user.email", "t@example.invalid")
+    _git(tmp_path, "config", "user.name", "t")
+    crew_file = tmp_path / ".weside" / "crew.json"
+    crew_file.parent.mkdir()
+    if base_merge is not None:
+        crew_file.write_text(
+            json.dumps({"version": 2, "roles": {}, "members": {}, "merge": base_merge})
+        )
+        _git(tmp_path, "add", ".weside")
+    else:
+        (tmp_path / "README").write_text("x")
+        _git(tmp_path, "add", "README")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    _git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
+    crew_file.write_text(
+        json.dumps({"version": 2, "roles": {}, "members": {}, "merge": head_merge})
+    )
+
+
+def test_a_pr_cannot_drop_the_hold_label_its_base_holds_it_with(tmp_path):
+    base_crew(tmp_path, {"hold_labels": ["review"]}, {"hold_labels": []})
+    reads = [{"head": NEW, "checks": PENDING, "labels": ["review"]}]
+    code, out, calls = run(tmp_path, reads, ["ok"])
+    assert (code, out[-1]) == (4, "refused: label review — only the human merges it")
+    assert arm_calls(calls) == []
+
+
+def test_a_base_without_a_crew_file_leaves_the_checkouts_block(tmp_path):
+    base_crew(tmp_path, None, {"hold_labels": ["review"]})
+    reads = [{"head": NEW, "checks": PENDING, "labels": ["review"]}]
+    code, out, calls = run(tmp_path, reads, ["ok"])
+    assert (code, out[-1]) == (4, "refused: label review — only the human merges it")
+    assert arm_calls(calls) == []
