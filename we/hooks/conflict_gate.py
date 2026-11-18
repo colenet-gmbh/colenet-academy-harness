@@ -17,7 +17,10 @@ prints the merge state once, and a worker or peer session idles while its PR con
     sweep sees it armed again. A crew's board showed such PRs green and unarmed after a conflict
     merge, a retargeted stacked PR and fix pushes, until someone happened to look. A PR never seen
     armed is left alone. Not in a worker (`WE_ROLE=worker`): it does not
-    arm (worker card); its starter's own sweep names the PR.
+    arm (worker card); its starter's own sweep names the PR. The crew's `merge` block (`crew.py`)
+    narrows it: a PR carrying a label of `merge.hold_labels` is the human's merge, and under
+    `merge.armer: workflow` the repo's own workflow arms a ready PR (`arm_pr.sh` refuses there);
+    neither is named. An unreadable crew reads as the defaults (a session arms).
   * At most one `gh` sweep per THROTTLE_S per session, at most MAX_PRS PRs (the newest), at most
     SWEEP_BUDGET_S seconds of `gh` per sweep.
   * Fail-open on every error: a `gh` or parse failure lets the stop through.
@@ -37,6 +40,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+import crew
 import state_prune
 
 THROTTLE_S = 120
@@ -126,7 +130,7 @@ def _view(selector: str, cwd: str | None) -> dict | None:
                 selector,
                 "--json",
                 "url,number,state,isDraft,mergeStateStatus,mergeable,headRefOid,autoMergeRequest,body,"
-                "baseRefName",
+                "baseRefName,labels",
             ],
             capture_output=True,
             text=True,
@@ -151,10 +155,27 @@ def _waits_for_human(pr: dict) -> bool:
     return not pr.get("autoMergeRequest") and "user merge:" in (pr.get("body") or "")
 
 
-def _unarmed(pr: dict, watched: set) -> bool:
-    """Green, ready, unarmed, and seen armed before: it lost its arm."""
+def _merge_block(cwd: str | None) -> dict:
+    """The crew's `merge` block for the repo at `cwd`; the defaults when it is unreadable."""
+    try:
+        _path, data = crew.find_and_load(cwd)
+    except Exception:
+        data = None
+    return (data or crew.DEFAULTS)["merge"]
+
+
+def _session_arms(pr: dict, merge: dict) -> bool:
+    """A session re-arms this PR: no hold label on it and no workflow armer in the crew."""
+    held = set(merge.get("hold_labels") or [])
+    labels = {lab.get("name") for lab in pr.get("labels") or [] if isinstance(lab, dict)}
+    return merge.get("armer") != "workflow" and not (held & labels)
+
+
+def _unarmed(pr: dict, watched: set, merge: dict | None = None) -> bool:
+    """Green, ready, unarmed, seen armed before, and a session arms it: it lost its arm."""
     return (
         pr.get("url") in watched
+        and _session_arms(pr, merge if merge is not None else crew.DEFAULTS["merge"])
         and pr.get("state") == "OPEN"
         and not pr.get("isDraft")
         and pr.get("mergeStateStatus") == "CLEAN"
@@ -179,7 +200,7 @@ def _sweep(targets: list[tuple[str, str | None]], state: dict) -> str | None:
         seen.add(pr.get("url"))
         key = f"{pr.get('url')}@{pr.get('headRefOid')}"
         head = str(pr.get("headRefOid"))[:9]
-        if f"rearm:{key}" not in named and _unarmed(pr, watched):
+        if f"rearm:{key}" not in named and _unarmed(pr, watched, _merge_block(cwd)):
             named.add(f"rearm:{key}")  # its own key: a later conflict on this head is still named
             watched.discard(pr.get("url"))
             rearm.append(

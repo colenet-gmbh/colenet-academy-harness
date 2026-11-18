@@ -54,8 +54,9 @@ phase:
    system boundaries.
 2. A new field flows end to end, not only into the model.
 3. Regenerate and commit the generated artifacts the brief lists. Leave gate baselines to the Lead.
-4. Commit the phase by path: `<KEY>: phase <N> — <what>` with the `Co-Authored-By:` trailer of the
-   model running you.
+4. Commit the phase by path, in the repo's commit format (its commit hook and instructions; without
+   one `<KEY>: phase <N> — <what>`), with the `Co-Authored-By:` trailer of the model running you
+   unless the repo's instructions or hooks refuse attribution.
 
 A refactor chunk's last step deletes the characterization tests that a test on the new seam now
 asserts; the report's `retired:` field names each one and the test that replaces it.

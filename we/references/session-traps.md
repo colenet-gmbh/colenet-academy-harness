@@ -50,7 +50,8 @@ cards point here instead of repeating them.
   one.
 - **After a push a PR looks clean for seconds:** GitHub still reports the old head's state, and
   `gh pr merge` with its auto flag then merges at once, past every check of the new head when the
-  account may bypass the ruleset. Arm only through `scripts/arm_pr.sh <PR>`; merge only with the
+  account may bypass the ruleset. Arm only through `scripts/arm_pr.sh <PR>` (under the crew's `merge.armer: workflow` the repo's
+  workflow arms, `/we:master` § Close the run); merge only with the
   `--match-head-commit <sha>` it prints once that head's required checks are green.
 - **Red in a file your diff does not touch:** reproduce it on `origin/main` first. Red there → one
   fix on main, the other PRs merge main; never patch it per branch.

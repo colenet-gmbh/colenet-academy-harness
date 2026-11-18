@@ -496,6 +496,34 @@ def test_until_merged_stops_on_green_that_will_not_merge(tmp_path, patch, note):
     assert (code, out) == (0, [f"final {SHA}: green · {note}"])
 
 
+@pytest.mark.parametrize(
+    "merge, patch, step",
+    [
+        ({"armer": "workflow"}, {}, "the repo's workflow arms a ready PR"),
+        (
+            {"armer": "workflow"},
+            {"isDraft": True},
+            "the repo's workflow arms it once ready: gh pr ready 57",
+        ),
+        (
+            {"armer": "workflow", "hold_labels": ["review"]},
+            {"labels": [{"name": "docs"}, {"name": "review"}]},
+            "label review: the human merges",
+        ),
+        ({"hold_labels": ["review"]}, {"labels": [{"name": "docs"}]}, "arm: arm_pr.sh 57"),
+    ],
+    ids=["workflow-ready", "workflow-draft", "hold-label", "other-label"],
+)
+def test_auto_merge_off_names_the_crews_armer(tmp_path, merge, patch, step):
+    """Red arm: every unarmed PR was told `arm_pr.sh`, which refuses a workflow armer and a hold label."""
+    (tmp_path / ".git").mkdir()  # bounds the crew lookup at tmp_path
+    (tmp_path / ".weside").mkdir()
+    crew = {"version": 2, "roles": {}, "members": {}, "merge": merge}
+    (tmp_path / ".weside" / "crew.json").write_text(json.dumps(crew))
+    code, out = run(tmp_path, [{**_green(), **patch}], "--until-merged")
+    assert (code, out) == (0, [f"final {SHA}: green · {MERGE} · auto-merge off — {step}"])
+
+
 def test_human_merge_waits_past_auto_merge_off_and_blocked_until_merged(tmp_path, monkeypatch):
     """A one-way PR is never armed: --until-merged ended on `auto-merge off` in seconds."""
     monkeypatch.setenv("WATCH_BLOCKED_GRACE", "0")

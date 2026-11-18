@@ -65,7 +65,12 @@ def _transcript(tmp: Path, url: str = URL) -> Path:
     return p
 
 
-def _run(tmp: Path, pr: dict | str, payload: dict | None = None):
+def _run(tmp: Path, pr: dict | str, payload: dict | None = None, merge: dict | None = None):
+    if merge is not None:  # a crew with a `merge` block; `.git` bounds the crew lookup at tmp
+        (tmp / ".git").mkdir(exist_ok=True)
+        (tmp / ".weside").mkdir(exist_ok=True)
+        crew = {"version": 2, "roles": {}, "members": {}, "merge": merge}
+        (tmp / ".weside" / "crew.json").write_text(json.dumps(crew))
     (tmp / "pr.json").write_text(pr if isinstance(pr, str) else json.dumps(pr))
     gh = tmp / "gh"
     gh.write_text(
@@ -89,6 +94,7 @@ def _run(tmp: Path, pr: dict | str, payload: dict | None = None):
         capture_output=True,
         text=True,
         env=env,
+        cwd=tmp,
         timeout=30,
         check=False,
     )
@@ -126,7 +132,7 @@ def test_own_dirty_pr_blocks_once_per_head(tmp_path):
     # Only the `gh pr create` URL is the session's own; pull/9 came from a `gh pr view`.
     assert (tmp_path / "calls.log").read_text().splitlines() == [
         f"pr view {URL} --json url,number,state,isDraft,mergeStateStatus,mergeable,headRefOid,"
-        "autoMergeRequest,body,baseRefName"
+        "autoMergeRequest,body,baseRefName,labels"
     ]
     _unthrottle(tmp_path)
     assert _run(tmp_path, _pr()) is None  # same head: named already
@@ -241,3 +247,24 @@ def test_rearm_spares_never_armed_drafts_user_merge_and_workers(tmp_path):
     _run(tmp, _pr(), {"role": "worker"})
     _unthrottle(tmp)
     assert _run(tmp, _pr(headRefOid="b" * 40, **GREEN), {"role": "worker"}) is None
+
+
+def test_rearm_spares_a_hold_label_and_a_workflow_armer(tmp_path):
+    """The crew's `merge` block: a held PR is the human's merge, and under `armer: workflow` the
+    repo's workflow arms a ready PR. Red arm: the stop blocked with `arm_pr.sh`, which refuses both."""
+    for name, merge, labels in (
+        ("held", {"hold_labels": ["review"]}, [{"name": "docs"}, {"name": "review"}]),
+        ("workflow", {"armer": "workflow"}, []),
+    ):
+        tmp = tmp_path / name
+        tmp.mkdir()
+        _run(tmp, _pr(labels=labels), merge=merge)  # seen armed and conflicting
+        _unthrottle(tmp)
+        assert _run(tmp, _pr(headRefOid="b" * 40, labels=labels, **GREEN), merge=merge) is None
+    tmp = tmp_path / "other-label"
+    tmp.mkdir()
+    merge = {"hold_labels": ["review"]}
+    _run(tmp, _pr(labels=[{"name": "docs"}]), merge=merge)
+    _unthrottle(tmp)
+    out = _run(tmp, _pr(headRefOid="b" * 40, labels=[{"name": "docs"}], **GREEN), merge=merge)
+    assert out["decision"] == "block" and "arm_pr.sh" in out["reason"]

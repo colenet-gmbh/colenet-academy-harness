@@ -133,7 +133,8 @@ QUOTA_RX=${WATCH_QUOTA_RX:-'quota|usage limit|rate[ -]limit(ed)?|credit balance|
 LIFETIME=${WATCH_MAX_LIFETIME:-$((MAX_HOURS * 3600))}
 BORN=$(date +%s)
 
-# Line 1: the head SHA. Line 2: mergeStateStatus<TAB>mergeable<TAB>state<TAB>auto-merge on|off.
+# Line 1: the head SHA. Line 2: mergeStateStatus<TAB>mergeable<TAB>state<TAB>auto-merge on|off
+# <TAB>isDraft<TAB>the labels joined by a comma.
 # Then one line per check: <verdict>\t<name>\t<run id or empty>\t<details url>,
 # verdict pending | pass | fail | cancelled. Only the newest run of each check (workflow and
 # name) on the head counts: a draft run's red ci-summary beside the ready run is history, not red.
@@ -142,7 +143,8 @@ CLASSIFY='def ckey: [(.workflowName // ""), (.name // .context // "")];
   def at: ((.startedAt // .createdAt // "") | if . == "" or startswith("0001-") then "9999" else . end);
   def newest: . as $all | [$all[] | . as $c | select(all($all[]; ckey != ($c | ckey) or at <= ($c | at)))];
   .headRefOid, ((.mergeStateStatus // "UNKNOWN") + "\t" + (.mergeable // "UNKNOWN")
-    + "\t" + (.state // "OPEN") + "\t" + (if .autoMergeRequest then "on" else "off" end)),
+    + "\t" + (.state // "OPEN") + "\t" + (if .autoMergeRequest then "on" else "off" end)
+    + "\t" + ((.isDraft // false) | tostring) + "\t" + ([(.labels // [])[].name] | join(","))),
   (((.statusCheckRollup // []) | newest)[] | (
   (if .__typename == "StatusContext" then
      (if .state == "SUCCESS" then "pass" elif (.state == "PENDING" or .state == "EXPECTED") then "pending" else "fail" end)
@@ -229,7 +231,7 @@ lock_head() {  # the holder line names the head it watches
 
 view() {
   gh_try OUT pr view "$PR" -R "$REPO" \
-    --json headRefOid,statusCheckRollup,mergeStateStatus,mergeable,state,autoMergeRequest \
+    --json headRefOid,statusCheckRollup,mergeStateStatus,mergeable,state,autoMergeRequest,isDraft,labels \
     --jq "$CLASSIFY" && [ -n "$OUT" ]
 }
 field() { sed -n 2p <<<"$OUT" | cut -f"$1"; }
@@ -248,8 +250,24 @@ merge_note() {
   elif [ "$mss" = BEHIND ]; then
     note="$note — behind the base: merge it"
   fi
-  [ -n "$UNTIL_MERGED" ] && [ -z "$HUMAN_MERGE" ] && [ "$(field 4)" = off ] && note="$note · auto-merge off — arm: arm_pr.sh $PR"
+  [ -n "$UNTIL_MERGED" ] && [ -z "$HUMAN_MERGE" ] && [ "$(field 4)" = off ] && note="$note · auto-merge off — $(arm_step)"
   echo "$note"
+}
+# The crew's merge block (crew.py merge), read once; an unreadable crew reads as the defaults.
+CREW_ARMER=$(python3 "$(dirname "${BASH_SOURCE[0]}")/crew.py" merge armer 2>/dev/null) || CREW_ARMER=session
+CREW_HOLD=$(python3 "$(dirname "${BASH_SOURCE[0]}")/crew.py" merge hold_labels 2>/dev/null) || CREW_HOLD=""
+arm_step() {  # who arms this unarmed PR: a hold label's human, the repo's workflow, or arm_pr.sh
+  local label
+  while IFS= read -r label; do
+    [ -n "$label" ] && [ -n "$CREW_HOLD" ] && grep -qxF -- "$label" <<<"$CREW_HOLD" \
+      && { echo "label $label: the human merges"; return; }
+  done < <(field 6 | tr ',' '\n')
+  if [ "$CREW_ARMER" = workflow ]; then
+    if [ "$(field 5)" = true ]; then echo "the repo's workflow arms it once ready: gh pr ready $PR"
+    else echo "the repo's workflow arms a ready PR"; fi
+    return
+  fi
+  echo "arm: arm_pr.sh $PR"
 }
 merge_stuck() {  # green, but GitHub will not merge it by itself
   # BLOCKED while green and armed is normal for seconds before the merge; only after BLOCKED_GRACE
