@@ -17,6 +17,16 @@ One writer for "this story's build is over". In the order it runs:
    merged PR, and moves nothing. A key already In Review or later moves nothing again; its
    merged PRs after that row print as follow-ups. Without a crew file there is no transitions
    log: it says so, and the session moves the ticket with its ticketing tool.
+   Two holds on top, each moving nothing and recording nothing while the teardown still runs:
+   **a living worker on the key** (`holders`: a living session whose name carries the key or
+   whose launcher marker names it, or a queued start with a living waiter; the caller's own
+   session and, with `--pr`, the worker whose tree has that PR's head branch do not count), since
+   only existing PRs are visible and a worker may not have opened its PR yet; it prints
+   `held: <names> still work on <KEY>; run close again when they end`, and `claude agents`
+   unreadable holds too. **No story plan on `origin/<default>`**, since then nothing names the
+   repos that must land (a repo whose PR titles never carry the key stays invisible): the session
+   moves the ticket itself (with a crew file by the printed `board.py move`, a hand move in the
+   transitions log).
 3. **Teardown** (`--keep-worktrees` skips it). A worktree is the story's when its launcher marker
    names the key, or its branch is the head branch of one of the story's PRs or carries the key
    as a whole token. Each one stays, named, when it is the caller's own tree, a living session
@@ -39,8 +49,9 @@ A second call prints what is already done. Exit 0: the story is In Review (or la
 was refused; 1: something was refused, each line names it; 2: usage error.
 
 `sweep [--apply]`: every worktree whose launcher marker names a key and no living session and
-whose branch has a merged PR (`gh pr list --head`); prints the close call per key, and with
-`--apply` runs it. The coordinator's sweep runs it when a starter is gone.
+whose branch has a merged PR (`gh pr list --head`); prints the close call per key (with the
+`held:` line when another worker still works on the key), and with `--apply` runs it, under the
+same two holds. The coordinator's sweep runs it when a starter is gone.
 """
 
 from __future__ import annotations
@@ -125,6 +136,11 @@ def plan_text(top: Path, base: str, key: str) -> str:
     return text or ""
 
 
+def has_plan(top: Path, base: str, key: str) -> bool:
+    """The story plan lies on `origin/<base>` (a local copy names nothing that must land)."""
+    return _git(top, "cat-file", "-e", f"origin/{base}:docs/plans/{key}-story.md") is not None
+
+
 def plan_repos(own: str, text: str) -> list[str]:
     """`origin` first, then each `**Repo:**` of the plan; a bare name takes `origin`'s owner."""
     repos = [own]
@@ -205,6 +221,63 @@ def move_in_review(key: str, urls: list[str], extra: list[str]) -> tuple[int, st
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         code = board.main(argv, writer=WRITER)
     return code, out.getvalue(), err.getvalue()
+
+
+# --- holders ------------------------------------------------------------------------------------
+
+
+def _carries(name: object, key: str, pattern: str) -> bool:
+    try:
+        return wl.check_name(str(name or ""), pattern) == key
+    except wl.LaunchError:
+        return False
+
+
+def holders(top: Path, key: str, pattern: str, closed: set) -> list[str]:
+    """The workers that still work on `key`: living sessions whose name carries the key or whose
+    launcher marker names it, and queued starts with a living waiter. The caller's own session
+    and the names in `closed` do not count. `wl.LaunchError` when `claude agents` is unreadable."""
+    me = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    own = (wl.read_marker(Path.cwd()) or {}).get("name")
+    skip = {n for n in (*closed, own) if n}
+    marked = {
+        m.get("name")
+        for m in (wl.read_marker(t.get("path")) or {} for t in ws._worktrees(top))
+        if m.get("key") == key
+    }
+    found = []
+    for row in sessions():
+        name = row.get("name")
+        if not name or (me and row.get("sessionId") == me) or name in skip:
+            continue
+        if not wl._pid_lives(row.get("pid", "-")):
+            continue
+        if (name in marked or _carries(name, key, pattern)) and name not in found:
+            found.append(str(name))
+    for doc in ws.queued(ws.state_dir()):
+        name = doc["name"]
+        if name in skip or name in found or not ws._waiter_lives(doc.get("waiter_pid")):
+            continue
+        if _carries(name, key, pattern):
+            found.append(f"{name} (queued)")
+    return found
+
+
+def held_line(key: str, names: list[str]) -> str:
+    return f"held: {', '.join(names)} still work on {key}; run close again when they end"
+
+
+def closed_names(top: Path, given: dict | None) -> set:
+    """The marker name of the tree whose branch is the head of the `--pr` PR: the worker being
+    closed."""
+    if not given:
+        return set()
+    return {
+        name
+        for t in ws._worktrees(top)
+        if t.get("branch") == given["branch"]
+        and (name := (wl.read_marker(t.get("path")) or {}).get("name"))
+    }
 
 
 # --- teardown -----------------------------------------------------------------------------------
@@ -525,6 +598,7 @@ def _context(key: str) -> dict:
         "pattern": pattern,
         "base": base,
         "repos": plan_repos(own, plan_text(top, base, key)),
+        "plan": has_plan(top, base, key),
     }
 
 
@@ -545,15 +619,40 @@ def _given(key: str, ref: str, ctx: dict) -> dict:
     return given
 
 
-def _in_review(key: str, ctx: dict, prs: list, unreadable: list, extra: list) -> dict:
-    """The move to In Review, or why not: {out, refused, carry, closed, last}."""
+def _hold(key: str, ctx: dict, given: dict | None, urls: list[str]) -> str | None:
+    """Why In Review waits although every PR the key shows is merged, or None."""
+    try:
+        names = holders(ctx["top"], key, ctx["pattern"], closed_names(ctx["top"], given))
+    except wl.LaunchError as exc:
+        return f"held: claude agents unreadable ({exc}); no worker on {key} judged ended"
+    if names:
+        return held_line(key, names)
+    if not ctx["plan"]:
+        how = (
+            f"once every repo landed: python3 {HERE / 'board.py'} move {key} in_review "
+            + " ".join(f"--pr {u}" for u in urls)
+            + " (a hand move in the transitions log)"
+            if ctx["state"] is not None
+            else "with your ticketing tool (references/ticketing.md)"
+        )
+        return (
+            f"held: no story plan for {key} on origin/{ctx['base']} names the repos that must "
+            f"land; move {key} to In Review yourself {how}"
+        )
+    return None
+
+
+def _in_review(
+    key: str, ctx: dict, prs: list, unreadable: list, extra: list, given: dict | None = None
+) -> dict:
+    """The move to In Review, or why not: {out, refused, carry, closed, last, held}."""
     own, state = ctx["own"], ctx["state"]
     merged = [p for p in prs if p["state"] == "MERGED"]
     opened = [p["url"] for p in prs if p["state"] == "OPEN"]
     missing = [r for r in ctx["repos"] if not any(p["repo"] == r for p in merged)]
     last = state.last_rows() if state else {}
     was = (last.get(key) or {}).get("to")
-    res = {"out": [], "refused": [], "carry": [], "closed": False, "last": last}
+    res = {"out": [], "refused": [], "carry": [], "closed": False, "last": last, "held": None}
     if unreadable:
         res["refused"].append(
             f"in_review: gh unreadable for {', '.join(unreadable)}; nothing guessed"
@@ -573,6 +672,11 @@ def _in_review(key: str, ctx: dict, prs: list, unreadable: list, extra: list) ->
             f"in_review: {key} is {was} already"
             + (f"; follow-up PRs: {', '.join(after)}" if after else "")
         )
+        return res
+    res["held"] = _hold(key, ctx, given, [p["url"] for p in merged])
+    if res["held"]:
+        res["closed"] = False
+        res["out"] += [res["held"], f"in_review: {key} stays {was or 'unmoved'}"]
         return res
     if state is None:
         res["out"].append(
@@ -599,6 +703,7 @@ def close(key, pr_ref, keep, extra, today, learning="none") -> int:
     try:
         ctx = _context(key)
         prs, unreadable = story_prs(key, ctx["repos"], ctx["top"], ctx["pattern"])
+        given = None
         if pr_ref:
             given = _given(key, pr_ref, ctx)
             prs = [*[p for p in prs if p["url"] != given["url"]], given]
@@ -610,7 +715,7 @@ def close(key, pr_ref, keep, extra, today, learning="none") -> int:
         print(str(stop), file=sys.stderr)
         return stop.code
     top, own = ctx["top"], ctx["own"]
-    res = _in_review(key, ctx, prs, unreadable, extra)
+    res = _in_review(key, ctx, prs, unreadable, extra, given)
     out = ["prs: " + ", ".join(f"{label(p, own)} {p['state'].lower()}" for p in prs), *res["out"]]
     tidy = True if keep else teardown(top, key, prs, ctx["base"], out)
     epic_ok = True
@@ -618,7 +723,7 @@ def close(key, pr_ref, keep, extra, today, learning="none") -> int:
         states = {k: r.get("to") for k, r in res["last"].items()}
         epic_ok = write_epic(top, ctx["base"], key, merged, own, states, today, out, learning)
     print("\n".join([*out, *[f"refused: {line}" for line in res["refused"]]]))
-    ok = not res["refused"] and tidy and epic_ok
+    ok = not res["refused"] and not res["held"] and tidy and epic_ok
     print(f"close {key}: {'done' if ok else 'open items above'}")
     for line in res["carry"]:
         print(line)
@@ -654,6 +759,10 @@ def sweep(apply: bool, today: dt.date) -> int:
             continue
         todo.setdefault(key, data[0]["url"])
         print(f"close {key} --pr {data[0]['url']} ({tree['path']}, {marker.get('name')} gone)")
+        with contextlib.suppress(wl.LaunchError):
+            names = holders(top, key, wl.key_pattern(top), set())
+            if names:
+                print(f"  {held_line(key, names)}")
     if not todo:
         print("sweep: no merged PR with a marker left")
         return 0
