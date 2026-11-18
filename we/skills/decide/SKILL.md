@@ -3,6 +3,7 @@ name: decide
 description: >
   Escalation as one decision story: both owners' positions, costs and reversibility in one record
   that routes itself past the SLA. Triggers: "/we:decide", "we disagree", "escalate this".
+needs: [ticketing]
 ---
 
 # /we:decide

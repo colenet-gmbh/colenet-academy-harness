@@ -3,6 +3,7 @@ name: plan-story
 description: >
   Writes a build-ready story plan from front-loaded context, with no user in the room — what a
   dispatched refiner runs. Triggers: "/we:plan-story", "refine this story without asking me".
+needs: [ticketing]
 ---
 
 # /we:plan-story

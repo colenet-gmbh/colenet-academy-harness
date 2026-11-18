@@ -46,6 +46,10 @@ def get_category(filepath: str) -> str | None:
 
 DOC_FILENAMES = {"AGENTS.md", "CLAUDE.md", "README.md"}
 
+# A skill's `needs:` is what `we/scripts/worker_launch.py` reads (`skill_needs`): one flow list of
+# plugin or MCP server names, or `ticketing` for the project's ticketing plugin.
+NEEDS_VALUE = re.compile(r"^\[\s*[\w@.:-]+(\s*,\s*[\w@.:-]+)*\s*\]$")
+
 
 def validate_file(filepath: str) -> list[str]:
     """Validate a single file's frontmatter. Returns list of error messages."""
@@ -75,6 +79,10 @@ def validate_file(filepath: str) -> list[str]:
     for field in required:
         if field not in fields or not fields[field]:
             errors.append(f"{filepath}: missing required field '{field}'")
+    if category == "skills" and "needs" in fields and not NEEDS_VALUE.match(fields["needs"]):
+        errors.append(
+            f"{filepath}: 'needs' must be one line [<name>, ...] (worker_launch.py skill_needs)"
+        )
 
     return errors
 

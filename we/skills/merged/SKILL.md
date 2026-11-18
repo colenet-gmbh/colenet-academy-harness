@@ -4,6 +4,7 @@ description: >
   Close out a merged PR: verify the merge, tear down its worktrees, branches and processes, move
   each landed story to In Review once its PR is linked, then name only what is still open. Triggers: "/we:merged", "merged",
   "gemergt".
+needs: [ticketing]
 ---
 
 # /we:merged — close-out after the merge

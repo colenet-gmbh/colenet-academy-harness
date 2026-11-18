@@ -3,6 +3,7 @@ name: epic
 description: >
   Epic plan: one outcome serving a goal-file metric — status from plan + its stories, or refine/create.
   Triggers: "/we:epic", "epic", "refine epic", "new epic".
+needs: [ticketing]
 ---
 
 # /we:epic — one epic plan

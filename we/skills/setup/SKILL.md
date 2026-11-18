@@ -74,7 +74,8 @@ Written always, also when step 4 is declined. Only keys a verb reads:
 
 ```json
 {
-  "ticketing": { "tool": "jira|github-issues|none", "project_key": "<KEY or null>" },
+  "ticketing": { "tool": "jira|github-issues|none", "project_key": "<KEY or null>",
+                 "plugin": "<plugin or MCP server serving the tool, or null>" },
   "stack": ["python", "node"],
   "tools": { "graphify": false, "turbovault": false },
   "test_discipline": "tests-after",
@@ -108,6 +109,11 @@ worktree commands and the worker's lean settings (`${CLAUDE_PLUGIN_ROOT}/referen
 § Tree, context and end). Write them only when the repo has a worktree command of its own, the
 user wants every worker started from the main checkout in a tree of its own (`tree: own`), or the
 user names plugins or MCP servers a worker never needs; absent, the plugin's defaults hold.
+`ticketing.plugin`: write the plugin or MCP server whose tools reached the ticket in step 2, when
+it is not the default `worker_launch.py` maps from `ticketing.tool` (`TICKETING_DEFAULTS`). After
+writing `workers.context.disable_plugins` or `deny_mcp_servers`, run
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/worker_launch.py needs --all --repo .` and show every line it
+prints as a warning: a worker started for that skill is refused.
 
 `plans.secret_scan` stays `null` (gitleaks) unless the user names a scanner: a command with `{range}`
 and an optional `{report}`, or `"none"` (`${CLAUDE_PLUGIN_ROOT}/scripts/plan_push.py`).

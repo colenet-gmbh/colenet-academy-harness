@@ -3,6 +3,7 @@ name: pr
 description: >
   Opens the PR for the current branch: merge the base on a conflict, push once, body with ticket, AC evidence and
   the plan's verification receipt, PR linked to the ticket. Triggers: "/we:pr", "open the PR".
+needs: [ticketing]
 ---
 
 # /we:pr

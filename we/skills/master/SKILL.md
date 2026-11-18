@@ -4,6 +4,7 @@ description: >
   The epic's master: pulls its Selected stories, starts a refiner worker where a plan is missing and
   a build worker where one exists, one PR per story and repo. Triggers: "/we:master", "master the epic",
   "dispatch the ready stories", "run the phases".
+needs: [ticketing]
 ---
 
 # /we:master

@@ -1058,3 +1058,16 @@ def test_a_brief_that_needs_a_tool_the_context_turns_off_refuses(tmp_path, needs
         return
     assert proc.returncode == 2 and f"turns off ({refused})" in proc.stderr
     assert not started(tmp_path)
+
+
+def test_a_brief_naming_a_skill_whose_ticketing_plugin_is_off_refuses(tmp_path):
+    project, env = setup(tmp_path)
+    config = {
+        "ticketing": {"tool": "jira"},
+        "workers": {"context": {"disable_plugins": ["atlassian@claude-plugins-official"]}},
+    }
+    (project / ".weside" / "config.json").write_text(json.dumps(config))
+    proc = run(project, env, "AC-12-refine", "--bg", f"{GO}\nRun Skill we:plan-story for AC-12.\n")
+    assert proc.returncode == 2
+    assert "/we:plan-story" in proc.stderr and "atlassian@claude-plugins-official" in proc.stderr
+    assert not started(tmp_path)

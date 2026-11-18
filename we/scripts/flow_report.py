@@ -26,6 +26,13 @@ Sources (read only; the script holds no credential):
   without ``--board`` the board rows print ``n/a``: the default board belongs to no repo.
 - The question log ``<board stem>-questions.jsonl`` joined with ``<stem>-answers.jsonl`` by ``id``
   (``docs/board.md`` § Asking), and ``brakes.jsonl`` in the crew's state directory.
+- The required checks of the default branch, live from its rulesets and branch protection
+  (``required_checks.sh``, the reader ``arm_pr.sh`` uses), and per head the runs of every check
+  (all attempts of a check run, the last state of a status). ``Required checks: red heads``
+  counts per required check the heads of the window's PRs on which it concluded red (``RED``),
+  each once by its outcome: ``rerun green`` (the same head later shows it green: a false alarm),
+  ``fixed`` (a later head of the PR shows it green), else ``open``. Without a required check the
+  row is ``n/a``.
 - ``lens_verdict.rounds`` for the Ready rounds of every key in the repo's severity log.
 - The ``Tests:`` line ``test-delta.py`` writes into a PR body: new test functions and cases per
   merged code PR. An escape is a story's move out of Done in the window; its class comes from the
@@ -95,6 +102,19 @@ query($ids: [ID!]!) {
   } }
 }
 """.replace("APP_ID", str(ACTIONS_APP_ID))
+
+
+CHECKS_QUERY = """
+query($ids: [ID!]!) {
+  nodes(ids: $ids) { ... on Commit { oid
+    checkSuites(first: 30) { nodes {
+      checkRuns(first: 50, filterBy: {checkType: ALL}) { nodes { name status conclusion completedAt } }
+    } }
+    status { contexts { context state createdAt } }
+  } }
+}
+"""
+GREEN = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 
 
 class SourceMissingError(Exception):
@@ -248,9 +268,12 @@ def _search(run: Runner, q: str) -> list:
         after = found["pageInfo"]["endCursor"]
 
 
-def fetch_prs(run: Runner, repo: str, since: datetime, until: datetime) -> list:
+def fetch_prs(
+    run: Runner, repo: str, since: datetime, until: datetime, checks: bool = False
+) -> list:
     """Every PR merged in the window (searched one day at a time: search stops at 1,000) and
-    every open PR, each with `heads` and `suites` from its commits' Actions suites."""
+    every open PR, each with `heads` and `suites` from its commits' Actions suites; with
+    `checks`, each head also carries `checks` (`head_checks`)."""
     by_number: dict = {}
     for a, b in _day_chunks(since, until):
         for pr in _search(run, f"repo:{repo} is:pr is:merged merged:{_iso(a)}..{_iso(b)}"):
@@ -258,12 +281,13 @@ def fetch_prs(run: Runner, repo: str, since: datetime, until: datetime) -> list:
     for pr in _search(run, f"repo:{repo} is:pr is:open"):
         by_number[pr["number"]] = pr
     prs = [by_number[k] for k in sorted(by_number)]
-    ids = []
+    ids, node_id = [], {}
     for pr in prs:
         for item in pr["timelineItems"]["nodes"]:
             for field in ("commit", "beforeCommit", "afterCommit"):
                 if (item.get(field) or {}).get("id"):
                     ids.append(item[field]["id"])
+                    node_id[item[field]["oid"]] = item[field]["id"]
     suites: dict = {}
     unique = list(dict.fromkeys(ids))
     for i in range(0, len(unique), COMMIT_BATCH):
@@ -271,7 +295,61 @@ def fetch_prs(run: Runner, repo: str, since: datetime, until: datetime) -> list:
         for node in data["data"]["nodes"]:
             if node and node.get("oid"):
                 suites[node["oid"]] = node["checkSuites"]["nodes"]
-    return [shape_pr(pr, suites) for pr in prs]
+    shaped = [shape_pr(pr, suites) for pr in prs]
+    if checks:
+        heads = [h for p in shaped for h in p["heads"]]
+        found = head_checks(run, [node_id[h["oid"]] for h in heads if h["oid"] in node_id])
+        for h in heads:
+            h["checks"] = found.get(h["oid"], {})
+    return shaped
+
+
+def head_checks(run: Runner, ids: list) -> dict:
+    """`{oid: {check name: [(time, conclusion), …] by time}}` for the commits `ids`: every
+    attempt of a check run, the last state of a status context."""
+    out: dict = {}
+    unique = list(dict.fromkeys(ids))
+    for i in range(0, len(unique), COMMIT_BATCH):
+        data = run({"query": CHECKS_QUERY, "variables": {"ids": unique[i : i + COMMIT_BATCH]}})
+        for node in data["data"]["nodes"]:
+            if not node or not node.get("oid"):
+                continue
+            runs: dict = defaultdict(list)
+            for suite in (node.get("checkSuites") or {}).get("nodes") or []:
+                for cr in (suite.get("checkRuns") or {}).get("nodes") or []:
+                    if cr.get("status") == "COMPLETED" and cr.get("conclusion"):
+                        runs[cr["name"]].append(
+                            (parse_ts(cr.get("completedAt")), cr["conclusion"])
+                        )
+            for ctx in ((node.get("status") or {}).get("contexts")) or []:
+                state = {"SUCCESS": "SUCCESS", "FAILURE": "FAILURE", "ERROR": "FAILURE"}
+                if ctx.get("state") in state:
+                    runs[ctx["context"]].append(
+                        (parse_ts(ctx.get("createdAt")), state[ctx["state"]])
+                    )
+            low = datetime.min.replace(tzinfo=timezone.utc)
+            out[node["oid"]] = {k: sorted(v, key=lambda r: r[0] or low) for k, v in runs.items()}
+    return out
+
+
+def required_checks(repo: str) -> list:
+    """The default branch's required check names through `required_checks.sh` (the one reader,
+    shared with `arm_pr.sh`); a failure raises `SourceMissingError`."""
+    try:
+        out = subprocess.run(
+            ["bash", str(HERE / "required_checks.sh"), "--repo", repo],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except subprocess.SubprocessError as exc:
+        raise SourceMissingError(f"gh: {exc}") from None
+    lines = [line for line in out.stdout.splitlines() if line.strip()]
+    if out.returncode != 0:
+        why = lines[-1] if lines else f"exit {out.returncode}"
+        raise SourceMissingError(why.replace("gh failed: ", "gh: ", 1))
+    return lines
 
 
 def shape_pr(pr: dict, suites: dict) -> dict:
@@ -471,6 +549,55 @@ def github_rows(prs: list, since: datetime, review_match: str, src: str) -> list
         )
     )
     return rows
+
+
+def red_head_row(prs: list, required: list, since: datetime, src: str) -> dict:
+    """`Required checks: red heads`: per required check, the heads of the window's PRs on which
+    it concluded red, by outcome (`rerun green`, `fixed`, `open`; module docstring)."""
+    name = "Required checks: red heads"
+    if not required:
+        return na(name, "no required checks on the default branch")
+    in_window = [
+        p
+        for p in prs
+        if (p["merged"] and p["merged"] >= since) or (p["created"] and p["created"] >= since)
+    ]
+    counts = {c: Counter() for c in required}
+    for p in in_window:
+        heads = p["heads"]
+        for i, h in enumerate(heads):
+            for check in required:
+                runs = (h.get("checks") or {}).get(check) or []
+                reds = [t for t, c in runs if c in RED]
+                if not reds:
+                    continue
+                first_red = reds[0]
+                if any(
+                    c in GREEN and (t is None or first_red is None or t > first_red)
+                    for t, c in runs
+                ):
+                    counts[check]["rerun green"] += 1
+                elif any(
+                    c in GREEN
+                    for later in heads[i + 1 :]
+                    for _, c in (later.get("checks") or {}).get(check) or []
+                ):
+                    counts[check]["fixed"] += 1
+                else:
+                    counts[check]["open"] += 1
+    total = sum(sum(c.values()) for c in counts.values())
+    parts = [
+        f"{check} {sum(c.values())} (fixed {c['fixed']}, rerun green {c['rerun green']}, open {c['open']})"
+        for check, c in counts.items()
+    ]
+    out = row(
+        name,
+        total,
+        value=" · ".join(parts),
+        source=f"{src}: required checks, PR heads in the window",
+    )
+    out["checks"] = {check: dict(c) for check, c in counts.items()}
+    return out
 
 
 def story_class(key: str, prs: list, pattern: str) -> str:
@@ -902,7 +1029,13 @@ def norm_slug(value: object) -> str | None:
     return f"{parts[-2]}/{parts[-1]}"
 
 
-def build(args, now: datetime, cwd: Path, run: Runner | None = None) -> dict:
+def build(
+    args,
+    now: datetime,
+    cwd: Path,
+    run: Runner | None = None,
+    required: Callable[[str], list] | None = None,
+) -> dict:
     since = args.since if isinstance(args.since, datetime) else parse_since(args.since, now)
     root_text = git(cwd, "rev-parse", "--show-toplevel")
     root = Path(root_text) if root_text else None
@@ -913,7 +1046,8 @@ def build(args, now: datetime, cwd: Path, run: Runner | None = None) -> dict:
         crew_path, crew = None, None
     pattern = ((crew or {}).get("naming") or {}).get("key") or DEFAULT_KEY
 
-    prs, gh_why = fetch_github(args, repo, since, now, run)
+    names, req_why = read_required(repo, required)
+    prs, gh_why = fetch_github(args, repo, since, now, run, bool(names))
     src = f"gh {repo}"
     board, state = locate_board(args, cwd, crew_path, crew)
 
@@ -948,6 +1082,11 @@ def build(args, now: datetime, cwd: Path, run: Runner | None = None) -> dict:
 
     if prs is not None:
         rows += github_rows(prs, since, args.review_match, src)
+        rows.append(
+            red_head_row(prs, names, since, src)
+            if names is not None
+            else na("Required checks: red heads", req_why)
+        )
         rows.append(prs_per_story(prs, since, pattern, src))
     else:
         for name in (
@@ -958,6 +1097,7 @@ def build(args, now: datetime, cwd: Path, run: Runner | None = None) -> dict:
             "CI cancelled share",
             "Code PRs by risk class",
             "New tests per code PR",
+            "Required checks: red heads",
             "PRs per story",
         ):
             rows.append(na(name, gh_why))
@@ -973,13 +1113,34 @@ def build(args, now: datetime, cwd: Path, run: Runner | None = None) -> dict:
     }
 
 
-def fetch_github(args, repo: str | None, since: datetime, now: datetime, run: Runner | None):
+def read_required(repo: str | None, reader: Callable[[str], list] | None) -> tuple:
+    """`(sorted names, None)`, or `(None, why)` when the required checks cannot be read."""
+    if not repo:
+        return None, "GitHub repo not found"
+    try:
+        return sorted((reader or required_checks)(repo)), None
+    except SourceMissingError as exc:
+        return None, str(exc)
+
+
+def fetch_github(
+    args,
+    repo: str | None,
+    since: datetime,
+    now: datetime,
+    run: Runner | None,
+    checks: bool = False,
+):
     """`(prs, None)`, or `(None, why)` when GitHub cannot answer."""
     if not repo:
         return None, "GitHub repo not found"
     try:
         return fetch_prs(
-            run or gh_runner(args.gh_cache, f"{_iso(since)}..{_iso(now)}"), repo, since, now
+            run or gh_runner(args.gh_cache, f"{_iso(since)}..{_iso(now)}"),
+            repo,
+            since,
+            now,
+            checks,
         ), None
     except SourceMissingError as exc:
         return None, str(exc)
@@ -1094,6 +1255,7 @@ def main(
     now: datetime | None = None,
     cwd: Path | None = None,
     run: Runner | None = None,
+    required: Callable[[str], list] | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(prog="flow_report.py", description=__doc__.split("\n")[0])
     parser.add_argument("--since", default="10d")
@@ -1120,7 +1282,7 @@ def main(
         args.since = parse_since(args.since, now)
     except argparse.ArgumentTypeError as exc:
         parser.error(str(exc))
-    report = build(args, now, cwd, run)
+    report = build(args, now, cwd, run, required)
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
         return 0

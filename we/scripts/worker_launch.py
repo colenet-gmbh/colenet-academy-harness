@@ -52,9 +52,13 @@ Usage:
                                                    --queue` waits instead of refusing;
                                                    2: a limit that is no number
   worker_launch.py needs [--repo <dir>] [--prefix <p>] < brief
-                                                   exit 2 when the brief's `Needs:` line names a
-                                                   plugin or MCP server `workers.context` turns
-                                                   off (`check_needs`), else 0
+                                                   exit 2 when the brief's `Needs:` line, or the
+                                                   frontmatter `needs:` of a /we:<skill> the
+                                                   brief names, holds a plugin or MCP server
+                                                   `workers.context` turns off (`check_needs`),
+                                                   else 0
+  worker_launch.py needs --all [--repo <dir>]      one line per plugin skill whose need
+                                                   `workers.context` turns off, exit 2; else 0
   worker_launch.py settings --repo <dir> --key <K> --out <file> [--session-start <command>] [--name <n>]
                                                    writes the worker's `--settings` file: the
                                                    granted rights of that repo as permissions.allow,
@@ -674,29 +678,128 @@ def brief_needs(brief: str) -> list[str]:
     return names
 
 
+SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
+SKILL_RE = re.compile(r"(?<![\w/-])/?we:([a-z][a-z0-9-]*)")
+SKILL_NEEDS_RE = re.compile(r"^needs:\s*\[(.*)\]\s*$", re.MULTILINE)
+TICKETING = "ticketing"  # the symbolic need: the project's ticketing plugin
+# `.weside/config.json` `ticketing.tool` → the plugin or MCP server that serves it, by bare name;
+# `ticketing.plugin` overrides it. A tool without an entry (`github-issues`, `none`) needs none.
+TICKETING_DEFAULTS = {"jira": ["atlassian"]}
+
+
+def skill_needs(skill: str, skills_dir: Path | None = None) -> list[str]:
+    """The `needs: [<name>, …]` of a plugin skill's frontmatter; `[]` for a skill without one or
+    a name that is no skill."""
+    try:
+        text = ((skills_dir or SKILLS_DIR) / skill / "SKILL.md").read_text()
+    except OSError:
+        return []
+    head = text.split("\n---", 1)[0] if text.startswith("---") else ""
+    found = SKILL_NEEDS_RE.search(head)
+    if not found:
+        return []
+    return [n.strip().strip("'\"") for n in found.group(1).split(",") if n.strip().strip("'\"")]
+
+
+def brief_skills(brief: str) -> list[str]:
+    """The plugin skills a brief names (`/we:plan-story`, `Skill we:develop`), in order, once each."""
+    return list(dict.fromkeys(SKILL_RE.findall(brief)))
+
+
+def _config(repo: Path) -> dict:
+    top = Path(_git(repo, "rev-parse", "--show-toplevel") or repo)
+    try:
+        config = json.loads((top / ".weside" / "config.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}  # workers_block already refused an unreadable file
+    return config if isinstance(config, dict) else {}
+
+
+def resolve_need(need: str, repo: Path) -> list[str]:
+    """A declared need as plugin or MCP server names: `ticketing` through `.weside/config.json`
+    (`ticketing.plugin`, a name or a list, else `TICKETING_DEFAULTS[ticketing.tool]`), every
+    other name as itself."""
+    if need != TICKETING:
+        return [need]
+    block = _config(repo).get("ticketing")
+    if not isinstance(block, dict):
+        return []
+    named = block.get("plugin")
+    if isinstance(named, str) and named:
+        return [named]
+    if isinstance(named, list):
+        return [n for n in named if isinstance(n, str) and n]
+    return list(TICKETING_DEFAULTS.get(str(block.get("tool") or ""), []))
+
+
+def _hit(need: str, plugins: list[str], servers: list[str]) -> tuple[str, str] | None:
+    """`(key, entry)` of the `workers.context` entry that turns `need` off, else None."""
+    hit = next((p for p in plugins if need in (p, p.split("@", 1)[0])), None)
+    if hit is not None:
+        return "disable_plugins", hit
+    if need in servers:
+        return "deny_mcp_servers", need
+    return None
+
+
 def check_needs(brief: str, repo: Path) -> None:
     """Refuse (exit 2) a brief that needs a plugin `workers.context.disable_plugins` disables (by
     its id `<plugin>@<marketplace>` or its bare name) or a server `deny_mcp_servers` denies: the
-    worker would start without a tool its brief needs."""
-    needs = brief_needs(brief)
-    if not needs:
+    worker would start without a tool its brief needs. The needs are the brief's `Needs:` lines
+    and the frontmatter `needs:` of every plugin skill the brief names."""
+    needs, skills = brief_needs(brief), brief_skills(brief)
+    if not needs and not any(skill_needs(s) for s in skills):
         return
     ctx = workers_block(repo).get("context")
     if not isinstance(ctx, dict):
         return
     plugins, servers = _names(ctx, "disable_plugins"), _names(ctx, "deny_mcp_servers")
+    if not plugins and not servers:
+        return
     for need in needs:
-        hit = next((p for p in plugins if need in (p, p.split("@", 1)[0])), None)
-        key = "disable_plugins"
-        if hit is None and need in servers:
-            hit, key = need, "deny_mcp_servers"
-        if hit is not None:
+        found = _hit(need, plugins, servers)
+        if found is not None:
+            key, hit = found
             raise LaunchError(
                 f"the brief needs {need}, which workers.context.{key} turns off ({hit}) for"
                 " every worker; drop it from the brief's Needs line or from"
                 f" workers.context.{key}; no worker started",
                 2,
             )
+    for skill in skills:
+        line = skill_conflict(skill, repo, plugins, servers)
+        if line:
+            raise LaunchError(f"{line}; no worker started", 2)
+
+
+def skill_conflict(skill: str, repo: Path, plugins: list[str], servers: list[str]) -> str | None:
+    """The refusal text when a need of plugin skill `skill` is turned off, else None."""
+    for need in skill_needs(skill):
+        for name in resolve_need(need, repo):
+            found = _hit(name, plugins, servers)
+            if found is not None:
+                key, hit = found
+                what = f"{name} (the project's ticketing plugin)" if need == TICKETING else name
+                return (
+                    f"the brief names /we:{skill}, which needs {what}, and"
+                    f" workers.context.{key} turns it off ({hit}) for every worker; drop it from"
+                    f" workers.context.{key} or start the worker without /we:{skill}"
+                )
+    return None
+
+
+def check_all_skills(repo: Path) -> list[str]:
+    """One line per plugin skill whose need `workers.context` turns off (`/we:setup` warns)."""
+    ctx = workers_block(repo).get("context")
+    if not isinstance(ctx, dict):
+        return []
+    plugins, servers = _names(ctx, "disable_plugins"), _names(ctx, "deny_mcp_servers")
+    lines = []
+    for skill_md in sorted(SKILLS_DIR.glob("*/SKILL.md")):
+        line = skill_conflict(skill_md.parent.name, repo, plugins, servers)
+        if line:
+            lines.append(line)
+    return lines
 
 
 def write_settings(
@@ -988,6 +1091,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--prefix", default="worker_launch")
     p = sub.add_parser("needs")
     p.add_argument("--repo", type=Path, default=Path.cwd())
+    p.add_argument("--all", action="store_true")
     p.add_argument("--prefix", default="worker_launch")
     p = sub.add_parser("settings")
     p.add_argument("--repo", type=Path, required=True)
@@ -1087,6 +1191,11 @@ def _tree_verbs(args: argparse.Namespace) -> int:
 def _gate_verb(args: argparse.Namespace) -> int:
     """`capacity` and `needs`: exit 0, or the refusal under `--prefix` with its code."""
     try:
+        if args.cmd == "needs" and args.all:
+            lines = check_all_skills(args.repo)
+            for line in lines:
+                print(line)
+            return 2 if lines else 0
         if args.cmd == "needs":
             check_needs(sys.stdin.read(), args.repo)
         else:
