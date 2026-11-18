@@ -3494,6 +3494,13 @@ def _caller():
         return os.environ.get("CLAUDE_CODE_SESSION_ID") or "unknown"
 
 
+def _writer(args):
+    """The row's `by`: the calling session, or the script that moved in process
+    (`main(writer=…)`, e.g. `we-worker close`), then with the session as `caller`."""
+    writer = getattr(args, "writer", None)
+    return {"by": writer, "caller": _caller()} if writer else {"by": _caller()}
+
+
 def _transition(state, args, crew, now, target, head):
     """Run the target's entry rules, then write the row, call the adapter once and print the
     row and the `carry:` line; a refusal writes, calls and carries nothing."""
@@ -3531,7 +3538,7 @@ def _transition(state, args, crew, now, target, head):
             "from": m.source,
             "to": target,
             "ts": _iso(now),
-            "by": _caller(),
+            **_writer(args),
             **m.extra,
             "ticket": adapter.name,
         },
@@ -4269,8 +4276,9 @@ def _usage_hint(argv):
     return _corrected([*lead, verb, *out]) if changed else None
 
 
-def main(argv=None, now=None, adapter=None):
-    """`adapter` is the tests' FakeAdapter; None means the crew's transport (`adapter_for`)."""
+def main(argv=None, now=None, adapter=None, writer=None):
+    """`adapter` is the tests' FakeAdapter; None means the crew's transport (`adapter_for`).
+    `writer` names a script moving in process (the transitions row's `by`); no CLI flag sets it."""
     try:
         args = parser().parse_args(argv)
     except SystemExit as exc:
@@ -4281,6 +4289,7 @@ def main(argv=None, now=None, adapter=None):
     try:
         crew = None if args.verb in CREWLESS_VERBS else load_crew()
         args.adapter_given = adapter
+        args.writer = writer
         now = now or _now()
         refusal, stamp_board = crew_guard(args)
         if refusal:

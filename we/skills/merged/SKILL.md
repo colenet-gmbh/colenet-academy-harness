@@ -10,8 +10,8 @@ needs: [ticketing]
 # /we:merged — close-out after the merge
 
 1. Confirm `gh pr view <N> --json state` says `MERGED` before deleting anything; `OPEN` or `CLOSED` → report and stop.
-2. Tear down only this PR's worktrees, branches and processes; anything foreign or dirty stays and is named.
-3. Move every ticket whose work landed in this PR to the after-merge state (§ 5) and read the status back.
+2. `we-worker close <KEY> --pr <N>` per story (§ 4) tears down and moves; anything foreign, dirty or unmerged stays and is named.
+3. Carry each `carry:` line to the ticket (§ 5) and read the status back.
 4. The report lists only what someone still has to do, one line each. It is not a retrospective.
 5. Never merge, release, or file a ticket on your own. Follow-ups are named in the report, not created.
 
@@ -64,37 +64,39 @@ Otherwise skip it and write `retro: skipped (<reason>)` into the report, without
 
 Its working directory is the main checkout, never a tree that step 4 removes.
 
-## 4 · Tear down, in this order
+## 4 · Close each story: `we-worker close`
 
-1. **Processes.** Find the repo's listening ports with `ss -ltnp`, then check `ls -l /proc/<pid>/cwd` for each candidate.
-   A cwd inside a tree you are about to remove, or marked `(deleted)`, is yours: `kill <pid>`.
-   A cwd in a foreign tree belongs to another session and stays. Never `pkill -f <pattern>`,
-   which matches its own command line and exits 144.
-2. **Check each tree:** `git -C <path> status --porcelain`. An untracked `WORKER-REPORT.md` is
-   expected. Anything else is unmerged work: leave that tree and name it. Then
-   `git -C <path> rev-list HEAD --not --remotes`, minus the PR's `commits` from step 1, must be
-   empty: a commit left is a worker's unpushed work, so the tree stays and is named. A tree a live
-   teammate still works in stays too: a running agent of this session (`ListAgents`) names it, or
-   a process has its cwd there (`lsof -a -d cwd +D <path>`, Linux and macOS).
-3. **Remove the worktrees**, then `git worktree prune`. A repo with its own worktree-removal verb (one that also
-   drops the tree's database fork) uses that verb. That verb also kills a running agent-browser Chrome. If another session is
-   driving agent-browser, use `git worktree remove` and name the leftover database fork in the report.
-4. **Delete the branches**, local (`git branch -D`) and remote (`git push origin --delete <branch>`).
-   `remote ref does not exist` means GitHub already deleted the branch on merge. That counts as success.
-5. **Clear the statusline focus** when it names this PR: `rm -f ~/.claude/we-focus/$CLAUDE_CODE_SESSION_ID.json`;
-   a stale file keeps a merged PR's number in the statusline.
+For every key of step 2 run, from the main checkout:
 
-`--keep-worktrees` skips this whole teardown section.
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/we-worker close <KEY> --pr <N> [--learning "<one line>"]   # --keep-worktrees: no teardown
+```
+
+The script is the one writer of the move to In Review and of the epic's Updates Log line; the
+session carries only what it prints (its docstring, `scripts/worker_close.py`, owns the rules). It derives the story's PRs from GitHub, moves the key to In Review only when no
+open PR carries it and every repo of the plan has a merged one, tears down the story's worktrees,
+branches, worker files and the processes in those trees, and is safe to run twice. Read its output:
+
+- `keep <tree>: <why>`: dirty, unmerged, a living session, or the caller stands in it. The tree
+  stays; name it in the report.
+- `refused: in_review: …`: an open PR, a repo without a merged PR, or `gh` unreadable. The story
+  stays; name what is missing in the report.
+- `in_review: no crew file, …`: there is no transitions log. Move the ticket to In Review with
+  your ticketing tool (§ 5).
+- `epic: add to <file> … <line>`: land that line per `${CLAUDE_PLUGIN_ROOT}/references/plan-commit.md`.
+- `carry: […]`, the last line: carry it with your ticketing tool and read the status back (§ 5).
+
+Then clear the statusline focus when it names this PR:
+`rm -f ~/.claude/we-focus/$CLAUDE_CODE_SESSION_ID.json`; a stale file keeps a merged PR's number
+in the statusline.
 
 ## 5 · Tickets on after the merge
 
-Move every story whose work landed in this PR. The branch name alone can miss some, so take the
-full list from step 2. A story whose work did not land stays where it is.
-
 The target is In Review, never Done (L0 §Lifecycle: In Review is "PR merged and linked"; Done comes
-only from a receipt report or an acceptance comment). Check the link first: the ticket names the PR
-(a remote link, a comment or the PR in its development panel); a missing link is added, then the
-move. Report each ticket as `<KEY> In Review — Done follows acceptance (.weside/dod.md if present)`.
+only from a receipt report or an acceptance comment). Before carrying the `carry:` line, check the
+link: the ticket names the PR (a remote link, a comment or the PR in its development panel); a
+missing link is added, then the move. Report each ticket as `<KEY> In Review — Done follows
+acceptance (.weside/dod.md if present)`. A story whose work did not land stays where it is.
 
 Ticketing follows `${CLAUDE_PLUGIN_ROOT}/references/ticketing.md` (tool order, body format, transition before comment,
 read-back and retry). `gh issue` has no status, so skip the move; without a ticketing tool, skip
@@ -104,13 +106,13 @@ silently. If the workflow rejects the move, report it and continue.
 
 - **Plan:** if `docs/plans/{KEY}-story.md` still describes an intention rather than what was built, correct it.
   The next agent reads the plan, not the diff.
-- **Epic upkeep:** if the story has an `epic:`, one `## Updates Log` line in the epic plan per
-  `${CLAUDE_PLUGIN_ROOT}/references/epic-plan.md` § Upkeep after a merge, and `updated:`; a leftover mirror block goes in the same commit.
+- **Epic upkeep:** `we-worker close` writes the one `## Updates Log` line (§ 4); a learning the
+  next plan needs goes in through its `--learning`, never as a second line.
 - **Finish line:** with an epic that has `line:`, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/epic_state.py line
   <epic plan>` and put its summary into the Updates Log line. It counts Done, which acceptance sets later:
   the trigger fires where Done is set (`/we:accept` § 4, the coordinator's sweep), never here. Once every
   other line key is Done and this merge is the last one, start no new story of the epic: the line is
-  built (`epic-plan.md` § Finish line).
+  built (`epic-plan.md` § Finish line). `we-worker close` puts the summary into its line already.
 - **No state file.** Run state lives in the PR and the ticket, and what is still open lives in
   the report (owner decision 2026-09-25).
 - **Board:** in a repo with a crew, `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/board.py close-merged` drops the merge

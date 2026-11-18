@@ -35,8 +35,9 @@ description: Reading a ticket with its comments and moving it safely. Shared by 
   § Moves), and the session carries its `carry:` line with its ticketing tool, then verifies by
   re-reading. Some skills move by ticketing tool instead, and `board.py check` shows where board and
   ticket differ: the master moves Selected → In Progress when it pulls a
-  story, `/we:merged` moves a merged and linked story to In Review
-  (`${CLAUDE_PLUGIN_ROOT}/skills/merged/SKILL.md` § 5), and Done comes only from a receipt report or an
+  story, `we-worker close` (`scripts/worker_close.py`, called by `/we:merged`, a starter on its
+  watcher's `merged` and the coordinator's sweep) is the one writer of In Review and prints the
+  `carry:` line for a merged and linked story (`${CLAUDE_PLUGIN_ROOT}/skills/merged/SKILL.md` § 4–5), and Done comes only from a receipt report or an
   acceptance comment.
 - Several humans (`docs/board.md` § Several humans): `board.py select` carries the transition, then
   the comment `selected by <role>@<human>, …`; `board.py claim` a comment; `board.py ask --to` a

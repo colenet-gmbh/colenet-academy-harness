@@ -33,6 +33,14 @@
 #                                  whose marker names no living worker, with their remove command;
 #                                  Claude Code's job directories are only counted
 #                                  (scripts/worker_supervisor.py); without --apply it only prints
+#   we-worker close <KEY> [--pr <ref>] [--keep-worktrees] [--input FILE]
+#                                  the one closing step after a merge: In Review once no open PR
+#                                  carries the key and every repo of the plan has a merged one, the
+#                                  story's trees, branches and worker files gone, the epic's updates-log
+#                                  line; refuses a dirty or unmerged tree; idempotent
+#   we-worker close --sweep [--apply]
+#                                  merged PRs whose launcher marker still lies, each with its close
+#                                  call; --apply runs them (scripts/worker_close.py owns both)
 #   we-worker is-worker <name|id|sessionId>
 #                                  exit 0 when that session is a worker (the one owner of the rule;
 #                                  worker_launch.is_worker asks it): a background session, a worktree
@@ -87,7 +95,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: we-worker <name> [--bg [--queue [--queue-timeout <duration>]]] [--limit <duration>] [--tree <path> | --here] [--branch <b>] [claude args...] | gc [--apply] | status [<name|id>] | stop <name|id> | checkpoint <name|id> | logs <name|id> [-n N] [--raw] | waiting  (help: we-worker --help)" >&2
+  echo "usage: we-worker <name> [--bg [--queue [--queue-timeout <duration>]]] [--limit <duration>] [--tree <path> | --here] [--branch <b>] [claude args...] | gc [--apply] | close <KEY> [--pr <ref>] | close --sweep [--apply] | status [<name|id>] | stop <name|id> | checkpoint <name|id> | logs <name|id> [-n N] [--raw] | waiting  (help: we-worker --help)" >&2
   exit 2
 }
 
@@ -199,6 +207,12 @@ for c in out: print(c, names.get(c,"?"))' "$1"
 name="${1:-}"
 [[ -n "$name" ]] || usage
 case "$name" in
+  close)
+    closer=$(plugin_script scripts/worker_close.py)
+    [[ -n "$closer" && -f "$closer" ]] || { echo "we-worker: plugin we not installed (no worker_close.py)" >&2; exit 2; }
+    shift
+    exec python3 "$closer" "$@"
+    ;;
   status)
     sup=$(plugin_script scripts/worker_supervisor.py)
     [[ -n "$sup" && -f "$sup" ]] || { echo "we-worker: plugin we not installed (no worker_supervisor.py)" >&2; exit 2; }

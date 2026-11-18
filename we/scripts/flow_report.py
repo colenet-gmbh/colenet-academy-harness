@@ -41,6 +41,9 @@ Sources (read only; the script holds no credential):
 A row whose source is missing prints ``n/a (<source> not found)``, never a zero. Exit 0 whenever a
 table is printed, 2 on a usage error.
 
+``Transition writers: In Review`` counts the window's moves to In Review by their ``by``: ``we-worker
+close`` is the one writer (``worker_close.py``), any other writer bypassed it.
+
 After the table, ``Writers per transition`` lists per transition kind (``from→to``) which
 sessions (the row's ``by``) wrote it in the window: a transition the report trusts has one writer.
 """
@@ -721,7 +724,30 @@ def board_rows(
     rows += share_rows(spans, prs, pattern, src, gh_why)
     stock, last = stock_row(transitions, until, src)
     rows.append(stock)
-    return rows + mismatch_rows(last, prs, pattern, since, src, gh_why)
+    rows += mismatch_rows(last, prs, pattern, since, src, gh_why)
+    return [*rows, in_review_writers(transitions, since, src)]
+
+
+CLOSER = "we-worker close"  # the one writer of In Review (`worker_close.py`)
+
+
+def in_review_writers(transitions: list, since: datetime, src: str) -> dict:
+    """`Transition writers: In Review`: the moves to In Review in the window and who wrote them;
+    the script is the one writer, every other `by` bypassed it."""
+    by = Counter(
+        r.get("by") or "(no by)"
+        for r in transitions
+        if r.get("to") == "in_review" and (parse_ts(r.get("ts")) or since - timedelta(1)) >= since
+    )
+    total = sum(by.values())
+    others = [f"{k} {v}" for k, v in by.most_common() if k != CLOSER]
+    return row(
+        "Transition writers: In Review",
+        total,
+        value=f"{CLOSER} {by.get(CLOSER, 0)} of {total}"
+        + (f"; bypassed by {', '.join(others)}" if others else ""),
+        source=f"{src}: `by` of rows to in_review, expected one writer",
+    )
 
 
 def share_rows(spans: list, prs: list | None, pattern: str, src: str, gh_why: str | None) -> list:
@@ -1076,6 +1102,7 @@ def build(
             "Stock now (age of In Review)",
             "Mismatch: merged PR, story before In Review",
             "Mismatch: In Progress without open PR",
+            "Transition writers: In Review",
             "Escapes after Done by risk class",
         ):
             rows.append(na(name, board_why))

@@ -140,7 +140,7 @@ TRANSITIONS = [
         "from": "in_progress",
         "to": "in_review",
         "ts": "2026-11-08T12:00:00Z",
-        "by": "master-1",
+        "by": "we-worker close",
     },
     {"key": "PROJ-3", "from": None, "to": "selected", "ts": "2026-11-09T08:00:00Z", "by": "pia"},
     {
@@ -269,6 +269,8 @@ def test_board_rows_from_the_logs(tmp_path):
     assert (r["n"], r["value"]) == (1, "PROJ-2")
     assert out["writers"]["selected→in_progress"] == {"master-1": 3, "worker-x": 1}
     assert out["writers"]["in_review→done"] == {"tess": 1}
+    r = rows["Transition writers: In Review"]
+    assert (r["n"], r["value"]) == (2, "we-worker close 1 of 2; bypassed by master-1 1")
     r = rows["Escapes after Done by risk class"]
     assert (r["n"], r["value"]) == (0, "routine 0/1")
     reopened = [  # a routine story and a one-way story (PR #3) each leave Done again
