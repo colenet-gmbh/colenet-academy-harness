@@ -76,7 +76,11 @@ Written always, also when step 4 is declined. Only keys a verb reads:
                     "pre_merge_receipt": "<command with {KEY}: prints report:/skip:/not-run:, exit 0 green, 1 red>" },
   "review": { "available": ["claude"] },
   "agents": { "visible_teammates": false, "worker_launch": "subagent" },
-  "workers": { "max_busy_sessions": 10, "max_active_5h_percent": 80 },
+  "workers": { "max_busy_sessions": 10, "max_active_5h_percent": 80,
+               "add_worktree": "<command with {path} {branch}, or null>",
+               "remove_worktree": "<command with {path}, or null>",
+               "context": { "auto_memory": "off", "disable_plugins": [], "deny_mcp_servers": [],
+                            "auto_compact_window": null } },
   "acceptance": { "receipts_workflow": "<workflow path whose RC run uploads accept.json, or null>",
                   "rc_tag_glob": "<RC tag glob, e.g. v*-rc.*>" }
 }
@@ -89,6 +93,11 @@ receipt for the acceptance keeper; `lenses.acceptance.sample` stays the lens sam
 
 `/we:merged` moves a landed story to In Review, never to Done (L0 §Lifecycle;
 `${CLAUDE_PLUGIN_ROOT}/skills/merged/SKILL.md` § 5).
+
+`workers.add_worktree`, `remove_worktree` and `context` shape a `we-worker` start: the repo's
+worktree commands and the worker's lean settings (`${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md`
+§ Tree, context and end). Write them only when the repo has a worktree command of its own or the
+user names plugins or MCP servers a worker never needs; absent, the plugin's defaults hold.
 
 `agents.worker_launch` is a command template that starts each dev worker as a session of its own
 (`${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md` § Worker launch backend), for a repo without a

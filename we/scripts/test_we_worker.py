@@ -26,7 +26,7 @@ with open(os.environ["STUB_LOG"], "a") as fh:
     fh.write(json.dumps({"argv": args, "role": os.environ.get("WE_ROLE"),
                          "config_dir": os.environ.get("CLAUDE_CONFIG_DIR"),
                          "companion": os.environ.get("WESIDE_COMPANION"),
-                         "key": os.environ.get("WE_STORY_KEY")}) + "\n")
+                         "key": os.environ.get("WE_STORY_KEY"), "cwd": os.getcwd()}) + "\n")
 if args[:2] == ["agents", "--json"]:
     print(json.dumps(rows)); sys.exit(0)
 if args[:1] == ["stop"]:
@@ -93,6 +93,7 @@ def setup(tmp_path, rows=(), crew=CREW):
         STUB_LOG=str(tmp_path / "log.jsonl"),
         CLAUDE_CONFIG_DIR=str(tmp_path / "pinned"),
         WESIDE_COMPANION="Ada",
+        WE_WORKER_NO_SUPERVISOR="1",
     )
     return project, env
 
@@ -189,11 +190,13 @@ def test_a_name_held_by_a_living_session_refuses(tmp_path):
             "pid": os.getpid(),
             "state": "working",
             "sessionId": "s1",
+            "cwd": "/work/AC-12",
         }
     ]
     project, env = setup(tmp_path, rows)
     proc = run(project, env, "AC-12-impl", "--bg", GO)
     assert proc.returncode == 2 and "already holds the name AC-12-impl" in proc.stderr
+    assert "state working, tree /work/AC-12" in proc.stderr
     assert not started(tmp_path)
 
 
@@ -537,7 +540,7 @@ def test_an_unknown_flag_before_the_claude_args_refuses(tmp_path):
     project, env = setup(tmp_path)
     proc = run(project, env, "AC-12-impl", "--bg", "--cwd", "/x", GO)
     assert proc.returncode == 2 and "--cwd is neither a we-worker flag" in proc.stderr
-    assert "cd <tree> && we-worker AC-12-impl" in proc.stderr
+    assert "we-worker AC-12-impl --tree <tree>" in proc.stderr
     assert not started(tmp_path)
 
 
@@ -909,3 +912,68 @@ def test_a_start_over_the_concurrency_cap_is_refused_and_starts_nothing(tmp_path
         json.dumps({"workers": {"max_busy_sessions": 11}})
     )
     assert run(project, env, "AC-12-impl", "--bg", GO).returncode == 0
+
+
+def _git(cwd, *args):
+    return subprocess.run(
+        ["git", "-C", str(cwd), "-c", "user.email=t@t", "-c", "user.name=t", *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def git_setup(tmp_path):
+    """`setup` with a real main checkout of a repo whose origin has `main`."""
+    project, env = setup(tmp_path)
+    shutil.rmtree(project / ".git")
+    origin = tmp_path / "origin.git"
+    _git(tmp_path, "init", "-q", "--bare", "-b", "main", str(origin))
+    _git(project, "init", "-q", "-b", "main")
+    _git(project, "add", ".")
+    _git(project, "commit", "-q", "-m", "init")
+    _git(project, "remote", "add", "origin", str(origin))
+    _git(project, "push", "-q", "origin", "main")
+    _git(project, "remote", "set-head", "origin", "main")
+    return project, env
+
+
+def _marker(tree):
+    return json.loads(
+        Path(_git(tree, "rev-parse", "--absolute-git-dir"), "we-worker.json").read_text()
+    )
+
+
+def test_a_build_start_in_the_main_checkout_lands_in_a_new_worktree(tmp_path):
+    project, env = git_setup(tmp_path)
+    proc = run(project, env, "AC-12-impl", "--bg", GO)
+    assert proc.returncode == 0, proc.stderr
+    tree = tmp_path / "project-AC-12-impl"
+    (call,) = started(tmp_path)
+    assert call["cwd"] == str(tree) and f"works in {tree}" in proc.stdout
+    assert _git(tree, "branch", "--show-current") == "feat/AC-12-impl"
+    assert _git(project, "branch", "--show-current") == "main"
+    marker = _marker(tree)
+    assert {k: marker[k] for k in ("name", "key", "role", "tree", "mode")} == {
+        "name": "AC-12-impl",
+        "key": "AC-12",
+        "role": "worker",
+        "tree": str(tree),
+        "mode": "bg",
+    }
+    again = run(project, env, "AC-12-impl", "--bg", GO)
+    assert again.returncode == 2 and f"--tree {tree}" in again.stderr
+
+
+def test_here_a_linked_worktree_and_tree_choose_the_tree_without_creating_one(tmp_path):
+    project, env = git_setup(tmp_path)
+    assert run(project, env, "AC-12-probe", "--here", "--bg", GO).returncode == 0
+    linked = tmp_path / "linked"
+    _git(project, "worktree", "add", "-q", "-b", "feat/linked", str(linked))
+    assert run(linked, env, "AC-12-legacy", "--bg", GO).returncode == 0
+    assert not Path(_git(linked, "rev-parse", "--absolute-git-dir"), "we-worker.json").exists()
+    proc = run(project, env, "AC-12-fix", "--tree", str(linked), "--bg", GO)
+    assert proc.returncode == 0, proc.stderr
+    assert [c["cwd"] for c in started(tmp_path)] == [str(project), str(linked), str(linked)]
+    assert _git(project, "worktree", "list").count("\n") == 1  # main checkout and linked only
+    assert _marker(linked)["name"] == "AC-12-fix"

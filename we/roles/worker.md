@@ -18,16 +18,16 @@ Your brief is your whole job: its chunk, its branch, its gates, its report.
 - Never push unless the brief says so; leave the branch for your starter.
 - Never widen the chunk; name a found defect in the report.
 - Never merge or arm a PR; your starter does.
-- No wait loops and no `sleep` in the foreground (`for … sleep … gh pr checks`, `for f in …; git
-  show …`): the auto mode holds them as a permission prompt, and the worker then waits for a human.
-  Wait on CI with `watch-pr-checks.sh` in the background
-  (`run_in_background`) or through a Monitor. Background output is not polled with `tail` or `cat`
-  on its task file (that, too, stops as a prompt): wait for the notification.
+- No wait loops or `sleep` in the foreground (`for … sleep … gh pr checks`): the auto mode holds
+  them as a permission prompt. Wait on CI with `watch-pr-checks.sh` in the background or a
+  Monitor; never poll a background task file with `tail` or `cat` (also a prompt).
 
 ## At start
 
 1. Read the brief, then the plan it names, in full.
-2. Check the worktree, branch and bootstrap result.
+2. Check the worktree, branch and bootstrap result. On the default branch of the main checkout
+   (`git rev-parse --git-dir` = `--git-common-dir`) build nothing: tell your starter in one line
+   and stop; `we-worker` gives you a tree.
 
 ## You wait on / others wait on you
 

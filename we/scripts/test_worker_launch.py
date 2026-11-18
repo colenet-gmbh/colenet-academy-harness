@@ -218,6 +218,8 @@ def test_a_claude_bg_template_states_the_worker_env_as_settings(env, monkeypatch
             "WE_STORY_KEY": "KEY-1",
             "WESIDE_COMPANION": "",
             "WE_ROLE_ID": "",
+            "WE_START": "",
+            "WE_WORKER_STARTER": "",
             "WE_HUMAN": "ana",
         }
     }
@@ -686,8 +688,80 @@ class TestSettings:
             "WE_STORY_KEY": "KEY-1",
             "WESIDE_COMPANION": "",
             "WE_ROLE_ID": "",
+            "WE_START": "",
+            "WE_WORKER_STARTER": "",
         }
         assert doc["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "timer arm x"
+        assert not {"enabledPlugins", "autoMemoryDirectory", "autoCompactWindow"} & set(doc)
+
+    @pytest.mark.parametrize(
+        "context, keys",
+        [
+            ({}, {"env.CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}),
+            (
+                {
+                    "auto_memory": "own",
+                    "disable_plugins": ["sentry@market"],
+                    "deny_mcp_servers": ["vault"],
+                    "auto_compact_window": 200000,
+                },
+                {
+                    "autoMemoryDirectory": "<state>/KEY-1-w1.memory",
+                    "enabledPlugins": {"sentry@market": False},
+                    "deniedMcpServers": [{"serverName": "vault"}],
+                    "autoCompactWindow": 200000,
+                },
+            ),
+            ({"auto_memory": "shared"}, {}),
+            ({"auto_compact_window": 5000}, None),
+            ({"auto_memory": "all"}, None),
+        ],
+    )
+    def test_workers_context_makes_the_settings_lean(self, env, tmp_path, context, keys):
+        (env["wt"] / ".weside").mkdir(exist_ok=True)
+        (env["wt"] / ".weside" / "config.json").write_text(
+            json.dumps({"workers": {"context": context}})
+        )
+        out_file = tmp_path / "state" / "KEY-1-w1.settings.json"
+        args = ("--repo", str(env["wt"]), "--key", "KEY-1", "--name", "KEY-1-w1")
+        out = _run("settings", *args, "--out", str(out_file))
+        if keys is None:
+            assert out.returncode == 2 and "workers.context" in out.stderr
+            return
+        assert out.returncode == 0, out.stderr
+        doc = json.loads(out_file.read_text())
+        flat = {**doc, **{f"env.{k}": v for k, v in doc["env"].items()}}
+        want = {
+            k: str(v).replace("<state>", str(out_file.parent)) if k == "autoMemoryDirectory" else v
+            for k, v in keys.items()
+        }
+        assert {k: flat.get(k) for k in want} == want
+        if context.get("auto_memory") == "shared":
+            assert "CLAUDE_CODE_DISABLE_AUTO_MEMORY" not in doc["env"]
+
+
+def test_add_tree_runs_the_repos_template_with_path_and_branch(env, tmp_path):
+    (env["repo"] / ".weside").mkdir()
+    log = tmp_path / "tree.args"
+    script = (
+        f"import sys,subprocess; open({str(log)!r},'w').write(' '.join(sys.argv[1:])); "
+        "subprocess.run(['git','worktree','add','-q','-b',sys.argv[2],sys.argv[1]],check=True)"
+    )
+    (env["repo"] / ".weside" / "config.json").write_text(
+        json.dumps(
+            {
+                "workers": {
+                    "add_worktree": f"{sys.executable} -c {json.dumps(script)} {{path}} {{branch}}",
+                    "remove_worktree": "a worktree remove {path}",
+                }
+            }
+        )
+    )
+    path = wl.add_tree(env["repo"], "KEY-1-w2", "fix/KEY-1-w2")
+    assert path == tmp_path / "repo-KEY-1-w2" and log.read_text() == f"{path} fix/KEY-1-w2"
+    assert wl.remove_command(env["repo"], str(path)) == f"a worktree remove {path}"
+    with pytest.raises(wl.LaunchError, match="no main checkout"):
+        wl.add_tree(env["wt"], "KEY-1-w3")
 
 
 # The concurrency cap: busy sessions and room in the account rotation.

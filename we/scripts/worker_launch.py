@@ -50,12 +50,20 @@ Usage:
                                                    an unreadable value skips its check (stderr;
                                                    silent without cswap on PATH);
                                                    2: a limit that is no number
-  worker_launch.py settings --repo <dir> --key <K> --out <file> [--session-start <command>]
+  worker_launch.py settings --repo <dir> --key <K> --out <file> [--session-start <command>] [--name <n>]
                                                    writes the worker's `--settings` file: the
                                                    granted rights of that repo as permissions.allow,
                                                    the never-list as permissions.deny
                                                    (`worker_rights.py`), the command as its
-                                                   SessionStart hook
+                                                   SessionStart hook, the lean context of
+                                                   `workers.context` (`apply_context`)
+  worker_launch.py tree --repo <dir> --name <n> [--branch <b>]
+                                                   creates the worker's own worktree beside the
+                                                   main checkout (`add_tree`) and prints its path;
+                                                   with --main-checkout only prints the main
+                                                   checkout's top, exit 1 when <dir> is none
+  worker_launch.py marker --tree <wt> --name <n> [--key K] [--role R] [--starter S] [--mode M]
+                                                   writes the launcher's marker (`write_marker`)
   worker_launch.py launch --worktree <wt> --name <n> --brief-file <f> [--agent <we:dev-…>]
   worker_launch.py stop --name <n> [--worktree <wt>] exit 0 stopped · 1 failed · 3 still running;
                                                    with --worktree it removes marker and brief;
@@ -157,7 +165,12 @@ CONFIG_KEY = "agents.worker_launch"
 CREW_KEY = "launch.worker"
 
 
-def validate(template: str, source: str = CONFIG_KEY) -> list[str]:
+def validate(
+    template: str,
+    source: str = CONFIG_KEY,
+    placeholders: tuple[str, ...] = PLACEHOLDERS,
+    required: tuple[str, ...] = REQUIRED,
+) -> list[str]:
     try:
         tokens = shlex.split(template)
     except ValueError as exc:
@@ -166,7 +179,7 @@ def validate(template: str, source: str = CONFIG_KEY) -> list[str]:
         raise LaunchError(f"{source}: empty template", 2)
     for token in tokens:
         for found in re.findall(r"\{([^{}]*)\}", token):
-            if found not in PLACEHOLDERS:
+            if found not in placeholders:
                 raise LaunchError(f"{source}: unknown placeholder {{{found}}}", 2)
             if token != f"{{{found}}}":
                 raise LaunchError(
@@ -174,7 +187,7 @@ def validate(template: str, source: str = CONFIG_KEY) -> list[str]:
                     f"not part of {token!r}",
                     2,
                 )
-    for name in REQUIRED:
+    for name in required:
         if f"{{{name}}}" not in tokens:
             raise LaunchError(f"{source}: placeholder {{{name}}} is required", 2)
     return tokens
@@ -184,7 +197,7 @@ def render(tokens: list[str], values: dict[str, str]) -> list[str]:
     argv = []
     for token in tokens:
         key = token[1:-1] if token.startswith("{") and token.endswith("}") else None
-        if key in PLACEHOLDERS:
+        if key in values:
             argv.append(values[key])
         else:
             argv.append(token)
@@ -245,19 +258,25 @@ CAP_DEFAULTS = {"max_busy_sessions": 10, "max_active_5h_percent": 80}
 CSWAP_TIMEOUT_S = 20
 
 
-def cap_limits(repo: Path) -> dict[str, float]:
-    """`workers.max_busy_sessions` and `workers.max_active_5h_percent` of the repo's
-    `.weside/config.json`, each defaulting to `CAP_DEFAULTS`; a value that is no number refuses."""
+def workers_block(repo: Path) -> dict:
+    """The `workers` block of the repo's `.weside/config.json` (`{}` without file or key); an
+    unreadable file refuses (exit 2)."""
     top = Path(_git(repo, "rev-parse", "--show-toplevel") or repo)
     path = top / ".weside" / "config.json"
     try:
         config = json.loads(path.read_text())
     except FileNotFoundError:
-        config = {}
+        return {}
     except (OSError, json.JSONDecodeError) as exc:
         raise LaunchError(f"{path}: unreadable ({exc})", 2) from exc
     block = config.get("workers") if isinstance(config, dict) else None
-    block = block if isinstance(block, dict) else {}
+    return block if isinstance(block, dict) else {}
+
+
+def cap_limits(repo: Path) -> dict[str, float]:
+    """`workers.max_busy_sessions` and `workers.max_active_5h_percent` of the repo's
+    `.weside/config.json`, each defaulting to `CAP_DEFAULTS`; a value that is no number refuses."""
+    block = workers_block(repo)
     limits = {}
     for key, default in CAP_DEFAULTS.items():
         value = block.get(key, default)
@@ -469,11 +488,159 @@ def check(name: str, repo: Path | None = None) -> str:
     return check_name(name, key_re, _example_key(repo, key_re))
 
 
-def write_settings(repo: Path, key: str, out: Path, session_start: str | None = None) -> dict:
-    """The worker's `--settings` file (`worker_rights.settings`), with the timer's hook."""
+TREE_PLACEHOLDERS = ("path", "branch")
+TREE_KEY = "workers.add_worktree"
+REMOVE_KEY = "workers.remove_worktree"
+BRANCH_TYPE = "feat"
+TREE_TIMEOUT_S = 600
+
+
+def main_checkout(cwd: Path) -> Path | None:
+    """The top of the repo when `cwd` lies in its main checkout (git dir = common dir), else None:
+    a linked worktree, a bare repo or no repo at all."""
+    gd = _git(cwd, "rev-parse", "--absolute-git-dir")
+    common = _git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    top = _git(cwd, "rev-parse", "--show-toplevel")
+    if not (gd and common and top) or Path(gd).resolve() != Path(common).resolve():
+        return None
+    return Path(top)
+
+
+def default_branch(top: Path) -> str:
+    """`origin/HEAD`'s branch, else `main`."""
+    ref = _git(top, "symbolic-ref", "--short", "refs/remotes/origin/HEAD") or ""
+    return ref.split("/", 1)[1] if "/" in ref else "main"
+
+
+def tree_path(top: Path, name: str) -> Path:
+    return top.parent / f"{top.name}-{name}"
+
+
+def add_tree(repo: Path, name: str, branch: str | None = None) -> Path:
+    """Create the worker's own worktree beside the main checkout holding `repo`: the repo's
+    `workers.add_worktree` (a template with the tokens `{path}` and `{branch}`, run without a shell
+    in the main checkout), else `git worktree add <top>-<name> -b <branch> origin/<default>`. The
+    branch defaults to `feat/<name>`. An existing path refuses (exit 2): start in it with
+    `--tree`."""
+    top = main_checkout(repo)
+    if top is None:
+        raise LaunchError(f"{repo} is no main checkout of a git repo; pass --tree or --here", 2)
+    path = tree_path(top, name)
+    if path.exists():
+        raise LaunchError(
+            f"{path} exists; start in it with --tree {path}, or pick another name", 2
+        )
+    branch = branch or f"{BRANCH_TYPE}/{name}"
+    template = workers_block(top).get("add_worktree")
+    if template is not None and not isinstance(template, str):
+        raise LaunchError(f"{TREE_KEY}: must be a command string", 2)
+    if template:
+        tokens = validate(template, TREE_KEY, TREE_PLACEHOLDERS, ("path",))
+        argv = render(tokens, {"path": str(path), "branch": branch})
+    else:
+        base = default_branch(top)
+        _git(top, "fetch", "--quiet", "origin", base)
+        argv = ["git", "worktree", "add", "--quiet", str(path), "-b", branch, f"origin/{base}"]
+    try:
+        out = subprocess.run(
+            argv, cwd=top, capture_output=True, text=True, check=False, timeout=TREE_TIMEOUT_S
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise LaunchError(f"{argv[0]}: {exc}") from exc
+    if out.returncode != 0 or git_dir(path) is None:
+        raise LaunchError(
+            f"the worktree {path} was not created ({' '.join(argv[:3])} exited "
+            f"{out.returncode}: {out.stderr.strip()})"
+        )
+    return path
+
+
+def remove_command(repo: Path, path: str) -> str:
+    """The repo's command that removes a worktree (`workers.remove_worktree` with `{path}`), else
+    `git worktree remove <path>`; printed by `gc`, never run."""
+    template = workers_block(repo).get("remove_worktree")
+    if isinstance(template, str) and template.strip():
+        tokens = validate(template, REMOVE_KEY, ("path",), ("path",))
+        return shlex.join(render(tokens, {"path": path}))
+    return shlex.join(["git", "worktree", "remove", path])
+
+
+def write_marker(tree: Path, **fields: object) -> Path:
+    """The launcher's marker in the tree's own git dir: name, key, role, starter, tree, mode,
+    launched_at. It carries no `session_id`, so the marker-bound worker gates stay as they were."""
+    gd = git_dir(tree)
+    if gd is None:
+        raise LaunchError(f"{tree} is no git worktree")
+    doc = {k: v for k, v in fields.items() if v not in (None, "")}
+    doc["tree"] = str(tree)
+    doc["launched_at"] = time.time()
+    (gd / MARKER).write_text(json.dumps(doc, indent=2) + "\n")
+    return gd / MARKER
+
+
+AUTO_MEMORY = ("off", "own", "shared")
+COMPACT_RANGE = (100_000, 1_000_000)
+
+
+def _names(ctx: dict, key: str) -> list[str]:
+    value = ctx.get(key) or []
+    if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
+        raise LaunchError(f"workers.context.{key}: needs a list of names", 2)
+    return value
+
+
+def apply_context(doc: dict, repo: Path, name: str | None, state: Path) -> dict:
+    """Lean settings from `workers.context` of the repo's `.weside/config.json`; without the block
+    the document stays as it is. `auto_memory` `off` (default) sets
+    `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, `own` points `autoMemoryDirectory` at
+    `<state>/<name>.memory`, `shared` leaves memory alone; `disable_plugins` → `enabledPlugins`
+    false, `deny_mcp_servers` → `deniedMcpServers` by `serverName`, `auto_compact_window` →
+    `autoCompactWindow`."""
+    ctx = workers_block(repo).get("context")
+    if ctx is None:
+        return doc
+    if not isinstance(ctx, dict):
+        raise LaunchError("workers.context: needs an object", 2)
+    memory = ctx.get("auto_memory", "off")
+    if memory not in AUTO_MEMORY:
+        raise LaunchError(f"workers.context.auto_memory: one of {', '.join(AUTO_MEMORY)}", 2)
+    if memory == "off":
+        doc.setdefault("env", {})["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+    elif memory == "own":
+        if not name:
+            raise LaunchError("workers.context.auto_memory own: the settings need --name", 2)
+        own = state / f"{name}.memory"
+        own.mkdir(parents=True, exist_ok=True)
+        doc["autoMemoryDirectory"] = str(own)
+    plugins = _names(ctx, "disable_plugins")
+    if plugins:
+        doc["enabledPlugins"] = dict.fromkeys(plugins, False)
+    servers = _names(ctx, "deny_mcp_servers")
+    if servers:
+        doc["deniedMcpServers"] = [{"serverName": s} for s in servers]
+    window = ctx.get("auto_compact_window")
+    if window is not None:
+        low, high = COMPACT_RANGE
+        if isinstance(window, bool) or not isinstance(window, int) or not low <= window <= high:
+            raise LaunchError(
+                f"workers.context.auto_compact_window: a number of tokens {low}-{high}", 2
+            )
+        doc["autoCompactWindow"] = window
+    return doc
+
+
+def write_settings(
+    repo: Path,
+    key: str,
+    out: Path,
+    session_start: str | None = None,
+    name: str | None = None,
+) -> dict:
+    """The worker's `--settings` file (`worker_rights.settings`), with the timer's hook and the
+    lean context of `workers.context` (`apply_context`)."""
     import worker_rights  # noqa: PLC0415
 
-    doc = worker_rights.settings(repo, key)
+    doc = apply_context(worker_rights.settings(repo, key), repo, name, out.parent)
     if session_start:
         doc["hooks"] = {
             "SessionStart": [{"hooks": [{"type": "command", "command": session_start}]}]
@@ -753,6 +920,19 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--key", required=True)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--session-start")
+    p.add_argument("--name")
+    p = sub.add_parser("tree")
+    p.add_argument("--repo", type=Path, default=Path.cwd())
+    p.add_argument("--name", required=True)
+    p.add_argument("--branch")
+    p.add_argument("--main-checkout", action="store_true")
+    p = sub.add_parser("marker")
+    p.add_argument("--tree", type=Path, required=True)
+    p.add_argument("--name", required=True)
+    p.add_argument("--key")
+    p.add_argument("--role", default="worker")
+    p.add_argument("--starter")
+    p.add_argument("--mode")
     p = sub.add_parser("launch")
     p.add_argument("--worktree", type=Path, required=True)
     p.add_argument("--name", required=True)
@@ -802,6 +982,28 @@ def _check_verb(args: argparse.Namespace) -> int:
     return 0
 
 
+def _tree_verbs(args: argparse.Namespace) -> int:
+    """`tree` (create, or with --main-checkout only name the main checkout) and `marker`."""
+    if args.cmd == "marker":
+        write_marker(
+            args.tree.resolve(),
+            name=args.name,
+            key=args.key,
+            role=args.role,
+            starter=args.starter,
+            mode=args.mode,
+        )
+        return 0
+    if args.main_checkout:
+        top = main_checkout(args.repo.resolve())
+        if top is None:
+            return 1
+        print(top)
+        return 0
+    print(add_tree(args.repo.resolve(), args.name, args.branch))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.cmd == "check":
@@ -813,12 +1015,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{args.prefix}: {exc}", file=sys.stderr)
             return exc.code
         return 0
+    code = 0
     try:
         if args.cmd == "backend":
             print(backend(args.repo))
         elif args.cmd == "settings":
-            write_settings(args.repo.resolve(), args.key, args.out, args.session_start)
+            write_settings(args.repo.resolve(), args.key, args.out, args.session_start, args.name)
             print(args.out)
+        elif args.cmd in ("tree", "marker"):
+            code = _tree_verbs(args)
         elif args.cmd == "launch":
             marker = launch(args.worktree.resolve(), args.name, args.brief_file, args.agent)
             print(f"launched: {args.name} · marker {marker}")
@@ -828,11 +1033,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "checkpoint":
             print(checkpoint(args.name))
         else:
-            return 0 if alive(args.name) else 1
+            code = 0 if alive(args.name) else 1
     except LaunchError as exc:
         print(f"worker_launch: {exc}", file=sys.stderr)
-        return 2 if args.cmd == "alive" else exc.code
-    return 0
+        code = 2 if args.cmd == "alive" else exc.code
+    return code
 
 
 if __name__ == "__main__":
