@@ -20,7 +20,6 @@ FAMILY = {
     "acme-board.json.lock": "",
     "acme-board-answers.jsonl": '{"id": "Q1"}\n',
     "acme-board-questions.jsonl": '{"id": "Q1"}\n',
-    "acme-board-freeze.json": '{"reason": "x"}\n',
     "acme-board-crew.id": "acme/second\n",
 }
 TARGETS = {
@@ -28,7 +27,6 @@ TARGETS = {
     "acme-board.json.lock": "board.json.lock",
     "acme-board-answers.jsonl": "board-answers.jsonl",
     "acme-board-questions.jsonl": "board-questions.jsonl",
-    "acme-board-freeze.json": "freeze.json",
     "acme-board-crew.id": "crew.id",
 }
 

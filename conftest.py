@@ -4,7 +4,7 @@
 A write a test sends to a live state directory is refused by `worker_rights.brake_log`
 (`WE_STATE_FORBIDDEN`), its line lands in `WE_STATE_LEAKS`, and the run fails naming it. A test
 that writes the brake log gives itself a `WE_STATE_DIR` (the fixture `own_state_dir`). No global
-`WE_STATE_DIR`: it would win over the board and freeze tests' own isolation (`DEFAULT_BOARD`,
+`WE_STATE_DIR`: it would win over the board tests' own isolation (`DEFAULT_BOARD`,
 a crew's `state_dir`).
 """
 

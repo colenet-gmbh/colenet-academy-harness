@@ -22,7 +22,7 @@ Sources (read only; the script holds no credential):
   ``pull_request_target`` suite; heads are ordered by their first suite. A PR is docs-only when
   every changed path is under ``docs/`` or ends in ``.md``; every other PR is a code PR.
 - The transitions log ``<board stem>-transitions.jsonl`` beside the board file
-  (``board_freeze.watched_board_files``; ``--board`` names another). Without a crew file and
+  (``crew.resolve_board``; ``--board`` names another). Without a crew file and
   without ``--board`` the board rows print ``n/a``: the default board belongs to no repo.
 - The question log ``<board stem>-questions.jsonl`` joined with ``<stem>-answers.jsonl`` by ``id``
   (``docs/board.md`` § Asking), and ``brakes.jsonl`` in the crew's state directory.
@@ -52,7 +52,6 @@ from typing import Any, Callable
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-import board_freeze  # noqa: E402
 import crew as crew_mod  # noqa: E402
 import lens_verdict  # noqa: E402
 
@@ -812,11 +811,25 @@ def git(cwd: Path, *args: str) -> str | None:
     return out.stdout.strip() if out.returncode == 0 else None
 
 
+def norm_slug(value: object) -> str | None:
+    """`owner/repo` from a slug, `HOST/OWNER/REPO` or a GitHub URL (lower case, no `.git`), else
+    None: a bare name or anything else names no repo."""
+    text = str(value or "").strip().lower()
+    text = text.split("://", 1)[-1].split("#", 1)[0].split("?", 1)[0].rstrip("/")
+    text = text.removesuffix(".git")
+    parts = [p for p in text.replace(":", "/").split("/") if p]
+    if "pull" in parts:
+        parts = parts[: parts.index("pull")]
+    if len(parts) < 2:
+        return None
+    return f"{parts[-2]}/{parts[-1]}"
+
+
 def build(args, now: datetime, cwd: Path, run: Runner | None = None) -> dict:
     since = args.since if isinstance(args.since, datetime) else parse_since(args.since, now)
     root_text = git(cwd, "rev-parse", "--show-toplevel")
     root = Path(root_text) if root_text else None
-    repo = args.repo or board_freeze.norm_slug(git(cwd, "remote", "get-url", "origin"))
+    repo = args.repo or norm_slug(git(cwd, "remote", "get-url", "origin"))
     try:
         crew_path, crew = crew_mod.find_and_load(cwd)
     except crew_mod.CrewError:
@@ -892,14 +905,14 @@ def fetch_github(args, repo: str | None, since: datetime, now: datetime, run: Ru
 
 def locate_board(args, cwd: Path, crew_path: Path | None, crew: dict | None) -> tuple:
     """`(board file, state dir)`: `--board` and its folder, else the crew's board
-    (`board_freeze.watched_board_files`) and state dir, else `(None, None)`: without a crew the
+    (`crew.resolve_board`) and state dir, else `(None, None)`: without a crew the
     default board belongs to no repo."""
     if args.board:
         board = Path(args.board).expanduser()
         return board, board.parent
     if crew_path is None:
         return None, None
-    return board_freeze.watched_board_files(cwd)[0], crew_mod.state_dir(crew_path, crew)
+    return crew_mod.resolve_board(cwd), crew_mod.state_dir(crew_path, crew)
 
 
 def log_rows(board: Path | None, state: Path | None, board_why, since, now) -> list:

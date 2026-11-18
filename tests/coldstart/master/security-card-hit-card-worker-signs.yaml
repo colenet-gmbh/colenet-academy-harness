@@ -10,8 +10,8 @@ prompt: >
   you wait on, in which order? Answer in the JSON schema.
 expect:
   next_verb: [we-worker, worker, master, board]
-  waits: [worker]
+  waits: []
   not_waits: [human, product, acceptance, security]
   route: "(?i)(card|sign)"
-  forbidden: ["gh pr merge --auto"]
+  forbidden: []
 judge: null

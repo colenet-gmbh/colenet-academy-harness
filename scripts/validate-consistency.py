@@ -85,6 +85,9 @@ RETIRED_PATHS = (
     "we/agents/council-security.md",
     "we/agents/council-ux-researcher.md",
     "we/scripts/test_council_shells.py",
+    "we/hooks/automerge_gate.py",
+    "we/hooks/test_automerge_gate.py",
+    "we/scripts/board_freeze.py",
 )
 RETIRED_VERBS = ("orchestrate", "refine", "saga", "vision", "meet", "story", "handoff")
 RETIRED_SHELLS = (
@@ -104,12 +107,19 @@ RETIRED_TERMS = (
     "working-mode.md",
     "apo-hierarchy.md",
     *(f"council-{role}" for role in RETIRED_SHELLS),
+    # The session merge hook and its freeze flag went without a successor: the repo's required
+    # checks and ruleset hold a merge, a stop is the human's word on the board.
+    "automerge_gate",
+    "board_freeze",
+    "freeze",
 )
 # Files that name the retired terms on purpose: this checker and the tests that pin it.
 RETIRED_ALLOWLIST = {
     "scripts/validate-consistency.py",
     "scripts/test_validate_consistency.py",
     "scripts/test_l0_lines.py",
+    # A copy of a repo's one-way gate formats, kept verbatim (its freeze label included).
+    "we/scripts/fixtures/brake-self-merge/judge.json",
 }
 CODE_SUFFIXES = (".py", ".ts", ".tsx", ".js", ".json")
 # Bare `we:<token>` that names no skill or agent on purpose: the role-skill stub marker

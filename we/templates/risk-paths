@@ -1,12 +1,12 @@
-# Risk rules of this repo, read by the merge hook from the default branch only.
+# Risk rules of this repo, read by the classifier from the default branch only.
 # A PR touching a path of a one-way section is `T2 one-way <section>`: no session merges it, the
-# owner (`human.name` in the crew) merges it by hand, or approves it where the repo runs an approve
-# gate (the merge hook's refusal says which). `[t2]` paths print `T2` and auto-merge after CI.
-# A file without any one-way section is valid: the brake is empty on purpose and each merge says so.
+# owner (`human.name` in the crew) merges it by hand, or approves it where the repo runs a one-way
+# gate as a required check. `[t2]` paths print `T2` and auto-merge after CI.
+# A file without any one-way section is valid: the brake is empty on purpose.
 # Grammar: `[section]` and `path <glob>` lines (`**`, `*`, `?`, `{a,b}`).
 # One-way sections: brake-change, money, destructive-migration, terraform-secrets.
-# Two-way `review: high` sections: trust-loosening and brake-review (a security card worker signs
-# before the merge), money-path (no card).
+# Two-way `review: high` sections: trust-loosening and brake-review (a security card worker posts
+# its verdict on the PR for the human), money-path (no card).
 
 [brake-change]
 path .weside/crew.json

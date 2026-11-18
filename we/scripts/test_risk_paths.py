@@ -22,12 +22,10 @@ BRAKE = [
     ".weside/risk-paths",
     ".github/CODEOWNERS",
     ".weside/crew.json",
-    "we/hooks/automerge_gate.py",
     "we/hooks/hooks.json",
     "we/hooks/verification_gate.py",
     "we/scripts/ready_gate.py",
     "we/scripts/lens_verdict.py",
-    "we/scripts/board_freeze.py",
     "we/scripts/risk_paths.py",
     "we/scripts/worker_launch.py",
 ]
@@ -101,18 +99,18 @@ def test_a_docs_change_is_t0(repo: Path) -> None:
 
 def test_emptied_rules_and_a_hook_change_still_classify_by_mains_rules(repo: Path) -> None:
     write(repo, ".weside/risk-paths", "")
-    write(repo, "we/hooks/automerge_gate.py", "# allow everything\n")
+    write(repo, "we/hooks/verification_gate.py", "# allow everything\n")
     commit(repo, "empty the rules")
     out = classify(repo)
     assert out.returncode == 0, out.stderr
     assert out.stdout.splitlines()[0] == "T2 one-way brake-change"
-    assert "we/hooks/automerge_gate.py\tbrake-change: path we/hooks/automerge_gate.py" in (
+    assert "we/hooks/verification_gate.py\tbrake-change: path we/hooks/verification_gate.py" in (
         out.stdout
     )
 
 
 def test_a_rename_away_from_a_brake_path_counts(repo: Path) -> None:
-    git(repo, "mv", "we/hooks/automerge_gate.py", "we/hooks/gate_old.py")
+    git(repo, "mv", "we/hooks/verification_gate.py", "we/hooks/gate_old.py")
     commit(repo, "rename")
     assert classify(repo).stdout.splitlines()[0] == "T2 one-way brake-change"
 
@@ -213,7 +211,7 @@ def test_bad_arguments_exit_2(repo: Path, argv: list[str]) -> None:
 def test_a_card_section_is_two_way_with_a_high_review(repo: Path) -> None:
     """Brake stage 2: `trust-loosening` left the one-way classes (red arm: 8.5.0 printed
     `T2 one-way trust-loosening`); a card hit prints `T2`, `review: high` and its section, which
-    the merge hook reads to wait for the security card verdict. A one-way hit still wins."""
+    calls for the security card review. A one-way hit still wins."""
     _mains_rules(
         repo,
         "[trust-loosening]\npath auth/**\n[money-path]\npath bill/**\n[brake-review]\n"

@@ -153,7 +153,7 @@ def _same_command(argv: list[str], i: int) -> list[str]:
 
 def _args_from(argv: list[str], k: int) -> list[str]:
     """argv[k:] up to the end of that simple command — a prefix before `gh` (`GH_REPO=x gh …`,
-    `timeout 30 gh …`) does not shift it. Pinned by test_automerge_gate.py::test_auto_in_any_position_is_seen."""
+    `timeout 30 gh …`) does not shift it."""
     out: list[str] = []
     for tok in argv[k:]:
         if tok in _SEPARATORS:

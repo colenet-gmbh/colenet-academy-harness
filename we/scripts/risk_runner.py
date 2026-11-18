@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""The one runner of a repo's risk classifier on a commit range: the merge hook
-(`hooks/automerge_gate.py`, a PR's class) and the T2 panel's carry (`lens_verdict.py`, the delta
-between two heads) both call it, so the same range gets the same class.
+"""The one runner of a repo's risk classifier on a commit range, for the T2 panel's carry
+(`lens_verdict.py`, the delta between two heads).
 
 `rules(root, git)` picks the classifier from `RULES_FROM` (`origin/main`), fetched first: the
 crew's `risk.command` blob (from `risk.rules_from`), else the plugin's `risk_paths.py` (the repo's
@@ -11,8 +10,7 @@ T0. `run(root, git, found, head, base, timeout)` writes the classifier to a temp
 with `base` in a no-checkout worktree of `head`; line 1 must match `CLASS_LINE`. The worktree and
 the temp dir go whatever happens.
 
-`git(root, *args, timeout=...)` is the caller's git: stdout, or None on any failure (the hook passes
-its own, cut to its time budget). Python 3.9, stdlib only.
+`git(root, *args, timeout=...)` is the caller's git: stdout, or None on any failure. Python 3.9, stdlib only.
 """
 
 from __future__ import annotations

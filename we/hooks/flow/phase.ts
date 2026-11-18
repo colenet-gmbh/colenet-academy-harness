@@ -12,7 +12,7 @@ export type Evidence = {
   aheadBranches: string[]
 }
 
-// Codex Review never makes a PR red here; the merge gate (hooks/automerge_gate.py) waits for its verdict instead.
+// Codex Review never makes a PR red here; where the repo requires it, the required check holds the merge.
 const ADVISORY = /codex review/i
 const RED = new Set(['FAILURE', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'ERROR'])
 

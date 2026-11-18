@@ -1047,7 +1047,7 @@ def crew_id(crew_path: Path) -> str:
 
 
 def stamp_path(board: Path) -> Path:
-    """The crew stamp beside a board, named after its stem like the freeze flag: ``board.json`` →
+    """The crew stamp beside a board, named after its stem like its logs: ``board.json`` →
     ``crew.id`` (the state directory's owner, read by the role hook), ``acme-board.json`` →
     ``acme-board-crew.id``."""
     board = Path(board).expanduser()
@@ -1661,8 +1661,8 @@ def _validate_cli(_argv: list[str], crew_path: Path, crew: dict[str, Any]) -> in
     if not has_command and not (crew_path.parent / "risk-paths").is_file():
         print(
             "warning: no risk rules: the crew sets no `risk.command` and "
-            f"{crew_path.parent / 'risk-paths'} is missing; the merge hook reads the rules from "
-            "origin/main only and refuses every merge until a rules file lands there",
+            f"{crew_path.parent / 'risk-paths'} is missing; the risk class reads the rules from "
+            "origin/main only and is not computed until a rules file lands there",
             file=sys.stderr,
         )
     print(f"ok {crew_path}")

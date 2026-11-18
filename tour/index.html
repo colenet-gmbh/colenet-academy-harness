@@ -66,7 +66,7 @@
 <body>
 <main>
   <h1>we — Agentic Product Ownership for Claude Code</h1>
-  <p class="lede">A Claude Code plugin that turns an outcome into merged, accepted pull requests. A crew of sessions plans the work as epics and stories, workers build one PR per story, and a merge gate lets each PR merge by its computed risk class. You decide what only a person can decide, from one inbox.</p>
+  <p class="lede">A Claude Code plugin that turns an outcome into merged, accepted pull requests. A crew of sessions plans the work as epics and stories, workers build one PR per story, and each PR merges by its computed risk class. You decide what only a person can decide, from one inbox.</p>
 
   <h2>1 · Who runs</h2>
   <div class="steps">
@@ -98,13 +98,13 @@
   <p class="note" style="margin-top:12px"><code>board.py</code> makes every move and refuses one whose entry rule fails; with several humans, also one by a human who does not own the state the story leaves.</p>
 
   <h2>4 · Who waits on whom: the risk class</h2>
-  <p>A classifier over <code>.weside/risk-paths</code> computes each PR's class. The merge gate (a hook on every merge and auto-merge arm) refuses what breaks the table, refuses any merge from a worker, and holds everything during a freeze.</p>
+  <p>A classifier over <code>.weside/risk-paths</code> computes each PR's class. The master arms auto-merge right after it opens the PR, except a one-way PR; the repo's required checks hold the merge. No hook judges a merge: the table is an instruction, backed by your permission prompts and the repo's ruleset.</p>
   <div class="scroll">
     <table>
       <tr><th>Class</th><th>Who arms or merges</th><th>Waits for</th></tr>
-      <tr><td><code>T0</code></td><td>the master arms auto-merge</td><td>green CI, and the Codex verdict where the repo runs Codex</td></tr>
+      <tr><td><code>T0</code></td><td>the master arms auto-merge</td><td>the repo's required checks</td></tr>
       <tr><td><code>T2</code></td><td>the master</td><td>as T0, plus a green T2 lens panel on the PR head (<code>/we:lens t2</code>)</td></tr>
-      <tr><td><code>T2</code> with a card hit (trust loosening, money path, brake review)</td><td>the master</td><td>as T2, plus a security card worker's <code>PASS</code> on the head; never you</td></tr>
+      <tr><td><code>T2</code> with a card hit (trust loosening, money path, brake review)</td><td>the master</td><td>as T2; a security card worker's verdict lands on the PR for you to read</td></tr>
       <tr><td><code>T2 one-way</code> (money, destructive migration, Terraform or secrets)</td><td>nobody arms</td><td>the repo's self-merge window (2 h after the green panel, a <code>veto</code> label stops it), else you: your board card offers <b>Yes, I'll do it</b></td></tr>
       <tr><td>one-way in the brake's own code</td><td>only you</td><td>your merge</td></tr>
     </table>

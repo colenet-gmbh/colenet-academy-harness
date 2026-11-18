@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""The board's verbs for a session (docs/board.md § The file, § Answers, § Questions and decisions, § Escalations, § The freeze flag).
+"""The board's verbs for a session (docs/board.md § The file, § Answers, § Questions and decisions, § Escalations).
 
 Usage:
   board.py [--board FILE] answer <id> <accept|deny|discuss|info|update|withdraw> --session NAME --via chat
            [--quote "<the owner's words>"]
-  board.py [--board FILE] freeze --reason "<why>" [--repo OWNER/REPO ...] [--by NAME]
-  board.py [--board FILE] unfreeze
   board.py [--board FILE] path [--crew-only]
   board.py [--board FILE] set [--for NAME | --session NAME] <field>=<value> …   fields: waiting_on, state, now, topic, keys, epic
   board.py [--board FILE] ask --session NAME --key KEY --key-title T --ask Q --recommendation R
@@ -207,18 +205,8 @@ staging  reads the booking and acceptance issues into board.json's `staging` blo
          line each (`staging: free` without either); an acceptance past the crew's
          `release.staging_sla_hours` adds one `todo` news item `ST<issue>` for the coordinator, once.
 
-freeze   writes the freeze flag beside the board file (`board_freeze.flag_path`: `freeze.json`, or
-         `<stem>-freeze.json` for another board name; only one the merge hook reads: the crew's
-         `board.file`, else the default), opens a `merge-freeze` issue in each named repo (`*`:
-         the crew's repos), then disarms every open PR with auto-merge armed in the named repos
-         (without --repo the flag names `*`, every repo, and the current directory's repo is
-         disarmed) and prints the flag; exit 1 when an issue did not open (the flag stands). While
-         it stands the merge hook refuses every merge and arm in those repos
-         (scripts/board_freeze.py; docs/board.md § The freeze flag).
 path     prints the board file a verb writes (absolute); `--crew-only` prints the crew's
          `board.file` and exits 1 when the crew names none (the /board pane's lookup).
-unfreeze removes the flag, closes the `merge-freeze` issues the freeze opened (exit 1 naming one that
-         did not close) and prints the disarmed PRs to re-arm through the hook; it re-arms none.
 
 Every write of board.json goes through `StateDir.write_board` (an exclusive lock on
 board.json.lock, a re-read, then a temp file and `os.replace`). The JSONL files beside the board
@@ -1175,32 +1163,12 @@ def cmd_answer(state, args, crew, now):
     return 0
 
 
-def _freeze_module():
-    path = Path(__file__).resolve().with_name("board_freeze.py")
-    spec = importlib.util.spec_from_file_location("we_board_freeze", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def _current_repo():
-    out = subprocess.run(
-        ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    return out.stdout.strip() if out.returncode == 0 else None
-
-
 def cmd_path(state, args, _crew, _now):
     """Print the board file a verb writes; --crew-only: the crew's own board (its `board.file` or a
     `state_dir` of its own), exit 1 when it resolves to the default board."""
     if args.crew_only:
         default = Path(DEFAULT_BOARD).expanduser()
-        named = _freeze_module().watched_board_files(Path.cwd(), str(default))[0]
+        named = crew_mod.resolve_board(Path.cwd(), default=str(default))
         if named == default:
             return 1
         print(named.resolve())
@@ -1250,112 +1218,8 @@ def cmd_show(state, args, _crew, _now):
 
 def default_board(start=None):
     """The board file a verb without --board writes: the crew's `board.file` for `start` (default
-    the cwd), else DEFAULT_BOARD; the same file the merge hook reads a freeze beside."""
-    return _freeze_module().watched_board_files(start or Path.cwd(), DEFAULT_BOARD)[0]
-
-
-def _crew_repos(bf, start=None):
-    """Every repo of the crew for a `*` freeze: the crew file's repo, each member's extra repo
-    that exists here, and the cwd's repo (GitHub `owner/name`, deduplicated, in that order)."""
-    places = [Path(start or Path.cwd())]
-    try:
-        crew_file, crew_data = crew_mod.find_and_load(start or Path.cwd())
-    except crew_mod.CrewError:
-        crew_file, crew_data = None, None
-    if crew_file is not None:
-        places.insert(0, crew_file.parent)
-        for who in (crew_data or {}).get("members") or {}:
-            try:
-                places += crew_mod.extra_repos(crew_file, crew_data, who)[0]
-            except crew_mod.CrewError:
-                continue
-    out = []
-    for place in places:
-        repo = board_staging.repo_of(place)
-        slug = bf.norm_slug(repo) if repo else None
-        if slug and slug not in out:
-            out.append(slug)
-    return out
-
-
-def _unwatched(bf, state, verb):
-    """Why `verb` must not touch `state`'s flag (the hook reads none beside it), or None."""
-    target = bf.flag_path(state.board_path)
-    watched = bf.watched_board_files(Path.cwd(), DEFAULT_BOARD)
-    if any(bf.flag_path(w).resolve() == target.resolve() for w in watched):
-        return None
-    return (
-        f"board.py {verb}: the merge hook reads no freeze beside {state.board_path}; it reads "
-        f"beside {', '.join(str(w) for w in watched)}. Drop --board or name one of those."
-    )
-
-
-def cmd_freeze(state, args, _crew, _now):
-    bf = _freeze_module()
-    why = _unwatched(bf, state, "freeze")
-    if why:
-        print(why, file=sys.stderr)
-        return 1
-    # Without --repo the freeze covers every repo (`*`): a freeze from the wrong checkout must not
-    # silently miss the repo it is for (owner 06.11.2026); it disarms the current repo's PRs.
-    bad = [r for r in args.repo or [] if r != "*" and bf.norm_slug(r) is None]
-    if bad:
-        print(
-            f"board.py freeze: --repo takes OWNER/REPO or '*', not {', '.join(bad)}",
-            file=sys.stderr,
-        )
-        return 1
-    repos = [r if r == "*" else bf.norm_slug(r) for r in args.repo or []] or ["*"]
-    disarm = None if args.repo else [r for r in [_current_repo()] if r]
-    issue_repos = _crew_repos(bf) if "*" in repos else None
-    by = args.by or os.environ.get("WESIDE_COMPANION") or os.environ.get("USER") or "unknown"
-    try:
-        flag = bf.freeze(
-            bf.flag_path(state.board_path),
-            args.reason,
-            repos,
-            by,
-            disarm=disarm,
-            issue_repos=issue_repos,
-        )
-    except bf.FreezeError as exc:
-        print(f"board.py freeze: {exc}", file=sys.stderr)
-        return 1
-    print(json.dumps(flag, ensure_ascii=False))
-    missed = bf.issue_failures(flag)
-    if missed:
-        print(
-            "board.py freeze: the local flag stands, but GitHub is not frozen in "
-            f"{', '.join(e['repo'] for e in missed)} (no `merge-freeze` issue): "
-            "the repo's one-way gate does not see the freeze; open the issue by hand",
-            file=sys.stderr,
-        )
-        return 1
-    return 0
-
-
-def cmd_unfreeze(state, _args, _crew, _now):
-    bf = _freeze_module()
-    why = _unwatched(bf, state, "unfreeze")
-    if why:
-        print(why, file=sys.stderr)
-        return 1
-    flag = bf.unfreeze(bf.flag_path(state.board_path))
-    if flag is None:
-        print("board.py unfreeze: no freeze stands", file=sys.stderr)
-        return 1
-    prs = " ".join(f"{d['repo']}#{d['number']}" for d in flag.get("disarmed") or [])
-    print(f"unfrozen: {flag.get('reason')}")
-    print(f"re-arm through the hook: {prs or '(none was disarmed)'}")
-    still = " ".join(f"{d['repo']}#{d['number']}" for d in flag.get("issues_open") or [])
-    if still:
-        print(
-            f"board.py unfreeze: the `merge-freeze` issue did not close, GitHub stays frozen: "
-            f"{still}; close it by hand",
-            file=sys.stderr,
-        )
-        return 1
-    return 0
+    the cwd), else DEFAULT_BOARD (`crew.resolve_board`)."""
+    return crew_mod.resolve_board(start or Path.cwd(), default=DEFAULT_BOARD)
 
 
 def _key_failure(crew, key, verb):
@@ -3780,14 +3644,7 @@ def parser():
     a.add_argument("--via", required=True, choices=("chat",))
     a.add_argument("--quote", help="the owner's own words")
     a.set_defaults(run=cmd_answer)
-    f = verbs.add_parser("freeze", help="stop every merge and arm until unfreeze")
-    f.add_argument("--reason", required=True)
-    f.add_argument("--repo", action="append", help="OWNER/REPO whose armed PRs to disarm")
-    f.add_argument("--by", help="who freezes (default: the companion or the user)")
-    f.set_defaults(run=cmd_freeze)
     _add_read_verbs(verbs)
-    u = verbs.add_parser("unfreeze", help="lift the freeze; prints the PRs to re-arm by hand")
-    u.set_defaults(run=cmd_unfreeze)
 
     s = verbs.add_parser(
         "set",
@@ -3862,13 +3719,10 @@ def parser():
     return p
 
 
-# A freeze must work where the crew file is missing or broken: the brake reads no crew.
-CREWLESS_VERBS = ("answer", "show", "freeze", "unfreeze", "path")
-# The crew guard (`crew_guard`): verbs that only read pass it, and `freeze` does, since a brake
-# must stop merges without a crew and a wrong freeze stops, it never opens. `unfreeze` passes the
-# crewless rule too (who could freeze can lift it), but never a board stamped for another crew.
+# Verbs that load no crew: they work where the crew file is missing or broken.
+CREWLESS_VERBS = ("answer", "show", "path")
+# The crew guard (`crew_guard`): verbs that only read pass it.
 READ_VERBS = ("path", "show", "check", "escalation list", "escalation count")
-GUARD_FREE_VERBS = ("freeze",)
 
 
 def _verb_name(args):
@@ -3906,7 +3760,7 @@ def crew_guard(args, env=None, cwd=None):
     crew than the session's. The session's own board, resolved from its crew, is stamped by its
     first write. An explicit `--board` on an unstamped file passes (scratch and test boards)."""
     verb = _verb_name(args)
-    if verb in READ_VERBS or verb in GUARD_FREE_VERBS:
+    if verb in READ_VERBS:
         return None, None
     env = os.environ if env is None else env
     cwd = Path(cwd or Path.cwd())
@@ -3916,7 +3770,7 @@ def crew_guard(args, env=None, cwd=None):
     mine = None
     if cid is not None:
         mine = crew_mod.board_file(crew_path, crew, env, DEFAULT_BOARD)
-    if cid is None and not args.board and verb != "unfreeze":
+    if cid is None and not args.board:
         owner = f"crew {stamp}" if stamp else "the default board, no crew stamped yet"
         return _guard_text(verb, why, target, owner), None
     if stamp is not None and stamp != cid:

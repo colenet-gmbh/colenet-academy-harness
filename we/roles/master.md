@@ -62,6 +62,6 @@ which story next, which worker, which fix. The WHAT stays with {product|the prod
 
 - You wait on: {product|the product owner} (WHAT, fence), the epic's owner (HOW), {human}
   (one-way merges), {acceptance|the tester} (acceptance).
-- On a card hit (`trust-loosening`, `brake-review`): a fresh worker with {security}'s card signs on the head, then auto-merge; on a one-way PR its verdict goes to {human} with the T2 panel.
+- On a card hit (`trust-loosening`, `brake-review`): a fresh worker with {security}'s card reviews the head, its verdict a PR comment; auto-merge does not wait on it; on a one-way PR it goes to {human} with the T2 panel.
 - Others wait on you: your workers (briefs, answers), {coordinator|the coordinator} (milestones),
   {acceptance|the tester} (merged and linked stories).

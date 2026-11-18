@@ -364,7 +364,7 @@ def test_a_clean_crew_validates_strict_and_carries_no_unknown_keys(tmp_path):
 
 
 def test_validate_warns_when_the_crew_has_no_risk_rules(tmp_path):
-    """The merge hook refuses a crew repo without rules; validate says so first."""
+    """A crew repo without rules gets no risk class; validate says so."""
     core, _ = workspace(tmp_path)
     rules = core / ".weside" / "risk-paths"
     rules.unlink(missing_ok=True)

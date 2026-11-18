@@ -164,8 +164,8 @@ The hooks treat a session as the worker only when the marker names its session i
 working in the worker's tree is never one.
 
 The worker reports by one `SendMessage` to its `Lead:`; its plain text never reaches the Lead. The
-Stop hook `worker_report_gate.py` blocks a turn without that message, and `automerge_gate.py`
-refuses its merge as for a subagent.
+Stop hook `worker_report_gate.py` blocks a turn without that message. A worker never merges or
+arms (the worker card).
 
 ## Dev-only worker contract
 
@@ -257,16 +257,16 @@ acceptance walk; L0 § Against the waterfall) runs as a read-only worker the mas
 - **The exit:** a case without precedent is reported to the owner undecided; the worker never decides it.
 
 The verdict goes on the PR or the board item, never into a ticket the worker files. A security card
-verdict on a card hit is a PR comment in the form `automerge_gate.py` reads (its docstring, refusal 4):
-the marker `<!-- security-card-review -->`, the heading ``## Security card review — #<N> @ `<head sha>` ``
-and `**Overall: PASS**` or `BLOCKING`; only a PASS on the current head lets the merge through.
+verdict on a card hit is a PR comment for the human and the security owner, read by people, in this
+form: the marker `<!-- security-card-review -->`, the heading ``## Security card review — #<N> @ `<head sha>` ``
+and `**Overall: PASS**` or `BLOCKING`. It is no merge condition: whether it stands before a merge is
+the merger's judgment.
 The card worker never posts it: `worker_rights_gate.py` denies a worker a comment on a PR that is not
 its own branch's. It writes the verdict to the file its brief names under `## Ausgabe`/`## Output` (marker,
 heading with the head sha, `Overall:` last) and sends the path to its starter. **The starter posts the
 card verdict**, whichever session started the worker (a Lead, the coordinator, a platform session):
 it checks the marker, the sha against the PR's current head and the file's mtime against the
-worker's start, then posts the file unchanged with `gh pr comment <N> --body-file <file>`, and arms
-in a command of its own. The worker judged, the starter only passes the verdict on, so this does not go
+worker's start, then posts the file unchanged with `gh pr comment <N> --body-file <file>`. The worker judged, the starter only passes the verdict on, so this does not go
 around `worker_rights_gate.py`; never start a second worker only to post (owner decision, 13.11.2026).
 
 ## Lead checks around a worker

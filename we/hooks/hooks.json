@@ -123,11 +123,6 @@
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/automerge_gate.py\"",
-            "timeout": 600
-          },
-          {
-            "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/worker_rights_gate.py\"",
             "timeout": 60
           },
