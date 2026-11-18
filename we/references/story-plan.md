@@ -195,6 +195,9 @@ to the built code; a receipt that cannot run before the build is no Ready defect
 label) belong there; the prose ACs keep the new and fuzzy ones. A repo whose `.weside/verify.md`
 names no staging checks writes `none — no staging checks in this repo`.
 
+`## Documentation Impact` answers by default that the code carries it: the notes at the symbols
+(`references/code-notes.md`); a new doc is the exception that reference names, with its reason.
+
 ## Short form
 
 A defect at one place takes the short form: frontmatter with `form: short`, then `## Is` (what
