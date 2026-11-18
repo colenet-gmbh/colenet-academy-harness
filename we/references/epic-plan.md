@@ -18,7 +18,8 @@ improves one epic and never decomposes it; it hands off by printing the next ver
 - Slugs are kebab-case.
 - Epic frontmatter: `type: epic-plan`, `epic` (the file stem), `serves` (the goal file's metric or
   `null`), `ticket` (key or `null`), `created`, `updated`,
-  `status: draft | approved | selected | in-progress | backlog | done` (`board.py move <KEY> backlog --epic` needs a status starting `approved`).
+  `status: draft | approved | selected | in-progress | backlog | done` (`board.py move <KEY> backlog --epic` needs a status starting `approved`),
+  optional `select: owner` (the epic's owner reads every story before Selected, § Finish line).
 - A Story's `epic:` is the Epic's ticket key, or the Epic file stem without ticketing. Readers match
   a Story to an Epic on either value (file stem, `epic:` or `ticket:` of the Epic plan).
 - Frontmatter lines are bare `key: value`: the parsers (`ready_gate.py`, `epic_state.py`) keep a trailing `# comment` in the value.
@@ -37,6 +38,11 @@ The human approves an epic together with its finish line (L0 §Units); the line 
   `limits.epic_stories` upper bound, ~8), and `line_goal: <one measurable goal>`, the number the
   line moves. `ready_gate.py epic` refuses an `approved` epic without both, a key named twice or an
   empty line, and warns above the limit.
+- **Who selects:** a refiner selects its own story (`board.py select <KEY> --refiner`) only when the
+  epic is approved and the key stands on its `line:`; an epic without a line, a key off it, a story
+  without an epic, or an epic with `select: owner` leave Selected to the product role. `select: owner`
+  is the owner's switch for an independent counter-read before Selected: a green Ready panel never
+  replaces it.
 - **Free inside the line:** a sharper AC, a fix of a defect against an existing AC, small work at the
   place the story already touches. None of it needs a new key.
 - **Beyond the line:** a new story, new visible behaviour or a new place (one more instance of what a

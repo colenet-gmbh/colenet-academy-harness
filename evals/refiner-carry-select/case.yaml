@@ -24,7 +24,7 @@ execution:
 graders:
   - name: selects
     type: regex
-    pattern: "board\\.py\\s+select\\s+ACME-14"
+    pattern: "board\\.py\\s+select\\s+ACME-14\\s+--refiner"
   - name: reports-selected
     type: regex
     pattern: "selected:\\s*ACME-14"

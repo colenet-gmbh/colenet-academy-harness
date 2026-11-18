@@ -886,8 +886,24 @@ def test_a_line_rule_judges_a_diff_not_a_short_plan(tmp_path):
             (FILES_ANCHOR, "- `infra/main.tf`"),
             "scope change: infra/main.tf (## Files) outside the fence of PROJ-1",
         ),
+        # the short form cuts sections, never the AC form: Given/When/Then and the marker stay
+        (RULES, ("**Then** the header", "the header"), "AC1: no `**Then**`"),
+        (
+            RULES,
+            (" [`ci`: extend `tests/test_export.py`; staging cannot build the case]", ""),
+            "AC1: no oracle-class marker",
+        ),
     ],
-    ids=["no-rules-file", "no-should", "no-files", "other-repo", "unknown-form", "outside-fence"],
+    ids=[
+        "no-rules-file",
+        "no-should",
+        "no-files",
+        "other-repo",
+        "unknown-form",
+        "outside-fence",
+        "ac-without-then",
+        "ac-without-marker",
+    ],
 )
 def test_the_short_form_refusals(tmp_path, rules, edit, expected):
     root = short_repo(tmp_path, rules=rules)

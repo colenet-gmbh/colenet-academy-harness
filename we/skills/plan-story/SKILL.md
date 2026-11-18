@@ -130,9 +130,11 @@ this section, never between. A fork or a `scope change:` line still ends you wit
 3. **Panel.** Skill tool, skill `we:lens`, args `ready <KEY>`; you run its steps.
 4. **Fix within the cap.** A red round: fix every BLOCKING and WARNING finding of it in one edit, rerun steps
    1–2, then step 3 again. `round cap: the lens holder decides` ends the loop: no further edit, report `capped`.
-5. **Select.** Green: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/board.py select <KEY>`; its `carry:` line is yours
-   to carry per `${CLAUDE_PLUGIN_ROOT}/references/ticketing.md` (move, then read back). Refused because the
-   crew wants the product role for it: report `selected: no, <role> selects`, never retry.
+5. **Select.** Green: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/board.py select <KEY> --refiner`, always with
+   `--refiner`; its `carry:` line is yours to carry per `${CLAUDE_PLUGIN_ROOT}/references/ticketing.md` (move,
+   then read back). Refused in group `refiner` (no approved epic line holding the key, or the epic says
+   `select: owner`: `${CLAUDE_PLUGIN_ROOT}/references/epic-plan.md` § Finish line) or `role`: report
+   `selected: no, <role> selects (<board.py's reason line>)`, never retry.
 6. **Report**, one of:
 
    ```text

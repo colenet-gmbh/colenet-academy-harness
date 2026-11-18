@@ -959,6 +959,13 @@ def extensions(text: str) -> list[tuple[bool, str]]:
     return out
 
 
+def names_epic(meta: dict[str, str], key: str) -> bool:
+    """An epic plan's frontmatter names ``key``: its ``ticket:``, ``epic:`` or ``linked_epics:``."""
+    return key in (meta.get("ticket"), meta.get("epic")) or key in inline_list(
+        meta.get("linked_epics")
+    )
+
+
 def find_epic_plan(plans_dir: Path, key: str) -> list[tuple[Path, str]]:
     """Every ``*-epic.md`` in ``plans_dir`` whose ``ticket:`` or ``epic:`` is ``key`` or whose
     ``linked_epics:`` holds it, with its text; the one finder for the gate and ``board.py move``."""
@@ -968,10 +975,7 @@ def find_epic_plan(plans_dir: Path, key: str) -> list[tuple[Path, str]]:
             text = candidate.read_text(encoding="utf-8").replace("\r\n", "\n")
         except OSError:
             continue
-        meta = frontmatter(text)
-        if key in (meta.get("ticket"), meta.get("epic")) or key in inline_list(
-            meta.get("linked_epics")
-        ):
+        if names_epic(frontmatter(text), key):
             hits.append((candidate, text))
     return hits
 
