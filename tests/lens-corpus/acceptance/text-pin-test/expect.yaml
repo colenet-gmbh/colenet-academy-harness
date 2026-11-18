@@ -1,0 +1,11 @@
+# A new test reads a doc and asserts its wording. It fails when someone rewords the doc and never
+# when the client retries wrongly (references/test-economy.md § No test pins text). Input for the
+# author, never a merge brake.
+id: text-pin-test
+lens: acceptance
+mode: t2
+diff: diff.patch
+must_flag:
+  - where: "tests/test_docs.py:12"
+    severity: [NOTE]
+    question: "Does a test pin text (a comment, docstring, workflow YAML, doc or log wording)?"

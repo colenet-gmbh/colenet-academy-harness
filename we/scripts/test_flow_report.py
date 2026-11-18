@@ -223,6 +223,9 @@ def test_github_rows_from_the_recorded_answers(tmp_path):
     r = rows["CI cancelled share"]
     assert (r["n"], r["value"]) == (11, "2 cancelled (18 %), newer push 100 % of them")
     assert rows["Code PRs by risk class"]["value"] == "one-way 1"
+    r = rows["New tests per code PR"]  # #1 new line, #3 the line before cases, #5 none
+    assert (r["n"], r["median"], r["p90"]) == (2, 1.5, 2)
+    assert r["value"] == "cases median 5, p90 5 (n 1)"
     r = rows["PRs per story"]
     assert (r["n"], r["median"]) == (2, 1)
     assert r["value"].endswith("mean with docs PRs 1.50")
@@ -249,6 +252,19 @@ def test_board_rows_from_the_logs(tmp_path):
     assert (r["n"], r["value"]) == (1, "PROJ-2")
     assert out["writers"]["selected→in_progress"] == {"master-1": 3, "worker-x": 1}
     assert out["writers"]["in_review→done"] == {"tess": 1}
+    r = rows["Escapes after Done by risk class"]
+    assert (r["n"], r["value"]) == (0, "routine 0/1")
+    reopened = [  # a routine story and a one-way story (PR #3) each leave Done again
+        {"key": "PROJ-9", "from": "in_test", "to": "done", "ts": "2026-11-04T08:00:00Z"},
+        {"key": "PROJ-9", "from": "done", "to": "in_review", "ts": "2026-11-05T08:00:00Z"},
+        {"key": "PROJ-2", "from": "in_progress", "to": "done", "ts": "2026-11-09T10:00:00Z"},
+        {"key": "PROJ-2", "from": "done", "to": "in_progress", "ts": "2026-11-09T11:00:00Z"},
+    ]
+    log = tmp_path / "app" / ".weside" / "state" / "board-transitions.jsonl"
+    jsonl(log, TRANSITIONS + reopened)
+    rows, _ = report(tmp_path / "app")
+    r = rows["Escapes after Done by risk class"]
+    assert (r["n"], r["value"]) == (2, "one-way 1/1 · routine 1/2")
 
 
 def test_questions_brakes_and_ready_rounds(tmp_path):
@@ -272,6 +288,7 @@ def test_no_crew_no_board_prints_github_rows_and_na(tmp_path, capsys, monkeypatc
     for name in (
         "Lead time Selected → Done",
         "Stock now (age of In Review)",
+        "Escapes after Done by risk class",
         "Questions to the human per day",
         "Brakes per day",
     ):
@@ -296,6 +313,8 @@ def test_missing_gh_turns_the_github_rows_into_na(tmp_path, monkeypatch):
         "Docs-PR share",
         "Share of lead time: In Progress (PR open)",
         "Mismatch: In Progress without open PR",
+        "Escapes after Done by risk class",
+        "New tests per code PR",
     ):
         assert rows[name]["value"] == "n/a (gh not found)", name
     assert rows["Share of lead time: In Progress"]["n"] == 1

@@ -1081,8 +1081,11 @@ def test_a_corpus_case_names_an_added_line_and_its_panel_flags_it(repo, case):
         code, _, err = run("write", "t2-pr7", lens, stdin=text)
         assert code == 0, err
     code, out, _ = run("check", "t2-pr7")
-    assert code == 1 and f"lens {expect['lens']}: red (" in out
     assert len(expect["flags"]) == len(expect["where"]), "every must_flag needs a severity list"
+    if all(sev == {"NOTE"} for _, sev in expect["flags"]):  # input for the author, never a brake
+        assert code == 0 and f"lens {expect['lens']}: green (" in out
+    else:
+        assert code == 1 and f"lens {expect['lens']}: red (" in out
     stored = json.loads(verdict_file(repo, "t2-pr7").read_text())["verdicts"][expect["lens"]]
     for where, severities in expect["flags"]:
         hits = [f for f in stored["findings"] if f["where"] == where]

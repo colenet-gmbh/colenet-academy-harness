@@ -1,0 +1,8 @@
+{
+  "id": "t2-pr7",
+  "answers": {
+    "product": "No product finding on this diff.\n\n```json\n{\"findings\": []}\n```\n",
+    "architecture": "No architecture finding on this diff.\n\n```json\n{\"findings\": []}\n```\n",
+    "acceptance": "One note on the new test.\n\n```json\n{\"findings\": [{\"severity\": \"NOTE\", \"claim\": \"test_retry_doc_mentions_three_attempts pins the wording of docs/client.md; no user-visible defect makes it fail, and the retry count is asserted by test_retry_backoff.\", \"where\": \"tests/test_docs.py:12\", \"question\": \"Does a test pin text (a comment, docstring, workflow YAML, doc or log wording)?\"}]}\n```\n"
+  }
+}

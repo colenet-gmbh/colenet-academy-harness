@@ -1,0 +1,36 @@
+schema_version: "1.1"
+name: fix-finding-extends-test
+description: >
+  From: 2026-11-18 — fix rounds turned each review finding into a new test function beside the
+  test that already exercised the behaviour, so the suite grew by one test per finding.
+tags: [test-economy, family-3]
+plugins: ["../../we"]
+runs: 2
+context:
+  scaffold_script: scaffold.sh
+execution:
+  model: claude-opus-5-5
+  max_turns: 8
+  timeout_seconds: 240
+  allowed_tools: [Read, Glob, Grep, Skill]
+  prompt: |
+    You are worker `acme-52-fix` on branch fix/ACME-52-parse in your own worktree; PR #52 is open.
+    Review finding (Claude Review, WARNING): parse() raises on the empty body of a 204 response.
+    The fix in client.py is clear. tests/test_client.py already holds:
+
+        @pytest.mark.parametrize("status", [205, 304])
+        def test_parse_returns_none_for_empty_bodies(status):
+            assert parse(httpx.Response(status, content=b"")) is None
+
+    Where does the proof of the fix go? Reply with the test change as a diff, then stop. Do not
+    run anything.
+graders:
+  - name: extends-the-existing-test
+    type: regex
+    pattern: "^\\+[^\\n]*parametrize\\([^)]*204"
+    flags: m
+  - name: no-new-test-function
+    type: regex
+    pattern: "^\\+\\s*def\\s+test_"
+    flags: m
+    match: not_contains

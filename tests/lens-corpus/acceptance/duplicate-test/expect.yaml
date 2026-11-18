@@ -1,0 +1,11 @@
+# A review finding about a 204 body became a new test function; the parametrized test right above
+# it (`status` in 204, 205, 304) already asserts the same behaviour. The duplicate is input for the
+# author, never a merge brake (references/test-economy.md § Extend before you add).
+id: duplicate-test
+lens: acceptance
+mode: t2
+diff: diff.patch
+must_flag:
+  - where: "tests/test_client.py:34"
+    severity: [NOTE]
+    question: "Does a new test assert what an existing test already asserts?"

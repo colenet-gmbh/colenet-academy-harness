@@ -57,3 +57,8 @@ repo script, test or tool (it may write, rename or migrate), never check out or 
 - Is a manual walk justified, or could a test carry it?
 - Does each changed branch have a test that fails without the change?
 - Does the verification name what it does not prove?
+- Does a new test assert what an existing test already asserts (`${CLAUDE_PLUGIN_ROOT}/references/test-economy.md`)?
+  Answer with a NOTE that names the covering test, never BLOCKING or WARNING.
+- Does a test pin text (a comment, docstring, workflow YAML, doc or log wording), or carry a
+  parametrize table above `tests.max_parametrize` without a line why each case fails on its own?
+  Answer with a NOTE, never BLOCKING or WARNING.

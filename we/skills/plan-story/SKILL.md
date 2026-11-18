@@ -64,6 +64,7 @@ report ends you.
      `## Testing Requirements`; quote the value you read, never a default (bad: "the repo default
      (`tests-after`)" in a `tdd` repo; good: "`test_discipline: tdd` (.weside/config.json)"); key absent or
      file unreadable → say so there. With `tdd` every phase gets its `**Test first:**` line.
+     Which tests, and how many: `${CLAUDE_PLUGIN_ROOT}/references/test-economy.md`.
      `tools.graphify` and `tools.turbovault` say which search tools exist.
    - `.weside/verify.md` for the `## Verification` commands; absent → say so there and propose it under
      `## Documentation Impact`. A verb that cannot go red counts as missing.

@@ -34,6 +34,7 @@ existing owners first:
 | worker contract, launch backend, card worker, report | `references/worker-dispatch.md` |
 | measured traps of shared trees and CI | `references/session-traps.md` |
 | story plan schema and readiness | `references/story-plan.md` (gate: `scripts/ready_gate.py`) |
+| which tests a build worker writes, and the PR's test line | `references/test-economy.md` (line: `scripts/test-delta.py`) |
 | epic plan schema · epic skeleton | `references/epic-plan.md` · `skills/epic/references/template.md` |
 | where plans are committed | `references/plan-commit.md` |
 | reading and moving tickets | `references/ticketing.md` |
