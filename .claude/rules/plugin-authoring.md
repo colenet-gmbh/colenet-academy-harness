@@ -38,7 +38,7 @@ existing owners first:
 | epic plan schema · epic skeleton | `references/epic-plan.md` · `skills/epic/references/template.md` |
 | where plans are committed | `references/plan-commit.md` |
 | reading and moving tickets | `references/ticketing.md` |
-| board file, moves, answers, self-merge window | `docs/board.md` |
+| board file, moves, answers, escalations, acceptance | `docs/board.md` |
 | companion launch, pin, binding, writeback | `references/companion-session.md` |
 | several humans: crew schema and identity · the ticket verbs between machines | `scripts/crew.py` § Humans · `docs/board.md` § Several humans |
 | optimization inbox and ledger | `references/optimization-store.md` |
