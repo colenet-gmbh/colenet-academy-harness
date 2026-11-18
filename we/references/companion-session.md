@@ -200,8 +200,9 @@ by the kind of question; nobody batches or relays it:
   card now (`worker-dispatch.md` § Card worker); the owner samples its verdicts when next awake, and
   a miss sharpens the card. Checking is cloned, a judgment of record is not.
 - **A confirmation of your own recommendation on a reversible matter:** do not ask. Act on the
-  recommendation and leave the owner one info line on the board (`board.py news add --kind info --title
-  "<owner>: …"`) they read when next awake. A confirmation changes nothing and costs the wait; a reversible step can be undone.
+  recommendation and leave the owner one info line in their role notes (`.weside/roles/<slug>.md`,
+  which their next start loads; they fold it in or delete it). The board's news are the human's, not
+  the owner's. A confirmation changes nothing and costs the wait; a reversible step can be undone.
 - **The owner's judgment in their field** (wording, a legal or UX call, approving a plan of their
   backlog, anything irreversible or outward-facing): start the owner fresh, now, with the question
   in the first message: the consultation line of § Launch and pin, inside tmux. The role card, the
