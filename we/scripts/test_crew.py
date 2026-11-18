@@ -543,21 +543,27 @@ def test_a_value_of_the_wrong_type_is_refused(tmp_path):
     assert out.returncode == 1 and "limits.masters must be a number" in out.stderr
 
 
-def test_warning_ok_after_rounds_defaults_off_and_takes_a_number_of_at_least_one(tmp_path):
+@pytest.mark.parametrize("key", ["warning_ok_after_rounds", "max_rounds"])
+def test_the_ready_panel_keys_default_and_take_a_number_of_at_least_one(tmp_path, key):
+    """warning_ok_after_rounds defaults off, max_rounds to 2; both take null or a number >= 1."""
     minimal = {"version": 2, "roles": CREW["roles"], "members": CREW["members"]}
     core, _ = workspace(tmp_path, minimal)
-    assert json.loads(run(core, "show").stdout)["ready_panel"] == {"warning_ok_after_rounds": None}
-    core.joinpath(".weside", "crew.json").write_text(
-        json.dumps(with_(ready_panel__warning_ok_after_rounds=2))
-    )
-    assert json.loads(run(core, "show").stdout)["ready_panel"]["warning_ok_after_rounds"] == 2
+    shown = json.loads(run(core, "show").stdout)["ready_panel"]
+    assert shown == {"warning_ok_after_rounds": None, "max_rounds": 2}
+    for good in (1, 3, None):
+        core.joinpath(".weside", "crew.json").write_text(
+            json.dumps(with_(**{f"ready_panel__{key}": good}))
+        )
+        out = run(core, "show")
+        assert out.returncode == 0, (good, out.stderr)
+        assert json.loads(out.stdout)["ready_panel"].get(key) == good
     for bad in (0, -1, "2", True, 1.5):
         core.joinpath(".weside", "crew.json").write_text(
-            json.dumps(with_(ready_panel__warning_ok_after_rounds=bad))
+            json.dumps(with_(**{f"ready_panel__{key}": bad}))
         )
         out = run(core, "show")
         assert out.returncode == 1, bad
-        assert "ready_panel.warning_ok_after_rounds must be" in out.stderr, (bad, out.stderr)
+        assert f"ready_panel.{key} must be" in out.stderr, (bad, out.stderr)
 
 
 def test_the_ready_gate_keys_default_and_are_typed(tmp_path):

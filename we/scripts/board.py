@@ -2739,19 +2739,25 @@ def rule_tier(m):
 
 
 def rule_lenses(m):
-    """The `ready-<KEY>` lens verdict, green and bound to the plan blob on main; the warnings a
-    green panel carries (`ready_panel.warning_ok_after_rounds`) go into the row as `carried`, a
+    """The `ready-<KEY>` lens verdict, green and bound to the subject hash of the plan blob on
+    main (`lens_verdict.py` § Subject); the warnings a
+    green panel carries (`ready_panel.warning_ok_after_rounds`) go into the row as `carried`, the
+    lens holders' decisions above the round cap (`ready_panel.max_rounds`) as `decided`, a
     derived round (a verdict file of 8.10.0 or older) as `round` with its origin."""
     try:
         blob = m.selected.get("plan")
         binding = {"plan_blob": blob} if blob else None
-        green, lines, carried = lens_verdict.check_panel(m.root, f"ready-{m.key}", binding)
+        green, lines, carried, decided = lens_verdict.check_ready(
+            m.root, f"ready-{m.key}", binding
+        )
     except (lens_verdict.UnusableError, OSError) as exc:
         return [f"lens verdict unreadable: {exc}"]
     if not green:
         return lines
     if carried:
         m.extra["carried"] = carried
+    if decided:
+        m.extra["decided"] = decided
     try:
         round_, origin = lens_verdict.round_of(m.root, f"ready-{m.key}")
     except (lens_verdict.RefusedError, lens_verdict.UnusableError, OSError) as exc:
@@ -3167,6 +3173,8 @@ def _transition(state, args, crew, now, target, head):
         print(f"round: {m.extra['round']}")
     for item in m.extra.get("carried", []):
         print(f"carried: {item['lens']}: {item['claim']} ({item['where'] or '-'})")
+    for item in m.extra.get("decided", []):
+        print(f"decided: {item['lens']} by {item['by']}: {item['sentence']}")
     print(json.dumps(row, ensure_ascii=False))
     _print_carry(ops)
     return 0

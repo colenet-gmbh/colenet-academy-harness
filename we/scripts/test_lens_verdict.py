@@ -127,7 +127,9 @@ def test_plan_ready_prints_one_entry_per_ready_lens_in_crew_order(repo):
         text=True,
         check=False,
     ).stdout.strip()
-    assert shown["id"] == f"ready-{KEY}" and shown["bound_to"] == {"plan_blob": blob}
+    subject = lv.subject_hash((repo / "docs" / "plans" / f"{KEY}-story.md").read_text())
+    assert shown["id"] == f"ready-{KEY}"
+    assert shown["bound_to"] == {"plan_blob": blob, "plan_subject": subject}
     assert [e["lens"] for e in shown["entries"]] == ["product", "architecture", "acceptance"]
     product, arch, acc = shown["entries"]
     assert product["agent"] == "we:lens-product"
@@ -685,10 +687,12 @@ def test_post_refuses_a_ready_panel(repo):
 # --- carried warnings: ready_panel.warning_ok_after_rounds -----------------------------------
 
 
-def set_rounds(root: Path, rounds: int | None) -> None:
+def set_rounds(root: Path, rounds: int | None, max_rounds: int | None = None) -> None:
+    """The carry switch; the round cap stays off unless ``max_rounds`` names it."""
     crew = json.loads(json.dumps(CREW))
+    crew["ready_panel"] = {"max_rounds": max_rounds}
     if rounds is not None:
-        crew["ready_panel"] = {"warning_ok_after_rounds": rounds}
+        crew["ready_panel"]["warning_ok_after_rounds"] = rounds
     (root / ".weside" / "crew.json").write_text(json.dumps(crew))
 
 
@@ -1225,3 +1229,314 @@ def test_the_real_ready_gate_refuses_a_bare_plan(repo, monkeypatch):
     assert code == 1 and out == ""
     assert "the Ready gate refuses it, no lens runs" in err
     assert not verdict_file(repo, f"ready-{KEY}").exists()
+
+
+# --- the subject: what a Ready panel judges ---------------------------------------------------
+
+PLAN = """---
+story: PROJ-1
+epic: PROJ-0
+status: draft
+created: 2026-11-01
+comments_read_through: none
+depends_on: [other/PROJ-2]
+fence_note: x
+---
+
+# Plan
+
+## Acceptance Criteria
+
+1. **Given** a **When** b **Then** c [ci: test_x]
+
+## Code Guidance
+
+- use the helper
+
+## Out of scope
+
+- the rest
+
+## Security Review Required
+
+No.
+
+```text
+## Updates Log
+inside a fence: counts
+```
+
+## Documentation Impact
+
+- none
+
+## Updates Log
+
+- 2026-11-02 drafted
+"""
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("- 2026-11-02 drafted\n", "- 2026-11-02 drafted\n- 2026-11-03 landed\n"),
+        ("- use the helper", "- use the other helper"),
+        ("## Documentation Impact\n\n- none", "## Documentation Impact\n\n- the README"),
+        ("status: draft", "status: approved"),
+        ("created: 2026-11-01", "created: 2026-11-05"),
+        ("comments_read_through: none", "comments_read_through: 123\n  - continued"),
+        ("\n## Updates Log\n\n- 2026-11-02 drafted\n", "\n"),  # the log not yet written
+    ],
+    ids=[
+        "updates-log",
+        "code-guidance",
+        "doc-impact",
+        "status",
+        "created",
+        "comments-read",
+        "log-absent",
+    ],
+)
+def test_an_excluded_part_keeps_the_subject(old, new):
+    assert old in PLAN
+    assert lv.subject_hash(PLAN.replace(old, new)) == lv.subject_hash(PLAN)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("**Then** c", "**Then** d"),
+        ("[ci: test_x]", "[receipt]"),
+        ("depends_on: [other/PROJ-2]", "depends_on: []"),
+        ("- the rest", "- the rest and more"),
+        ("No.", "Yes: auth."),
+        ("fence_note: x", "fence_note: y"),
+        ("inside a fence: counts", "inside a fence: changed"),
+        ("## Code Guidance", "## Code Guidance notes"),  # another heading is another section
+    ],
+    ids=[
+        "ac",
+        "oracle-marker",
+        "depends-on",
+        "out-of-scope",
+        "security",
+        "other-key",
+        "fenced",
+        "near-name",
+    ],
+)
+def test_an_included_part_changes_the_subject(old, new):
+    assert old in PLAN
+    assert lv.subject_hash(PLAN.replace(old, new)) != lv.subject_hash(PLAN)
+
+
+def test_crlf_and_trailing_whitespace_keep_the_subject():
+    assert lv.subject_hash(PLAN.replace("\n", "\r\n") + "\n\n") == lv.subject_hash(PLAN)
+
+
+def write_plan(root: Path, text: str) -> None:
+    (root / "docs" / "plans" / f"{KEY}-story.md").write_text(text)
+
+
+def green_panel(root: Path) -> str:
+    vid = f"ready-{KEY}"
+    assert run("plan", "ready", KEY)[0] == 0
+    for lens in ("product", "architecture", "acceptance"):
+        assert run("write", vid, lens, stdin=GREEN)[0] == 0
+    return vid
+
+
+def test_an_updates_log_line_keeps_the_panel_green_and_an_ac_makes_it_stale(repo):
+    write_plan(repo, PLAN)
+    vid = green_panel(repo)
+    write_plan(repo, PLAN.replace("status: draft", "status: approved") + "- 2026-11-03 landed\n")
+    code, out, _ = run("check", vid)
+    assert code == 0, out
+    assert any("subject unchanged" in line for line in out.splitlines())
+    assert run("write", vid, "product", stdin=GREEN)[0] == 0  # a late answer still records
+    write_plan(repo, PLAN.replace("**Then** c", "**Then** d"))
+    code, out, _ = run("check", vid)
+    assert code == 1 and f"panel {vid}: stale (bound to" in out
+
+
+def test_board_select_passes_only_the_blob_and_the_subject_is_computed(repo):
+    write_plan(repo, PLAN)
+    vid = green_panel(repo)
+    write_plan(repo, PLAN + "- 2026-11-03 landed\n")
+    commit_plan(repo)
+    blob = subprocess.run(
+        ["git", "rev-parse", f"HEAD:docs/plans/{KEY}-story.md"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    green, lines, _carried = lv.check_panel(repo, vid, {"plan_blob": blob})
+    assert green, lines
+
+
+# --- schema 1 read path -----------------------------------------------------------------------
+
+
+def schema_one(root: Path, vid: str) -> None:
+    """The panel file as version 1 wrote it: no ``plan_subject``; the plan's blob kept beside the
+    verdict files (``plans/<blob>.md``), not in the object store."""
+    path = verdict_file(root, vid)
+    doc = json.loads(path.read_text())
+    doc["version"] = 1
+    blob = doc["bound_to"].pop("plan_subject") and doc["bound_to"]["plan_blob"]
+    path.write_text(json.dumps(doc))
+    copy = path.parent / "plans" / f"{blob}.md"
+    copy.parent.mkdir(exist_ok=True)
+    copy.write_text((root / "docs" / "plans" / f"{KEY}-story.md").read_text().rstrip() + "\n")
+
+
+def test_an_open_schema_one_panel_survives_an_updates_log_delta(repo):
+    write_plan(repo, PLAN)
+    vid = f"ready-{KEY}"
+    assert run("plan", "ready", KEY)[0] == 0
+    run("write", vid, "product", stdin=GREEN)
+    schema_one(repo, vid)
+    write_plan(repo, PLAN + "- 2026-11-03 updated\n")
+    for lens in ("architecture", "acceptance"):  # the round goes on: no restart, no new round
+        assert run("write", vid, lens, stdin=GREEN)[0] == 0
+    code, out, _ = run("check", vid)
+    assert code == 0, out
+    doc = json.loads(verdict_file(repo, vid).read_text())
+    assert doc["version"] == 2 and doc["round"] == 1
+    assert doc["bound_to"]["plan_subject"] == lv.subject_hash(PLAN)
+
+
+def test_a_schema_one_panel_with_a_changed_ac_is_stale(repo):
+    write_plan(repo, PLAN)
+    vid = green_panel(repo)
+    schema_one(repo, vid)
+    write_plan(repo, PLAN.replace("**Then** c", "**Then** d"))
+    code, out, _ = run("check", vid)
+    assert code == 1 and f"panel {vid}: stale" in out
+
+
+def test_a_schema_one_panel_whose_blob_is_gone_compares_by_blob(repo):
+    write_plan(repo, PLAN)
+    vid = green_panel(repo)
+    schema_one(repo, vid)
+    shutil.rmtree(verdict_file(repo, vid).parent / "plans")
+    write_plan(repo, PLAN + "- 2026-11-03 updated\n")
+    code, out, _ = run("check", vid)
+    assert code == 1 and f"panel {vid}: stale" in out
+
+
+# --- round cap: ready_panel.max_rounds ----------------------------------------------------------
+
+
+def red_round(root: Path, edit: str | None = None) -> tuple[int, str, str]:
+    """One more ``plan ready`` (after ``edit`` appended to an AC) where product stays red."""
+    if edit is not None:
+        write_plan(root, PLAN.replace("**Then** c", f"**Then** c {edit}"))
+    shown = run("plan", "ready", KEY)
+    if shown[0] == 0:
+        vid = f"ready-{KEY}"
+        assert run("write", vid, "product", stdin=answer(blocking()))[0] == 0
+        for lens in ("architecture", "acceptance"):
+            assert run("write", vid, lens, stdin=GREEN)[0] == 0
+    return shown
+
+
+def capped_panel(root: Path) -> str:
+    write_plan(root, PLAN)
+    assert red_round(root)[0] == 0
+    assert red_round(root, "v2")[0] == 0  # round 2 = the cap still runs its lenses
+    return f"ready-{KEY}"
+
+
+def test_the_third_plan_ready_starts_no_lens_and_prints_the_standing_findings(repo):
+    vid = capped_panel(repo)
+    code, out, err = red_round(repo, "v3")
+    assert (code, out) == (1, "")
+    assert f"panel {vid}: round 3 is above the round cap of 2, no lens runs" in err
+    assert "BLOCKING a.py:1: c" in err and lv.CAP_LINE in err
+    assert "lens architecture: green (judged round 2 @" in err
+    doc = json.loads(verdict_file(repo, vid).read_text())
+    assert doc["round"] == 3 and doc["capped_from"]["round"] == 2
+    assert doc["bound_to"]["plan_subject"] == lv.subject_hash(
+        PLAN.replace("**Then** c", "**Then** c v3")
+    )
+    assert doc["verdicts"]["product"]["verdict"] == "red"  # the verdicts are kept
+    code, out, _ = run("check", vid)
+    assert code == 1 and f"panel {vid}: {lv.CAP_LINE}" in out
+
+
+def test_decide_turns_the_panel_green_and_a_later_change_makes_it_stale(repo):
+    vid = capped_panel(repo)
+    red_round(repo, "v3")
+    code, _, err = run("decide", vid, "product", "--by", "architecture", "fine as is")
+    assert code == 1 and "held by the role product" in err
+    code, out, err = run("decide", vid, "product", "--by", "product", "The risk is accepted.")
+    assert code == 0, err
+    assert "lens product: green (decided by product: The risk is accepted.)" in out
+    assert out.splitlines()[-1] == f"panel {vid}: green (decided)"
+    assert lv.check_ready(repo, vid)[3] == [
+        {"lens": "product", "by": "product", "sentence": "The risk is accepted."}
+    ]
+    write_plan(repo, PLAN.replace("**Then** c", "**Then** c v3") + "- 2026-11-04 decided\n")
+    assert run("check", vid)[0] == 0  # the updates log is no subject
+    rows = lv.rounds_lines(lv.rounds(repo, KEY))
+    assert rows[-1].startswith("round 3 @") and "product decided by product" in rows[-1]
+    write_plan(repo, PLAN.replace("**Then** c", "**Then** c v4"))
+    code, out, _ = run("check", vid)
+    assert code == 1 and f"panel {vid}: stale" in out
+    code, _, err = run("decide", vid, "product", "--by", "product", "again")
+    assert code == 1 and "stale" in err
+    assert red_round(repo)[0] == 1  # round 4: still capped, the old decision does not hold
+    code, out, _ = run("check", vid)
+    assert code == 1 and "lens product: red (BLOCKING a.py:1)" in out
+
+
+def test_a_change_after_an_all_green_round_needs_one_confirmation(repo):
+    write_plan(repo, PLAN)
+    green_panel(repo)
+    write_plan(repo, PLAN.replace("**Then** c", "**Then** c v2"))
+    vid = green_panel(repo)
+    write_plan(repo, PLAN.replace("**Then** c", "**Then** c v3"))
+    code, _, err = run("plan", "ready", KEY)
+    assert code == 1 and lv.CONFIRM_LINE in err
+    code, out, _ = run("check", vid)
+    assert code == 1 and f"panel {vid}: {lv.CONFIRM_LINE}" in out
+    assert run("decide", vid, "acceptance", "--by", "acceptance", "Only wording moved.")[0] == 0
+    code, out, _ = run("check", vid)
+    assert code == 0, out
+    assert "lens acceptance: green (confirmed by acceptance: Only wording moved.)" in out
+
+
+def test_decide_is_refused_within_the_cap_on_a_missing_lens_and_on_green_beside_red(repo):
+    vid = capped_panel(repo)
+    code, _, err = run("decide", vid, "product", "--by", "product", "x")
+    assert code == 1 and "within the round cap" in err
+    doc = json.loads(verdict_file(repo, vid).read_text())
+    del doc["verdicts"]["acceptance"]
+    verdict_file(repo, vid).write_text(json.dumps(doc))
+    red_round(repo, "v3")
+    code, _, err = run("decide", vid, "acceptance", "--by", "acceptance", "x")
+    assert code == 1 and "has no verdict: record it first" in err
+    code, _, err = run("decide", vid, "architecture", "--by", "architecture", "x")
+    assert code == 1 and "the red lenses decide: product, acceptance" in err
+    code, _, err = run("decide", vid, "product", "--by", "nobody", "x")
+    assert code == 1 and "no role key" in err
+    assert run("decide", "t2-pr7", "product", "--by", "product", "x")[0] == 2
+
+
+def test_a_decision_without_a_role_key_in_the_file_is_refused(repo):
+    vid = capped_panel(repo)
+    red_round(repo, "v3")
+    run("decide", vid, "product", "--by", "product", "ok")
+    doc = json.loads(verdict_file(repo, vid).read_text())
+    doc["verdicts"]["product"]["decision"]["by"] = "ada"
+    verdict_file(repo, vid).write_text(json.dumps(doc))
+    code, out, _ = run("check", vid)
+    assert code == 1 and "needs a role key in by" in out
+
+
+def test_without_the_cap_a_third_round_runs_its_lenses(repo):
+    set_rounds(repo, None, max_rounds=None)
+    vid = capped_panel(repo)
+    assert red_round(repo, "v3")[0] == 0
+    assert "capped_from" not in json.loads(verdict_file(repo, vid).read_text())

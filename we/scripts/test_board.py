@@ -1687,6 +1687,12 @@ def land(root):
     git(root, "update-ref", "refs/remotes/origin/main", "HEAD")
 
 
+def revise(plan, mark):
+    """A new plan version a Ready panel sees: ``mark`` under ``## Context`` (a line at the end
+    falls into ``## Documentation Impact``, which is no part of the panel's subject)."""
+    plan.write_text(plan.read_text().replace("## Context\n", f"## Context\n{mark}\n", 1))
+
+
 def green_lenses(state_dir, key=KEY):
     root = state_dir / "work"
     vid = f"ready-{key}"
@@ -1739,7 +1745,7 @@ class TestSelect:
         lines = [x for x in err.splitlines() if not x.startswith("warning:")]
         assert lines == [
             f"board.py select {KEY}: refused (ready gate)",
-            f"{moving / 'work' / 'docs' / 'plans' / f'{KEY}-story.md'}: AC2: no `**Then**`",
+            f"{moving / 'work' / 'docs' / 'plans' / f'{KEY}-story.md'}:23: AC2: no `**Then**`",
         ]
         assert_untouched(moving, before, out, adapter)
 
@@ -1814,7 +1820,7 @@ class TestSelectLenses:
                     lens_verdict.write(root, vid, entry["lens"], answer=GREEN_LENS)
         if verdict == "stale":
             plan = root / "docs" / "plans" / f"{KEY}-story.md"
-            plan.write_text(plan.read_text() + "\n<!-- edited -->\n")
+            revise(plan, "<!-- edited -->")
             land(root)
         before = (moving / "board.json").read_bytes()
         adapter = fake()
@@ -1832,7 +1838,7 @@ class TestSelectLenses:
         land(moving / "work")
         read = []
         monkeypatch.setattr(
-            lens_verdict, "check_panel", lambda *a: read.append(a) or (True, [], [])
+            lens_verdict, "check_ready", lambda *a: read.append(a) or (True, [], [], [])
         )
         assert act(moving, "select", KEY, adapter=fake()) == 1
         assert read == []
@@ -1863,7 +1869,7 @@ class TestSelectLenses:
         vid = f"ready-{KEY}"
         plan = root / "docs" / "plans" / f"{KEY}-story.md"
         lens_verdict.plan(root, "ready", KEY)
-        plan.write_text(plan.read_text() + "\n<!-- round 2 -->\n")
+        revise(plan, "<!-- round 2 -->")
         land(root)
         panel = lens_verdict.plan(root, "ready", KEY)
         warning = {"severity": "WARNING", "claim": "name the error", "where": "plan:AC3"}
@@ -1883,6 +1889,32 @@ class TestSelectLenses:
         assert transitions(moving)[-1]["carried"] == carried
         assert "carried: acceptance: name the error (plan:AC3)" in out.splitlines()
 
+    def test_select_puts_the_holder_s_decision_above_the_round_cap_into_the_row(
+        self, moving, capsys
+    ):
+        root = moving / "work"
+        vid = f"ready-{KEY}"
+        plan = root / "docs" / "plans" / f"{KEY}-story.md"
+        blocking = {"severity": "BLOCKING", "claim": "too wide", "where": "plan:AC1"}
+        blocking["question"] = "q"
+        for n in (1, 2):
+            revise(plan, f"<!-- round {n} -->")
+            land(root)
+            for entry in lens_verdict.plan(root, "ready", KEY)["entries"]:
+                body = {"findings": [blocking] if entry["lens"] == "product" else []}
+                lens_verdict.write(root, vid, entry["lens"], answer=json.dumps(body))
+        revise(plan, "<!-- round 3 -->")
+        land(root)
+        with pytest.raises(lens_verdict.RefusedError, match="round cap: the lens holder decides"):
+            lens_verdict.plan(root, "ready", KEY)
+        lens_verdict.decide(root, vid, "product", "product", "Narrowed in the next story.")
+        code = act(moving, "select", KEY, adapter=fake())
+        out, err = capsys.readouterr()
+        assert code == 0, err
+        decided = [{"lens": "product", "by": "product", "sentence": "Narrowed in the next story."}]
+        assert transitions(moving)[-1]["decided"] == decided
+        assert "decided: product by product: Narrowed in the next story." in out.splitlines()
+
     def test_select_prints_a_derived_round_with_its_origin(self, moving, capsys):
         """A verdict file of 8.10.0 (no ``round``) with logged runs on two plan blobs."""
         root = moving / "work"
@@ -1895,7 +1927,7 @@ class TestSelectLenses:
         path = lens_verdict.verdict_dir(root) / f"{vid}.json"
         for version in (1, 2):
             if version == 2:
-                plan.write_text(plan.read_text() + "\n<!-- round 2 -->\n")
+                revise(plan, "<!-- round 2 -->")
                 land(root)
             panel = lens_verdict.plan(root, "ready", KEY)
             warning = {"severity": "WARNING", "claim": "name the error", "where": "plan:AC3"}
