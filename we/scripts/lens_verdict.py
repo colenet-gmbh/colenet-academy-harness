@@ -73,7 +73,9 @@ verdict and the status are computed here from the findings, never taken from the
 Subject (Ready): a panel judges the plan without the sections ``## Updates Log``, ``## Documentation
 Impact`` and ``## Code Guidance`` (a level-2 heading outside a code fence, up to the next one) and
 the frontmatter keys ``status``, ``created`` and ``comments_read_through`` (with their indented
-continuation lines); everything else counts, trailing whitespace dropped. ``subject_hash`` is the
+continuation lines); everything else counts, trailing whitespace dropped. Code Guidance is left
+out on purpose: its DO/DON'T lines are the refiner's hints to the builder, while the ACs, phases,
+fence and out of scope that a lens judges are what the build is accepted against. ``subject_hash`` is the
 one normalisation (sha256 of ``subject_text``); ``plan``, ``write``, ``decide``, ``check`` and the
 round compare it, never the blob, so a status flip or an updates-log line keeps the panel and a
 changed AC makes it stale. A moved blob with the same subject prints ``panel <ID>: plan blob <a> ->
@@ -100,8 +102,9 @@ until a holder decides again. ``decide`` appends ``kind: "decision"`` to ``sampl
 ``lens``, ``bound``, ``subject``, ``round``, ``by``, ``sentence``, ``at``); ``rounds`` lists it,
 and ``check_ready`` returns the decisions for the board's Selected row (``decided``).
 
-Carried warnings (Ready only, crew ``ready_panel.warning_ok_after_rounds`` = N): from round N on,
-a lens that is red only through standing WARNINGs (no BLOCKING, no ``failure``) prints ``lens
+Carried warnings (Ready only, crew ``ready_panel.warning_ok_after_rounds`` = N; an N above
+``ready_panel.max_rounds`` never carries, since no lens runs there and the holder decides, see
+Round cap): from round N on, a lens that is red only through standing WARNINGs (no BLOCKING, no ``failure``) prints ``lens
 <lens>: green (warnings carried: …)`` and counts green; the panel line then reads ``green
 (warnings carried)`` and ``check_panel`` returns the warnings (lens, claim, where) for the board's
 Selected row. A BLOCKING stays red in every round; without the key, and on every T2 panel, a

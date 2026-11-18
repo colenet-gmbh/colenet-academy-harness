@@ -2715,7 +2715,8 @@ def rule_tier(m):
 
 
 def rule_lenses(m):
-    """The `ready-<KEY>` lens verdict, green and bound to the plan blob on main; the warnings a
+    """The `ready-<KEY>` lens verdict, green and bound to the subject hash of the plan blob on
+    main (`lens_verdict.py` § Subject); the warnings a
     green panel carries (`ready_panel.warning_ok_after_rounds`) go into the row as `carried`, the
     lens holders' decisions above the round cap (`ready_panel.max_rounds`) as `decided`, a
     derived round (a verdict file of 8.10.0 or older) as `round` with its origin."""

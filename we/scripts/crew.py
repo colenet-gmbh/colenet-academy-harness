@@ -64,7 +64,7 @@ or later whose red lenses stand on WARNINGs alone count green with those warning
 Selected row; a BLOCKING stays red, and a T2 panel never reads it; ``lens_verdict.py`` owns the
 round, and every new plan subject is one: pick N with that in mind; ``max_rounds``: 2, the
 default, is the last round lenses run in, above it the lens holder decides, null turns the cap
-off), ``t2_panel``, ``risk``,
+off; a ``warning_ok_after_rounds`` above it never carries), ``t2_panel``, ``risk``,
 ``fallback`` (role key -> role key or ``human_bundle``), ``local_rules``, ``acceptance``,
 ``oracles``, ``board`` (``file``, ``ticketing``, ``states``: state key -> ticket status name,
 ``in_test`` default null: only a crew that maps it has an In Test step; ``signals``: a list of objects
