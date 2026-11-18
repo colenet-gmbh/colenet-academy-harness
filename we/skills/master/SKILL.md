@@ -276,26 +276,25 @@ A worker briefed `PR owner: worker` runs steps 2–3 and its fix rounds; you act
     waits for the human's merge. The closing message says `user merge: one-way (<class>)`. Ask
     "please approve" where the gate takes the approve as the go, else "please merge", and do nothing
     after it.
-  - A draft reason (a follow-up still on the branch, an unmerged dependency) keeps the PR a draft per
-    `/we:pr` step 4; it is no merge brake. Non-destructive migrations auto-merge serially (owner
-    03.10.2026): the second PR arms only after the first landed, merging `origin/<default>`,
-    checking for one migration head, and pushing first. A fix round on an armed PR starts with `gh pr
-    merge <PR> --disable-auto` and never drafts (`/we:ci-review` § 1).
+  - Drafts: `/we:pr` step 4; a draft is no merge brake. Non-destructive migrations auto-merge serially
+    (owner 03.10.2026): the second PR arms only after the first landed, merging `origin/<default>`,
+    checking for one migration head, and pushing first. A fix round on an armed PR starts with
+    `gh pr merge <PR> --disable-auto`.
 - **Auto retro** only when you can name a concrete, new friction of the run that an instruction change
   would prevent (a wrong assumption the files should have held, a script that misled, a repeated user
   correction); round counts alone are no reason (owner 28.10.2026). Then dispatch it per
   `${CLAUDE_PLUGIN_ROOT}/skills/retro/SKILL.md` § Auto mode with that friction in the brief; it is the
   one agent that keeps running after the run closes. Otherwise skip it without asking; the closing
   message says `retro: <friction> | skipped (<reason>)`.
-- The closing message starts with `PR #<n> · <branch> · <worktree> · CI <state> · auto-merge|user merge`,
-  then at most three items someone owes. For a user merge it is the `/we:standup --branch` output. While a
-  follow-up runs on the branch, every message says "do not merge yet". A finding on the run's own diff (a Codex finding, a type error, a fallback) is
-  decided per finish-first and reported, never asked (final sim 28.09.2026), unless its fix replaces a design the
-  plan fixed (another mechanism, a dropped AC, a changed interface): that goes back to the epic owner first. On a one-way PR
-  whose T2 panel is green, a NOTE goes into one follow-up PR from the default branch after the merge, named in the PR
-  body; only a BLOCKING or WARNING reopens the head (owner 12.11.2026). Knowledge goes into the
-  plan. A product question mid-run becomes one decision story (L0 §Units); every other follow-up is named,
-  never ticketed during the run (owner 25.09.2026).
+- The closing message starts with `PR #<n> · <branch> · <worktree> · CI <state> · auto-merge|user merge`, then at most
+  three items someone owes. For a user merge it is the `/we:standup --branch` output. While a follow-up runs on the
+  branch, every message says "do not merge yet". A finding on the run's own diff (a Codex finding, a type error, a
+  fallback) is decided per finish-first and reported, never asked: a question on its own diff stalls the run on a call
+  the Lead can make (final sim 28.09.2026), unless its fix replaces a design the plan fixed (another mechanism, a
+  dropped AC, a changed interface): that goes back to the epic owner first. On a one-way PR whose T2 panel is green, a
+  NOTE goes into one follow-up PR from the default branch after the merge, named in the PR body; only a BLOCKING or
+  WARNING reopens the head (owner 12.11.2026). Knowledge goes into the plan. A product question mid-run becomes one
+  decision story (L0 §Units); every other follow-up is named (`worker-dispatch.md` § Dev-only worker contract).
 - A repo that bumps its version per PR (its `AGENTS.md` says so): workers leave the version alone; you set it as
   the last commit before the arm, above `origin/<default>` and every armed open PR.
 - Stop leftover workers, except the auto retro. Keep the PR branch's worktree until the merge. Release
