@@ -64,9 +64,9 @@ CodeRabbit or Greptile app. The ids go to `review.available`; `/we:ci-review` co
 exactly these. Default `["claude"]`. A Codex job named other than `Codex Review` goes to
 `review.codex_check`; the merge waits for it only where the base branch requires that check.
 
-Offer once: additive repo checks on top of the plugin's → `.weside/dor.md` and/or `.weside/dod.md`,
-seeded with the user's concrete check. `/we:plan-story` reads the DoR file, `/we:master` the DoD
-rows. Additive, never a replacement.
+Offer once: additive repo checks on top of the plugin's → `.weside/dor.md`, seeded with the user's
+concrete check; `/we:plan-story` reads it. Additive, never a replacement. A `.weside/dod.md` says
+only when a story is Done and who sets it.
 
 ## 3. `.weside/config.json`
 

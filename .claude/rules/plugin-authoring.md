@@ -46,8 +46,8 @@ existing owners first:
 | instruction limits and wording | `references/instruction-authoring.md` |
 
 **The one legitimate copy: self-contained briefs.** A brief sent verbatim to a process without
-plugin context (the master's worker brief, the refiner's tree limits, the `/we:codex-task` brief) may
-carry rules inline — it cannot follow references.
+plugin context (the master's worker brief, the refiner's tree limits) may carry rules
+inline — it cannot follow references.
 
 **Rules blocks don't retell steps.** A `## Rules` section at the end of a skill contains ONLY
 invariants that are not already stated in the steps. A Rules block that paraphrases the steps is
