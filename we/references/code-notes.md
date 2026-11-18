@@ -1,39 +1,39 @@
 # Code notes
 
-What a comment, a docstring or a doc carries, written for the one reader it has: the next agent,
-who wants the overview fast and the right facts at the place it works. The code is the first
-documentation; a note pays where the code cannot say why.
+What a comment, a docstring or a doc carries, written for its one reader: the next agent, who
+wants the overview fast and the right facts where it works. A note pays where the code cannot say why.
 
-## Top of a file
+## The head of a package's entry file
 
-Two to five lines: what the module is for and where it sits in the larger flow (what calls it,
-what it hands on). It is read first and saves opening three neighbours to learn the same.
+The note that pays most. An agent orients itself by reading this head, then searching by name;
+write it for that move. In Python the `__init__.py` docstring, elsewhere the index or main module:
+what the package is for, the one way in, what must not be imported or called from outside, the
+decision behind it with its record. A few lines, read in milliseconds.
+
+## Top of any other file
+
+Two to five lines: what the module is for, what calls it, what it hands on. It saves opening
+three neighbours.
 
 ## Where a reader would turn wrong
 
-One line at the spot: why it is this way and not the obvious other way, the trap, or the decision
-behind it with who and when. A stale note there misleads harder than none, so it moves with the
-decision.
+One line at the spot: why it is this way and not the obvious way, the trap, or the decision with
+who and when. A stale note misleads harder than none, so it moves with the decision.
 
 | Bad | Good |
 |---|---|
-| A lock's docstring says "no session may write while held"; a later decision allowing the owner's session to write stands only in a plan and a test | The docstring says "held by the writer; the owner's session may write through it too (owner, date)", so the reader of the lock sees the decision |
+| A lock's docstring says "no session may write while held"; a later decision allowing the owner's session to write stands only in a plan and a test | The docstring says "held by the writer; the owner's session may write through it too (owner, date)" |
 
 ## Nothing the code already says
 
-No retold steps, no parameter lists, no copied numbers or line numbers: they rot when the code
-moves. Name the symbol that holds the value (`BUDGET` in `render_process.py`) instead of its value.
+No retold steps, parameter lists, copied numbers or line numbers: they rot when the code moves.
+Name the symbol that holds a value (`BUDGET` in `render_process.py`), not the value.
 
-## A separate doc is the exception
+## Docs and decisions
 
-Only for what no single file can hold: a flow across subsystems, a contract between them. Keep it
-short, and let its first sentence say why the code could not carry it.
+A separate doc only for what no single file can hold (a flow across subsystems, a contract between
+them): short, its first sentence saying why the code could not carry it. An important decision
+goes where the next agent works (the comment at the code, the config key's comment, the glossary
+line); the board, a chat and a plan's log are transport, not memory.
 
-## Decisions land where the next agent works
-
-An important decision goes into the comment at the code, the config key's comment or the glossary
-line. The board, a chat and a plan's log are transport, not memory: the next agent reads the code,
-not last week's queue.
-
-No test pins such text (`test-economy.md` § No test pins text): a test on prose fails on every
-rewording and catches no defect.
+No test pins such text (`test-economy.md` § No test pins text): it fails on rewording, catches no defect.
