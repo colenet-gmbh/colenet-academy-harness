@@ -257,7 +257,7 @@ def _humans(crew: dict[str, Any]) -> str | None:
     for slug, e in crewlib.humans(crew).items():
         head, parts = f"- **{e['name']}** (`{slug}`)", []
         if e["owns_states"]:
-            parts.append("owns " + ", ".join(states.get(x, x) for x in e["owns_states"]))
+            parts.append("owns " + ", ".join(states.get(x) or x for x in e["owns_states"]))
         if e["decides"]:
             parts.append("decides " + ", ".join(e["decides"]))
         if e["runs"]:
