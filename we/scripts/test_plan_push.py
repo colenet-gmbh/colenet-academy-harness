@@ -133,6 +133,7 @@ def test_lands_plan_with_its_planned_receipt(make, capsys):
         ("nothing", "nothing to land"),
         ("main worktree", "main worktree"),
         ("no scanner", "no secret scanner"),
+        ("scanner missing", "secret scan did not run"),
     ],
 )
 def test_refuses_and_pushes_nothing(make, capsys, monkeypatch, case, needle):
@@ -164,9 +165,19 @@ def test_refuses_and_pushes_nothing(make, capsys, monkeypatch, case, needle):
         git(world.scratch, "push", "-q", "origin", "HEAD:main")
         commit(world.scratch, *plan)
         monkeypatch.setattr(plan_push.shutil, "which", lambda _name: None)
+    elif case == "scanner missing":
+        absent = {"plans": {"secret_scan": "no-such-scanner-xyz git {range}"}}
+        write(world.scratch, ".weside/config.json", json.dumps(absent))
+        git(world.scratch, "add", "-A")
+        git(world.scratch, "commit", "-q", "-m", "absent scanner")
+        git(world.scratch, "push", "-q", "origin", "HEAD:main")
+        commit(world.scratch, *plan)
     before = world.remote_head()
 
-    assert plan_push.main([]) == plan_push.REFUSED
+    # A scan refusal must not share 1 with a path refusal: a caller lands a 1 by PR.
+    scan_cases = ("no scanner", "scanner missing")
+    expected = plan_push.SCAN_REFUSED if case in scan_cases else plan_push.REFUSED
+    assert plan_push.main([]) == expected == (4 if case in scan_cases else 1)
     err = capsys.readouterr().err
     assert needle in err
     if case in ("code path", "config widens itself", "armed receipt", "receipt without plan"):
@@ -178,7 +189,7 @@ def test_secret_finding_names_file_and_line_never_the_value(make, capsys):
     world = make()
     commit(world.scratch, "docs/plans/ACME-1-story.md", "# plan\n\ntoken FAKE-SECRET-12345\n")
 
-    assert plan_push.main([]) == plan_push.REFUSED
+    assert plan_push.main([]) == plan_push.SCAN_REFUSED == 4
     captured = capsys.readouterr()
     assert "docs/plans/ACME-1-story.md:3  (fake-rule, commit " in captured.err
     assert "FAKE-SECRET" not in captured.err + captured.out

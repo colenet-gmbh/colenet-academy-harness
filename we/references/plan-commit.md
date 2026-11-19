@@ -51,11 +51,13 @@ Every verb that commits a planning document follows this section: `/we:epic`, `/
      - Exit 0: the document is on the default branch. A step that needs it there (Ready gate,
        `board.py select`, a dispatch reading the plan) runs at once, after `git fetch origin`, on
        `origin/<default>`; no PR, no wait.
-     - Exit 1, refused; nothing was pushed. A secret finding names file and line: take the value
-       out and commit again. Paths outside the globs: land these commits the PR way below. No
-       scanner: land the PR way and report the missing scanner to the owner (in a crew: machinery).
-       Main worktree, dirty tree, nothing to land: back to steps 2–4. `plans.secret_scan: "none"` is
-       the owner's setting, never written by the session that pushes.
+     - Exit 1, refused; nothing was pushed. Paths outside the globs: land these commits the PR
+       way below. Main worktree, dirty tree, nothing to land: back to steps 2–4.
+     - Exit 4, refused by the secret scan; nothing was pushed, and these commits land by no route,
+       the PR way included (a PR pushes the finding to the forge). A finding names file and line:
+       take the value out and commit again. No scanner, or the scan did not run: report it to the
+       owner (in a crew: machinery) and stop. `plans.secret_scan: "none"` is the owner's setting,
+       never written by the session that pushes.
      - Exit 3, "this repo takes no direct push": the PR way below, same commits.
      - Exit 2: a git error or a rebase conflict; report its line, nothing was pushed.
    - **`pr`** (and exit 3, or a path refusal): a default branch under a ruleset takes no push from
