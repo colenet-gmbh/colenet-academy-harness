@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -1187,3 +1188,55 @@ def test_pr_owner_verb_prints_the_worktrees_value(tmp_path, capsys):
     assert capsys.readouterr().out.strip() == "worker"
     (tmp_path / ".weside" / "config.json").write_text(json.dumps({"build": {"pr_owner": "x"}}))
     assert wl.main(["pr-owner", "--repo", str(tmp_path)]) == 2
+
+
+class TestAccountAnswer:
+    @pytest.mark.parametrize(
+        "answer, account, need, refusal",
+        [
+            ({"name": "a", "kind": "api", "env": {}}, "auto", "critical", "only on a claude"),
+            (
+                {"name": "a", "kind": "claude", "env": {"ANTHROPIC_API_KEY": "x"}},
+                "auto",
+                "critical",
+                "token_command",
+            ),
+            ({"name": "b", "kind": "claude"}, "a", "critical", "answered b for --account a"),
+            ({"kind": "claude"}, "auto", "critical", "a `name` and a `kind`"),
+            (["a"], "auto", "critical", "no JSON object"),
+        ],
+    )
+    def test_a_bad_or_forbidden_answer_refuses(self, answer, account, need, refusal):
+        with pytest.raises(wl.LaunchError, match=re.escape(refusal)) as exc:
+            wl._checked_account(answer, account, need)
+        assert exc.value.code == 2
+
+    @pytest.mark.parametrize(
+        "name, secret",
+        [
+            ("ANTHROPIC_API_KEY", True),
+            ("ANTHROPIC_AUTH_TOKEN", True),
+            ("DB_PASSWORD", True),
+            ("CLAUDE_CODE_MAX_OUTPUT_TOKENS", False),
+            ("CLAUDE_CODE_API_KEY_HELPER_TTL_MS", False),
+            ("ANTHROPIC_BASE_URL", False),
+        ],
+    )
+    def test_only_a_credential_name_counts_as_secret(self, name, secret):
+        assert bool(wl.SECRET_NAME_RE.search(name)) is secret
+
+    def test_an_uncritical_need_takes_another_llm(self):
+        chosen = wl._checked_account(
+            {"name": "g", "kind": "other-llm", "env": {"X_URL": "u"}, "token_command": "h"},
+            "auto",
+            "uncritical",
+        )
+        doc = wl.apply_account({"env": {"WE_ROLE": "worker", "X_URL": "mine"}}, chosen)
+        assert doc == {"env": {"X_URL": "mine", "WE_ROLE": "worker"}, "apiKeyHelper": "h"}
+
+    @pytest.mark.parametrize(
+        "brief, need",
+        [("## Goal\n\nx\n", "critical"), ("## Goal\n\nAccount: uncritical\n", "uncritical")],
+    )
+    def test_the_brief_names_the_need(self, brief, need):
+        assert wl.brief_account_need(brief) == need

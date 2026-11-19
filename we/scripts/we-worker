@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # we-worker — start and steer a process worker on the global login (references/worker-dispatch.md).
-#   we-worker <name> [--bg [--queue [--queue-timeout <duration>]]] [--limit <duration>] [--tree <path> | --here] [--branch <b>] [claude args...]
+#   we-worker <name> [--bg [--queue [--queue-timeout <duration>]]] [--limit <duration>] [--tree <path> | --here] [--branch <b>] [--account auto|<name>] [claude args...]
 #                                  start a worker session named <name>
 #   we-worker status [<name|id>]   one line per worker, background or window (a session started with
 #                                  WE_ROLE=worker or named by its tree's launcher marker, marked
@@ -58,6 +58,12 @@
 #   --tree <path>  start in that existing worktree (an integration tree, a finisher, a fix round)
 #   --here   start where the caller stands: a worker that only reads (probe, walk, card, pre-sorter)
 #   --branch <b>  the branch of a tree the launcher creates (default feat/<name>; workers.tree: own)
+#   --account auto|<name>  the account the project's tool chooses (`.weside/config.json`
+#            `agents.accounts_command`, run as `<cmd> --need critical|uncritical [--account <name>]`;
+#            `worker_launch.py account`): the need is `critical` unless a brief line says
+#            `Account: uncritical`; the answer's `env` and `token_command` (as `apiKeyHelper`) go into
+#            the worker's settings file, never onto a command line; a critical worker on a non-Claude
+#            account, or --account without the option, refuses (exit 2); without --account nothing is asked
 #   --queue  (with --bg) a start the concurrency cap refuses is queued in the state dir instead: a
 #            detached waiter starts it once the check passes, first come first served, and tells the
 #            starter one line on start, failure or timeout (--queue-timeout, default 2h)
@@ -95,7 +101,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: we-worker <name> [--bg [--queue [--queue-timeout <duration>]]] [--limit <duration>] [--tree <path> | --here] [--branch <b>] [claude args...] | gc [--apply] | close <KEY> [--pr <ref>] | close --sweep [--apply] | status [<name|id>] | stop <name|id> | checkpoint <name|id> | logs <name|id> [-n N] [--raw] | waiting  (help: we-worker --help)" >&2
+  echo "usage: we-worker <name> [--bg [--queue [--queue-timeout <duration>]]] [--limit <duration>] [--tree <path> | --here] [--branch <b>] [--account auto|<name>] [claude args...] | gc [--apply] | close <KEY> [--pr <ref>] | close --sweep [--apply] | status [<name|id>] | stop <name|id> | checkpoint <name|id> | logs <name|id> [-n N] [--raw] | waiting  (help: we-worker --help)" >&2
   exit 2
 }
 
@@ -386,6 +392,7 @@ limit=3h
 tree=""
 here=0
 branch=""
+account=""
 while [[ $# -gt 0 ]]; do
   case $1 in
     --bg) bg=1; shift ;;
@@ -396,6 +403,8 @@ while [[ $# -gt 0 ]]; do
     --branch=*) branch=${1#--branch=}; shift ;;
     --limit) [[ $# -ge 2 ]] || { echo "we-worker: --limit needs a duration (3h, 90m)" >&2; exit 2; }; limit=$2; shift 2 ;;
     --limit=*) limit=${1#--limit=}; shift ;;
+    --account) [[ $# -ge 2 && -n "$2" ]] || { echo "we-worker: --account needs auto or an account name" >&2; exit 2; }; account=$2; shift 2 ;;
+    --account=*) account=${1#--account=}; shift ;;
     --queue) queue=1; shift ;;
     --queue-timeout) [[ $# -ge 2 ]] || { echo "we-worker: --queue-timeout needs a duration (2h, 90m)" >&2; exit 2; }; queue_timeout=$2; shift 2 ;;
     --queue-timeout=*) queue_timeout=${1#--queue-timeout=}; shift ;;
@@ -469,7 +478,7 @@ if [[ -n "$known_flags" && $# -gt 0 ]]; then
     [[ "$arg" == --* ]] || continue
     flag=${arg%%=*}
     if ! grep -qxF -- "$flag" <<<"$known_flags"; then
-      echo "we-worker: $flag is neither a we-worker flag (--bg, --queue, --queue-timeout, --limit, --tree, --here, --branch) nor one claude knows; to start in another tree: we-worker $name --tree <tree> …" >&2
+      echo "we-worker: $flag is neither a we-worker flag (--bg, --queue, --queue-timeout, --limit, --tree, --here, --branch, --account) nor one claude knows; to start in another tree: we-worker $name --tree <tree> …" >&2
       exit 2
     fi
   done
@@ -519,6 +528,21 @@ if [[ $rc -eq 3 && $queue -eq 1 ]]; then
   exit
 fi
 [[ $rc -eq 0 ]] || exit $rc
+# The account, chosen before a tree or marker exists: a refusal leaves nothing behind.
+account_file=""
+if [[ -n "$account" ]]; then
+  need=$(printf '%s' "$brief" | python3 "$wl" account-need)
+  account_file="${WE_WORKER_STATE_DIR:-$HOME/.claude/we-state/workers}/$name.account.json"
+  account_err="$account_file.err"
+  mkdir -p "${account_file%/*}"
+  chosen=$(python3 "$wl" account --repo "${tree:-$PWD}" --account "$account" --need "$need" --out "$account_file" 2>"$account_err") || {
+    echo "we-worker: $(sed 's/^worker_launch: //' "$account_err"); no worker started" >&2
+    rm -f "$account_file" "$account_err"
+    exit 2
+  }
+  rm -f "$account_err"
+  echo "we-worker: $name runs on $chosen"
+fi
 cargs=()
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -595,8 +619,10 @@ fi
 # whether the ticketing plugin loads (`worker_launch.py ticketing_unneeded`), read from the worker's
 # own config dir (the global login, without CLAUDE_CONFIG_DIR).
 settings_file="${WE_WORKER_STATE_DIR:-$HOME/.claude/we-state/workers}/$name.settings.json"
-printf '%s' "$brief" | env -u CLAUDE_CONFIG_DIR python3 "$wl" settings --repo "$PWD" --key "$key" --name "$name" --out "$settings_file" --brief-stdin ${hook:+--session-start "$hook"} >/dev/null ||
-  { echo "we-worker: the settings of $name could not be written; no worker started" >&2; exit 2; }
+printf '%s' "$brief" | env -u CLAUDE_CONFIG_DIR python3 "$wl" settings --repo "$PWD" --key "$key" --name "$name" --out "$settings_file" --brief-stdin ${hook:+--session-start "$hook"} \
+  ${account_file:+--account-file "$account_file"} >/dev/null ||
+  { echo "we-worker: the settings of $name could not be written; no worker started" >&2; rm -f ${account_file:+"$account_file"}; exit 2; }
+[[ -z "$account_file" ]] || rm -f "$account_file"
 extra+=(--settings "$settings_file")
 
 # The supervisor inherits the starter's inbox socket and token from this shell before they go.
