@@ -11,10 +11,11 @@ It acts only for a process worker: env `WE_ROLE=worker` (set by `we-worker`) or 
 For a worker it
   1. denies a never-list item (`worker_rights.never`, a fixed list of patterns searched in the
      command text, no shell parser): `never for a worker (<item>): ask …`;
-  2. on a command of its own (`worker_rights.simple_argv`), denies a right (`gh pr ready`,
+  2. on every simple command of the text (`worker_rights.segments`), denies a right (`gh pr ready`,
      `gh pr comment`, the crew's `branch_rc`; under `build.pr_owner: worker` also the PR owner
      rights, the merge line among them) whose conditions fail: `not a worker right (<reason>): ask …`,
-     and allows a held one without a prompt. A right inside a compound command only passes this
+     all parts sharing one deadline; it allows a held right without a prompt only on a command of
+     its own (`worker_rights.simple_argv`). A held right inside a compound command only passes this
      gate; a `gh pr merge` there is a never-list item.
 `ask …` names the marker's Lead (`ask your Lead <name>`), else `ask your starter`. Fail closed: an
 exception while judging a worker's command denies it. Every denial is one `deny` line in
@@ -29,6 +30,7 @@ import contextlib
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -72,15 +74,21 @@ def decide(payload: dict, env: dict) -> tuple[str, str] | None:
     item = wr.never(command, cwd, rights, owner)
     if item:
         return "deny", f"never for a worker ({item}): {ask}"
-    argv = wr.simple_argv(command)
-    right = wr.right_of(argv, rights, owner) if argv else None
-    if right is None:
-        return None
     key = env.get("WE_STORY_KEY") or (marker or {}).get("key")
-    reason = wr.right_refusal(argv, right, rights, key, cwd, owner)
-    if reason:
-        return "deny", f"not a worker right ({reason}): {ask}"
-    return "allow", f"worker right {right} (worker_rights_gate)"
+    deadline = time.monotonic() + wr.MERGE_LINE_BUDGET_S  # one budget across every part
+    argv = wr.simple_argv(command)
+    held = None
+    for part in [argv] if argv else wr.segments(command):
+        right = wr.right_of(part, rights, owner)
+        if right is None:
+            continue
+        reason = wr.right_refusal(part, right, rights, key, cwd, owner, deadline)
+        if reason:
+            return "deny", f"not a worker right ({reason}): {ask}"
+        held = right
+    if held is None or argv is None:
+        return None
+    return "allow", f"worker right {held} (worker_rights_gate)"
 
 
 def record(payload: dict, env: dict, reason: str) -> None:

@@ -43,9 +43,10 @@ running past it denies; `gh pr edit` never removes a hold label) and
 `gh api graphql` with `resolveReviewThread` as its only mutation (`resolve_thread`). The switch is the
 opt-in: `worker_rights.repos` is not needed for these. Under `master` (the default) none of them is
 judged here.
-A right is judged only on a command of its own (`simple_argv`: no operator, substitution or
-newline): held, it is allowed outright; its conditions failing, it is denied with the reason. Inside a
-compound command a right only passes this gate.
+A right is judged on every simple command of the text (`segments`): its conditions failing in any
+part, the whole call is denied with the reason. Held, it is allowed outright only on a command of its
+own (`simple_argv`: no operator, substitution or newline); inside a compound command a held right only
+passes this gate.
 """
 
 from __future__ import annotations
@@ -92,6 +93,31 @@ def simple_argv(command: str) -> list[str] | None:
     if not tokens or any(t and all(c in "();|&<>" for c in t) for t in tokens):
         return None
     return tokens
+
+
+_SEPARATORS = re.compile(r"&&|\|\||[;|&\n()]")
+
+
+def segments(command: str) -> list[list[str]]:
+    """The argv of each simple command in `command`, split on `&&`, `||`, `;`, `|`, `&`, a
+    parenthesis and newlines (outside quotes where the text tokenizes; on the raw text where it does
+    not, each raw part as `simple_argv` reads it). A right inside a chain is judged on its part."""
+    parts: list[list[str]] = []
+    for line in command.replace("\\\n", " ").split("\n"):
+        try:
+            tokens = _tokens(line)
+        except ValueError:
+            parts += [a for a in map(simple_argv, _SEPARATORS.split(line)) if a]
+            continue
+        part: list[str] = []
+        for token in [*tokens, ";"]:
+            if token and all(c in "();|&" for c in token):
+                if part:
+                    parts.append(part)
+                part = []
+            else:
+                part.append(token)
+    return parts
 
 
 # ---------------------------------------------------------------- the repo a command runs in
@@ -218,7 +244,11 @@ NEVER = (
         rf"{_GIT_PUSH}{_REST}\s(?:--de(?:l(?:e(?:te?)?)?)?|-[a-zA-Z]*d[a-zA-Z]*)(?=[\s=]|$)",
     ),
     ("delete (git push {0})", rf"{_GIT_PUSH}{_REST}\s(\+?:[^\s'\"]+)"),
-    ("main (git push to {0})", rf"{_GIT_PUSH}{_REST}[\s:](?:refs/heads/)?({{main}})\b(?![\w/-])"),
+    # a quote or a leading `+` may stand before the name (`+main`, `"main"`, `HEAD:"main"`)
+    (
+        "main (git push to {0})",
+        rf"""{_GIT_PUSH}{_REST}[\s:'"][+'"]*(?:refs/heads/)?({{main}})(?![\w/-])""",
+    ),
     ("main (git push of a ref pattern)", rf"{_GIT_PUSH}{_REST}\*"),
     (
         "main (git push {0})",

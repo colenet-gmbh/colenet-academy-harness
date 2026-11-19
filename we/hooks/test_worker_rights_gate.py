@@ -213,6 +213,29 @@ def test_a_held_right_in_a_compound_command_only_passes(world):
     assert hook(world, "git status && gh pr ready") == (None, "")
 
 
+@pytest.mark.parametrize(
+    ("command", "why"),
+    [
+        ("cd /x && gh pr ready 8", "not this branch's PR"),
+        ("cd . && gh pr comment 8 --body 'skipped: x'", "not this branch's PR"),
+        ("git status; gh pr ready -R acme/other", "another repo"),
+        ("true || gh pr comment 8 -b x", "not this branch's PR"),
+        ("echo x | gh pr ready 8", "not this branch's PR"),
+        ("cd .\ngh pr ready 8", "not this branch's PR"),
+        ("gh pr ready && gh pr comment 8 --body x", "not this branch's PR"),
+    ],
+)
+def test_a_right_inside_a_command_chain_is_judged_on_its_segment(world, command, why):
+    decision, reason = hook(world, command)
+    assert decision == "deny" and why in reason, reason
+
+
+def test_a_release_inside_a_command_chain_is_judged_on_the_branch(world):
+    _git(world["repo"], "checkout", "-q", "-b", "feat/other")
+    decision, reason = hook(world, "cd . && a release staging rc")
+    assert decision == "deny" and f"does not carry the key {KEY}" in reason
+
+
 # ---------------------------------------------------------------- AC 6: the rights' conditions
 
 
@@ -435,6 +458,33 @@ def test_data_naming_a_never_item_is_denied_like_the_settings_deny_rules(world, 
     """No parser tells data from a command: the gate denies what the `--settings` deny globs
     (`Bash(*--no-verify*)`, `Bash(*gh secret *)`) already deny for the same text."""
     assert hook(world, command)[0] == "deny"
+
+
+@pytest.mark.parametrize(
+    "refspec",
+    [
+        "+main",
+        '"main"',
+        "'main'",
+        '"+main"',
+        "+refs/heads/main",
+        '"refs/heads/main"',
+        'HEAD:"main"',
+        "+HEAD:main",
+        "HEAD:main",
+        "refs/heads/main",
+        ":main",
+        "+master",
+    ],
+)
+def test_a_push_to_main_in_any_refspec_spelling_is_denied(world, refspec):
+    decision, reason = hook(world, f"git push origin {refspec}")
+    assert decision == "deny" and "never for a worker" in reason, reason
+
+
+@pytest.mark.parametrize("refspec", ["+feat/ABC-12-main", '"feat/ABC-12-x"', "+HEAD:mainline"])
+def test_a_push_to_a_branch_merely_named_like_main_passes(world, refspec):
+    assert hook(world, f"git push origin {refspec}")[0] != "deny"
 
 
 def test_a_bare_push_from_main_is_denied(world):
