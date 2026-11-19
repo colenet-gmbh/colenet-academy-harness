@@ -1204,6 +1204,24 @@ class TestAccountAnswer:
             ({"name": "b", "kind": "claude"}, "a", "critical", "answered b for --account a"),
             ({"kind": "claude"}, "auto", "critical", "a `name` and a `kind`"),
             (["a"], "auto", "critical", "no JSON object"),
+            (
+                {"name": "a", "kind": "claude", "env": {"CLAUDE_CONFIG_DIR": "/p"}},
+                "auto",
+                "critical",
+                "sets CLAUDE_CONFIG_DIR",
+            ),
+            (
+                {"name": "a", "kind": "claude", "env": {"WE_WORKER_NO_SUPERVISOR": "1"}},
+                "auto",
+                "critical",
+                "sets WE_WORKER_NO_SUPERVISOR",
+            ),
+            (
+                {"name": "a", "kind": "claude", "env": {"WESIDE_COMPANION": "x"}},
+                "auto",
+                "critical",
+                "sets WESIDE_COMPANION",
+            ),
         ],
     )
     def test_a_bad_or_forbidden_answer_refuses(self, answer, account, need, refusal):
@@ -1220,10 +1238,27 @@ class TestAccountAnswer:
             ("CLAUDE_CODE_MAX_OUTPUT_TOKENS", False),
             ("CLAUDE_CODE_API_KEY_HELPER_TTL_MS", False),
             ("ANTHROPIC_BASE_URL", False),
+            ("OPENAI_APIKEY", True),
+            ("GITHUB_PAT", True),
+            ("DB_PASSWD", True),
+            ("PROXY_AUTH", True),
         ],
     )
     def test_only_a_credential_name_counts_as_secret(self, name, secret):
         assert bool(wl.SECRET_NAME_RE.search(name)) is secret
+
+    def test_the_cli_settings_stay_open(self):
+        chosen = wl._checked_account(
+            {"name": "a", "kind": "claude", "env": {"CLAUDE_CODE_USE_BEDROCK": "1"}},
+            "auto",
+            "critical",
+        )
+        assert chosen["env"] == {"CLAUDE_CODE_USE_BEDROCK": "1"}
+
+    def test_the_account_file_is_private(self, tmp_path):
+        out = tmp_path / "a.json"
+        wl._write_private(out, "{}\n")
+        assert out.stat().st_mode & 0o777 == 0o600
 
     def test_an_uncritical_need_takes_another_llm(self):
         chosen = wl._checked_account(
@@ -1236,7 +1271,11 @@ class TestAccountAnswer:
 
     @pytest.mark.parametrize(
         "brief, need",
-        [("## Goal\n\nx\n", "critical"), ("## Goal\n\nAccount: uncritical\n", "uncritical")],
+        [
+            ("## Goal\n\nx\n", "critical"),
+            ("## Goal\n\nAccount: uncritical\n", "uncritical"),
+            ("## Goal\n" + "ticket text\n" * 12 + "Account: uncritical\n", "critical"),
+        ],
     )
     def test_the_brief_names_the_need(self, brief, need):
         assert wl.brief_account_need(brief) == need
