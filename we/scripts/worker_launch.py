@@ -78,8 +78,9 @@ Usage:
                                                    writes its checked answer to <file>, prints one
                                                    line naming it; 2 = refused (no option, failed
                                                    command, a critical worker on a non-Claude account)
-  worker_launch.py account-need < brief            prints `uncritical` for a brief line
-                                                   `Account: uncritical`, else `critical`
+  worker_launch.py account-need < brief            prints `uncritical` when one of the brief's
+                                                   first ten lines is `Account: uncritical`,
+                                                   else `critical`
   worker_launch.py tree --repo <dir> --name <n> [--branch <b>] [--auto | --main-checkout]
                                                    creates the worker's own worktree beside the
                                                    main checkout (`add_tree`) and prints its path;
@@ -932,18 +933,35 @@ ACCOUNT_AUTO = "auto"
 CLAUDE_KIND = "claude"
 ACCOUNTS_TIMEOUT_S = 30
 ACCOUNT_LINE_RE = re.compile(r"^\s*Account:\s*uncritical\b", re.MULTILINE | re.IGNORECASE)
+# only the brief's head counts: a brief often carries ticket or PR text verbatim further down
+ACCOUNT_HEAD_LINES = 10
+
+
+# `we-worker` drops every CLAUDE* variable so a worker never books on the starter's (pinned)
+# account, and WE_*/WESIDE_* steer the crew machinery: an account's `env` may not set them back.
+# `CLAUDE_CODE_*` stays open: those are the CLI's settings (provider switch, output limits).
+def _reserved_env(name: str) -> bool:
+    upper = name.upper()
+    if upper.startswith(("WE_", "WESIDE_")):
+        return True
+    return upper.startswith("CLAUDE") and not upper.startswith("CLAUDE_CODE_")
+
+
 # a settings file is no place for a credential: a secret reaches the worker only through
 # `token_command`, which becomes `apiKeyHelper` and runs inside the worker
-# (a whole `_`-separated segment: `MAX_OUTPUT_TOKENS` or `API_KEY_HELPER_TTL_MS` are settings, not secrets)
+# (a whole `_`-separated segment: `MAX_OUTPUT_TOKENS` or `API_KEY_HELPER_TTL_MS` are settings, not
+# secrets, and the CLI's `CLAUDE_CODE_SKIP_*_AUTH` flags carry none)
 SECRET_NAME_RE = re.compile(
-    r"(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?)(?:_|$)(?!HELPER)", re.IGNORECASE
+    r"^(?!CLAUDE_CODE_SKIP_\w+_AUTH$).*?(?:^|_)(?:KEY|APIKEY|TOKEN|SECRET|PASSWORD|PASSWD|PAT|AUTH|CREDENTIALS?)(?:_|$)(?!HELPER)",
+    re.IGNORECASE,
 )
 
 
 def brief_account_need(brief: str) -> str:
-    """`uncritical` when the brief has a line `Account: uncritical`, else `critical`: a worker
-    is critical unless its brief says otherwise."""
-    return "uncritical" if ACCOUNT_LINE_RE.search(brief) else "critical"
+    """`uncritical` when one of the brief's first lines is `Account: uncritical`, else
+    `critical`: a worker is critical unless its brief's head says otherwise."""
+    head = "\n".join(brief.splitlines()[:ACCOUNT_HEAD_LINES])
+    return "uncritical" if ACCOUNT_LINE_RE.search(head) else "critical"
 
 
 def choose_account(repo: Path, account: str, need: str) -> dict:
@@ -999,6 +1017,13 @@ def _checked_account(chosen: object, account: str, need: str) -> dict:
         isinstance(k, str) and isinstance(v, str) for k, v in env.items()
     ):
         raise LaunchError(f"{ACCOUNTS_KEY}: `env` of {name} is no object of strings", 2)
+    reserved = sorted(k for k in env if _reserved_env(k))
+    if reserved:
+        raise LaunchError(
+            f"{ACCOUNTS_KEY}: `env` of {name} sets {', '.join(reserved)}; the worker's own "
+            "launch owns CLAUDE* and WE_* variables",
+            2,
+        )
     secret = sorted(k for k in env if SECRET_NAME_RE.search(k))
     if secret:
         raise LaunchError(
@@ -1014,7 +1039,7 @@ def _checked_account(chosen: object, account: str, need: str) -> dict:
         raise LaunchError(
             f"{ACCOUNTS_KEY} chose {name} (kind {kind}) for a critical worker; a critical "
             f"worker runs only on a {CLAUDE_KIND} account (mark the brief `Account: uncritical` "
-            "or name a claude account)",
+            "in its first ten lines, or name a claude account)",
             2,
         )
     doc = {"name": name, "kind": kind, "env": dict(env), "need": need}
@@ -1023,6 +1048,15 @@ def _checked_account(chosen: object, account: str, need: str) -> dict:
     if "quota" in chosen:
         doc["quota"] = chosen["quota"]
     return doc
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Write `text` readable by the owner only: a settings or account file names the
+    account's environment."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(text)
 
 
 def apply_account(doc: dict, chosen: dict) -> dict:
@@ -1065,7 +1099,7 @@ def write_settings(
             "SessionStart": [{"hooks": [{"type": "command", "command": session_start}]}]
         }
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(doc, indent=2) + "\n")
+    _write_private(out, json.dumps(doc, indent=2) + "\n")
     return doc
 
 
@@ -1396,7 +1430,7 @@ def _settings_verbs(args: argparse.Namespace) -> None:
     elif args.cmd == "account":
         chosen = choose_account(args.repo.resolve(), args.account, args.need)
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(json.dumps(chosen, indent=2) + "\n")
+        _write_private(args.out, json.dumps(chosen, indent=2) + "\n")
         print(account_line(chosen))
     else:
         chosen = None
