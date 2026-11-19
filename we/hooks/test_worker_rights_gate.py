@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -782,6 +783,36 @@ def test_under_worker_the_merge_line_is_denied_when_the_pr_number_is_unreadable(
     (world["tmp"] / "prs.json").write_text(json.dumps(prs))
     decision, reason = _merge_line(world, {"checks": GREEN})
     assert decision == "deny" and "the PR number could not be read" in reason, reason
+
+
+def test_the_merge_line_check_refuses_at_its_deadline_and_kills_the_check_group(
+    world, tmp_path, monkeypatch
+):
+    """Red arm: an `arm_pr.sh --check` that hangs (here with a child of its own) is cut at the
+    merge line's one deadline, refused with that reason, and leaves no process behind."""
+    pid_file = tmp_path / "child.pid"
+    fake = tmp_path / "arm_pr.sh"
+    fake.write_text(f"sleep 60 &\necho $! > {pid_file}\nsleep 60\necho 'ready: never'\n")
+    monkeypatch.setattr(wr, "ARM_PR", fake)
+    started = time.monotonic()
+    reason = wr._merge_facts_refusal(7, "acme/app", str(world["repo"]), started + 1.0)
+    assert time.monotonic() - started < 5, "the check ran past its deadline"
+    assert "arm_pr.sh --check ran past the merge-line check's" in reason, reason
+    child = int(pid_file.read_text())
+    for _ in range(50):  # the killed child is reaped by init; give it a moment
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail(f"orphan {child} of arm_pr.sh --check survived the timeout")
+
+
+def test_the_merge_line_check_refuses_once_the_deadline_is_spent(world):
+    reason = wr._merge_facts_refusal(7, "acme/app", str(world["repo"]), time.monotonic() - 1)
+    assert "ran past the merge-line check's" in reason, reason
+    assert wr._own_pr("7", "acme/app", BRANCH, str(world["repo"]), time.monotonic() - 1)[0]
 
 
 @needs_jq

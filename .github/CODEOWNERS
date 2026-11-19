@@ -9,3 +9,5 @@
 /we/scripts/lens_verdict.py        @fbiebl
 /we/scripts/risk_paths.py          @fbiebl
 /we/scripts/worker_launch.py       @fbiebl
+/we/scripts/arm_pr.sh              @fbiebl
+/we/scripts/required_checks.sh     @fbiebl

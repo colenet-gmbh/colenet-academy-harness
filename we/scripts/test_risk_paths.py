@@ -28,6 +28,8 @@ BRAKE = [
     "we/scripts/lens_verdict.py",
     "we/scripts/risk_paths.py",
     "we/scripts/worker_launch.py",
+    "we/scripts/arm_pr.sh",  # the worker merge gate trusts its --check
+    "we/scripts/required_checks.sh",
 ]
 
 
