@@ -160,7 +160,7 @@ def test_fill_is_a_claim_with_no_receipt(armed: Path) -> None:
     reason = refuse("gh pr create --fill", armed)
     assert reason is not None
     assert "no body at all" in reason
-    assert reason.startswith("Blocked before anything ran: no part of this Bash command executed")
+    assert reason.startswith("Verification receipt missing: the command ran")
 
 
 def test_the_unfilled_template_does_not_pass(armed: Path) -> None:
@@ -240,10 +240,12 @@ def test_pr_edit_with_a_bodyless_body_is_denied(armed: Path) -> None:
 # --- the process contract -------------------------------------------------------
 
 
-def test_denial_is_emitted_as_a_permission_decision(armed: Path) -> None:
+def test_a_missing_receipt_is_a_hint_not_a_denial(armed: Path) -> None:
+    """A PR body is edited in one call: the hook adds context and never decides the call."""
     decision = json.loads(run_hook(hook_payload(armed, NO_RECEIPT)))["hookSpecificOutput"]
     assert decision["hookEventName"] == "PreToolUse"
-    assert decision["permissionDecision"] == "deny"
+    assert "permissionDecision" not in decision
+    assert decision["additionalContext"].startswith("Verification receipt missing")
 
 
 def test_a_pass_prints_nothing(armed: Path) -> None:
