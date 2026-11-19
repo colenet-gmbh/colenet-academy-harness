@@ -262,3 +262,17 @@ def test_handover_runs_the_installed_role_hook_once_and_never_hands_on(tmp_path)
         )
         is None
     )
+
+
+def test_a_background_crew_member_is_no_worker_and_can_be_due(tmp_path, monkeypatch):
+    env, cache = config(tmp_path)
+    version_dir(cache, "8.48.0", "L0 old")
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "Ada.settings.json").write_text(
+        json.dumps({"env": {"WE_ROLE": "master", "WE_ROLE_ID": "product"}})
+    )
+    rows = [row("Ada", 11, kind="background"), row("KEY-3-a", 12, kind="background")]
+    out = roll(tmp_path, rows, {11: ["8.48.0"], 12: ["8.48.0"]}, None, None, monkeypatch, env)
+    assert (out["Ada"]["role"], out["Ada"]["due"]) == ("product", "changed process")
+    assert (out["KEY-3-a"]["role"], out["KEY-3-a"]["due"]) == ("worker", "")

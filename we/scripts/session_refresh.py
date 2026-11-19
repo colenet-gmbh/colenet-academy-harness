@@ -18,7 +18,8 @@ Usage:
 
 Fields:
 - ``role``: a background session or one whose worktree's launcher marker names it is ``worker``
-  (the rule of ``we-worker is-worker``); else ``WE_ROLE_ID`` (the crew role key) or ``WE_ROLE``
+  (the rule of ``we-worker is-worker``), but for a background crew member ``start.py launch``
+  started (its settings file sets ``WE_ROLE=master``; role key from that file); else ``WE_ROLE_ID`` (the crew role key) or ``WE_ROLE``
   from the process environment (``start.env_values``, three keys, nothing else read); else ``?``.
 - ``loaded``: the newest version the process holds (``plugin_install.loaded_versions``),
   ``?`` when unreadable. ``installed``: what a fresh start in the session's cwd loads
@@ -65,9 +66,33 @@ def _env() -> dict:
     return worker_launch.claude_env()
 
 
-def role_of(row: dict, marker: dict | None, environ: dict[str, str] | None) -> str:
-    if row.get("kind") == "background" or (marker and marker.get("name") == row.get("name")):
+def launched_env(state: Path, name: str) -> dict[str, str]:
+    """The ``env`` of the settings file a ``--bg`` start wrote for ``name`` (``we-worker`` or
+    ``start.py launch``); {} when there is none."""
+    try:
+        doc = json.loads(
+            (state / f"{worker_supervisor.safe_name(name)}.settings.json").read_text()
+        )
+    except (OSError, ValueError, worker_launch.LaunchError):
+        return {}
+    env = doc.get("env") if isinstance(doc, dict) else None
+    return env if isinstance(env, dict) else {}
+
+
+def role_of(
+    row: dict, marker: dict | None, environ: dict[str, str] | None, launched: dict | None = None
+) -> str:
+    """The rule of ``we-worker is-worker``: a background session is a worker unless its settings
+    file sets ``WE_ROLE=master`` (a crew member ``start.py launch`` started; its role key then
+    comes from that file, the daemon's environment says nothing about it)."""
+    launched = launched or {}
+    member = row.get("kind") == "background" and launched.get("WE_ROLE") == "master"
+    if (row.get("kind") == "background" and not member) or (
+        marker and marker.get("name") == row.get("name")
+    ):
         return "worker"
+    if member:
+        return launched.get("WE_ROLE_ID") or "master"
     environ = environ or {}
     return environ.get("WE_ROLE_ID") or environ.get("WE_ROLE") or "?"
 
@@ -171,7 +196,7 @@ def roll_call(
             continue
         name = str(row.get("name") or row.get("sessionId") or pid)
         cwd = row.get("cwd")
-        role = role_of(row, read_marker(cwd), read_env(pid))
+        role = role_of(row, read_marker(cwd), read_env(pid), launched_env(state, name))
         loaded = plugin_install.loaded_versions(pid, roots)
         old = loaded[-1] if loaded else None
         entry = plugin_install.install_for(cwd or "/", env, entries) if cwd else None
