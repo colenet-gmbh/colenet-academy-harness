@@ -697,3 +697,56 @@ def test_page_self_contained_and_escaped(tmp_path, monkeypatch):
 def test_moved_helpers_have_one_home():
     for name in ("locate_board", "parse_ts", "parse_since", "read_jsonl", "question_waits"):
         assert getattr(fr, name) is getattr(fi, name), name
+
+
+def test_ended_worker_without_marker_and_span_in_the_window(tmp_path, monkeypatch):
+    """A marker goes when its worker ends: the probe's role and a `blocked` event keep the worker
+    and its starter. A span that started before the window is clipped to it."""
+
+    def sessions(t):
+        out = [s("m-1", "idle", role="master")]
+        if t <= at(1, 3, 0, 4):
+            out.append(s("gone-1", "busy" if t <= at(1, 1, 0, 4) else "idle", role="worker"))
+        if t <= at(1, 4, 0, 4):
+            out.append(s("w-old", "busy" if t <= at(1, 2, 0, 4) else "idle"))
+        return out
+
+    root, board, log_dir, mdir = make_state(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        first=at(1, 0, 0, 4),
+        last=at(1, 23, 55, 4),
+        sessions_at=sessions,
+        events=[
+            {
+                "type": "blocked",
+                "ts": zt(at(1, 0, 30, 4)),
+                "name": "gone-1",
+                "kind": "chat",
+                "starter": "m-1",
+                "waiting_on": "human",
+                "since": zt(at(1, 0, 30, 4)),
+            },
+            {
+                "type": "unblocked",
+                "ts": zt(at(1, 0, 40, 4)),
+                "name": "gone-1",
+                "kind": "chat",
+                "starter": "m-1",
+                "waiting_on": "human",
+                "since": zt(at(1, 0, 30, 4)),
+            },
+        ],
+        markers={"w-old": {"starter": "m-1", "started_at": zt(at(30, 0, 0, 3))}},
+    )
+    crew = json.loads((root / ".weside" / "crew.json").read_text())
+    built = fi.build(board, mdir, log_dir, "UTC", crew, H_SINCE, H_UNTIL)
+    assert built["lanes"]["gone-1"]["role"] == "worker"
+    assert built["lanes"]["gone-1"]["starter"] == "m-1"
+    tail = of(built["intervals"], "gone-1", "idle-after-end")
+    assert [(r["start"], r["end"], r["waiting_on"]) for r in tail] == [
+        (zt(at(1, 1, 0, 4)), zt(at(1, 3, 0, 4)), "m-1")
+    ]
+    workers = {w["who"]: w for w in fi.format_summary(fi.summary(built))["workers"]["rows"]}
+    # started two days before the window: the span runs from the window's start to the last probe
+    assert (workers["w-old"]["span_h"], workers["w-old"]["ratio"]) == ("4.0", "0.50")

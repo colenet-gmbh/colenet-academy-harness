@@ -41,13 +41,15 @@ Sources, per session lane (``who`` = the sampler's ``name``):
   ``read``; without one, to the question's first closing line (``CLOSING``), else the window end.
 - worker markers ``<name>.json``: the lane is a worker, its ``starter`` and ``started_at``
   (optional: without it the worker starts at its first probe); a lane without a sampled role that
-  starts workers is a master.
+  starts workers is a master. A marker goes when its worker ends, so an ended worker is known by
+  its probes' ``role: worker`` and its starter by its ``blocked`` events; an ended worker with
+  neither has no starter (the page lists it without a master; stderr counts it).
 
 Precedence inside a candidate idle stretch, top wins: an explicit wait (waits row, ``blocked`` event
 with ``waiting_on``, open question) → ``waiting:<role key or human>``; a ``blocked`` event without
 ``waiting_on`` → ``blocked``; a worker after the last busy probe of a run that ended before the
 window end → ``idle-after-end`` on its starter; else ``idle``. A busy probe beats every wait. Equal
-neighbours (kind, ``waiting_on``, ``key``) merge. ``waiting_on`` resolves ``human`` to itself, a
+neighbours (kind, ``waiting_on``, ``key``, ``source``) merge. ``waiting_on`` resolves ``human`` to itself, a
 role key through ``crew.roles`` to the lane of that member, a name to the lane of that name; what
 names no lane stays as written (a matrix column without an edge).
 
@@ -58,7 +60,7 @@ gap, so no lane shows data for a day the sampler did not record.
 Efficiency (``summary``): story = Σ ``working`` hours with its key between its first ``selected``
 and the next ``in_review`` ÷ those hours; master = ``working`` ÷ alive hours, beside it the hours
 other sessions' intervals wait on that master; worker = ``working`` ÷ (marker ``started_at`` → last
-probe; stop = last probe, ±5 min), ``blocked`` and ``idle-after-end`` hours in columns of their
+probe, clipped to the window, sampler gaps left out; stop = last probe, ±5 min), ``blocked`` and ``idle-after-end`` hours in columns of their
 own. ``holding:<lock>`` counts in no ratio. ``format_summary`` is the one formatter both readers
 print (hours one decimal, ratios two).
 """
@@ -551,10 +553,11 @@ def _lane(name: str, plist: list, ctx: dict) -> tuple:
     """`(rows, lane)` of one sampled session (module docstring § Sources, § Precedence)."""
     marker = ctx["markers"].get(name)
     roles = Counter(p.get("role") for p in plist if p.get("role"))
-    role = "worker" if marker is not None else (roles.most_common(1)[0][0] if roles else None)
+    worker = marker is not None or "worker" in roles
+    role = "worker" if worker else (roles.most_common(1)[0][0] if roles else None)
     if role is None and name.casefold() in ctx["starters"]:
         role = "master"  # it starts workers
-    starter = (marker or {}).get("starter")
+    starter = (marker or {}).get("starter") or ctx["event_starters"].get(name)
     runs = _runs(plist, ctx["gapmax"])
     rows: list = []
     for i, run in enumerate(runs):
@@ -621,6 +624,12 @@ def build(board, state_dir, log_dir, tz, crew, since, until, foreign=()) -> dict
     src = Sources(since, until)
     src.missing_started = 0
     samples, events = read_sampler(src, log_dir, tz)
+    # a marker goes when its worker ends; the flow log's `blocked` events keep the starter
+    event_starters = {
+        e["name"]: e["starter"]
+        for e in sorted(events, key=lambda e: str(e.get("ts")))
+        if isinstance(e.get("name"), str) and isinstance(e.get("starter"), str) and e["starter"]
+    }
 
     def beside(suffix):
         return board.with_name(f"{board.stem}-{suffix}.jsonl") if board is not None else None
@@ -651,7 +660,12 @@ def build(board, state_dir, log_dir, tz, crew, since, until, foreign=()) -> dict
     ctx = {
         "crew": crew,
         "markers": markers,
-        "starters": {str(m["starter"]).casefold() for m in markers.values() if m.get("starter")},
+        "event_starters": event_starters,
+        "starters": {
+            str(x).casefold()
+            for x in [m.get("starter") for m in markers.values()] + list(event_starters.values())
+            if x
+        },
         "member_cf": member_cf,
         "lanes_cf": lanes_cf,
         "explicit": _explicit_waits(src, waits, events, questions, answers),
@@ -689,6 +703,7 @@ def build(board, state_dir, log_dir, tz, crew, since, until, foreign=()) -> dict
         "markers": markers,
         "interval_s": interval_s,
         "missing_started": src.missing_started,
+        "cuts": src.cuts,
         "since": since,
         "until": until,
     }
@@ -845,9 +860,11 @@ def summary(built: dict) -> dict:
                 }
             )
         elif lane["group"] == "workers" and lane.get("first"):
-            start = parse_ts(lane.get("started_at")) or parse_ts(lane["first"])
-            stop = parse_ts(lane["last"])
-            span = hours(start, stop)
+            start = max(parse_ts(lane.get("started_at")) or parse_ts(lane["first"]), since)
+            stop = min(parse_ts(lane["last"]), until)
+            span = max(0.0, hours(start, stop)) - sum(
+                max(0.0, hours(max(a, start), min(b, stop))) for a, b in built.get("cuts", [])
+            )
             workers.append(
                 {
                     "who": name,
@@ -1231,6 +1248,11 @@ def report_sources(built: dict, out=None) -> None:
         )
     if built["missing_started"]:
         print(f"flow_intervals: markers without started_at: {built['missing_started']}", file=out)
+    orphans = [
+        n for n, lane in built["lanes"].items() if lane["role"] == "worker" and not lane["starter"]
+    ]
+    if orphans:
+        print(f"flow_intervals: workers without a starter: {len(orphans)}", file=out)
     for g in built["gaps"]:
         print(f"flow_intervals: gap: {g['reason']}", file=out)
 
