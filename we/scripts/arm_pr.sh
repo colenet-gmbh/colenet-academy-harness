@@ -39,9 +39,12 @@
 #   no checks on <sha> after <n>s — not armed, run again                         exit 8
 #   not armed on <sha> after <n>s (<mergeStateStatus>, review <decision>) — run again   exit 8
 #
-# The crew's `merge` block (crew.py merge) decides two refusals before any read of the checks:
+# The crew's `merge` block (crew.py merge) decides two refusals right after the first PR read:
 # `merge.armer: workflow` (the repo's own workflow arms every ready PR, so no session arms) and a
-# label of `merge.hold_labels` on the PR (a human merges it).
+# label of `merge.hold_labels` on the PR (a human merges it). The block is read from the PR's base
+# (`crew.py merge --rev origin/<base>`, fetched first), the checkout's only when the base has no crew
+# file or the caller is outside any git repo: the rule that holds a PR must not be editable by that
+# PR, and a PR's own worktree carries its crew file. A base that cannot be read is a `crew:` error.
 #
 # Env: ARM_INTERVAL (seconds between reads, default 10), ARM_REGISTER_TIMEOUT (default 300).
 set -uo pipefail
@@ -69,16 +72,22 @@ if [ -z "$REPO" ]; then
 fi
 OWNER=${REPO%%/*} NAME=${REPO#*/}
 
-crew_merge() {  # the crew's merge.$1 (a warning on stderr passes through); a broken crew: crew.py's reason
+crew_merge() {  # the base's merge.$1 (a warning on stderr passes through); a broken crew: crew.py's reason
   local err rc
-  err=$(mktemp) && python3 "$HERE/crew.py" merge "$1" 2>"$err"
+  err=$(mktemp) && python3 "$HERE/crew.py" merge "$1" --rev "origin/$BASE" 2>"$err"
   rc=$?
   if [ "$rc" -ne 0 ]; then echo "crew: $(tail -n 1 "$err" | sed 's/^crew: //')"; rm -f "$err"; return 2; fi
   cat "$err" >&2; rm -f "$err"
 }
-ARMER=$(crew_merge armer) || { echo "$ARMER"; exit 2; }
-if [ "$ARMER" = workflow ]; then echo "refused: armed by workflow — the step is gh pr ready"; exit 4; fi
-HOLD=$(crew_merge hold_labels) || { echo "$HOLD"; exit 2; }
+HOLD="" MERGE_READ=""
+merge_block() {  # once, after the first read names the base: the armer refusal, then HOLD
+  [ -z "$MERGE_READ" ] || return 0
+  git fetch -q origin "$BASE" 2>/dev/null || true  # a stale or missing base ref reads an old rule
+  ARMER=$(crew_merge armer) || { echo "$ARMER"; exit 2; }
+  if [ "$ARMER" = workflow ]; then echo "refused: armed by workflow — the step is gh pr ready"; exit 4; fi
+  HOLD=$(crew_merge hold_labels) || { echo "$HOLD"; exit 2; }
+  MERGE_READ=1
+}
 
 # Line 1: id, state, isDraft, head, base, mergeStateStatus, reviewDecision (NONE when the repo
 # requires no review), the PR's labels joined by a comma. Then one line per check on the head:
@@ -113,6 +122,7 @@ read_pr() {  # sets ID STATE DRAFT HEAD BASE MSTATE REVIEW LABELS CHECKS; exits 
   IFS=$'\t' read -r ID STATE DRAFT HEAD BASE MSTATE REVIEW LABELS <<<"$(head -n 1 <<<"$out")"
   CHECKS=$(tail -n +2 <<<"$out")
   [ -n "${HEAD:-}" ] || { echo "gh failed: no PR $PR in $REPO"; exit 2; }
+  merge_block
   [ "$STATE" = OPEN ] || { echo "refused: $(tr "[:upper:]" "[:lower:]" <<<"$STATE")"; exit 4; }
   [ "$DRAFT" = false ] || { echo "refused: draft"; exit 4; }
   local label

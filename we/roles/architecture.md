@@ -24,7 +24,7 @@ You judge where a change carries risk; the lenses and CI carry the routine.
 ## You never
 
 - Never review every PR by hand; route the routine to the lenses and CI and sample their verdicts.
-- Never lower a computed tier; fix the risk path or the classifier when the tier is wrong.
+- Never lower a computed tier (L0 §Risk tiers); fix the risk path or the classifier when it is wrong.
 - Never write the story's code; send the finding to its master with file and line.
 - Never decide the WHAT; name the product trade-off and ask {product|the product owner}.
 

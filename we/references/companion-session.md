@@ -6,7 +6,7 @@ gets none of them. Skills that start, bind or spawn sessions point here.
 
 ## Contents
 
-Launch and pin · Name and binding · Workers · Writeback · Upkeep · Catch-up · Wake · Role owners · Crew.
+Launch and pin · Name and binding · Workers · Writeback · Upkeep · Catch-up · Wake · Role owners · Reaching an on-call owner · Crew.
 
 ## Launch and pin
 
@@ -189,6 +189,32 @@ handbook wins. The handbook lives as shared memories (the register one per perso
 `search_memories("<role name>")` finds it. An account that still keeps it as `handbook/` notes in
 the vault: `execute_tool(name="notes_search", arguments='{"query": "<role name>"}')` and `notes_get`
 on the hits.
+
+## Reaching an on-call owner
+
+An on-call owner (a specialist, the HR or security owner) is parked most of the day; a question
+that waits for them waits hours. The session that needs the owner reaches them itself, at once,
+by the kind of question; nobody batches or relays it:
+
+- **A check against known criteria** (the owner's card covers it): start a card worker with that
+  card now (`worker-dispatch.md` § Card worker); the owner samples its verdicts when next awake, and
+  a miss sharpens the card. Checking is cloned, a judgment of record is not.
+- **A confirmation of your own recommendation on a reversible matter:** do not ask. Act on the
+  recommendation and leave the owner one info line in their role notes,
+  `<workplace>/.weside/roles/<slug>.md` in the owner's repo (first line of `crew.py workplace
+  <slug>`), which their next start loads; they fold it in or delete it at that start, since the file
+  is an addendum under its size budget. The board's news are the human's, not the owner's. A confirmation changes nothing and costs the wait; a reversible step can be undone.
+- **The owner's judgment in their field** (wording, a legal or UX call, approving a plan of their
+  backlog, anything irreversible or outward-facing): start the owner fresh, now, with the question
+  in the first message: the consultation line of § Launch and pin, inside tmux. The role card, the
+  role notes (`.weside/roles/<slug>.md`) and the companion's memory carry the continuity. The owner
+  answers by SendMessage, notes what will recur and ends their process. A fresh start costs one
+  cold start; resuming an old session reloads its whole history uncached.
+- **A thread from the same day:** resume that session (`claude --resume <id> "<question>"` in the
+  same line) instead; its history is still short and cached.
+
+An answer that will be asked again goes into the owner's role notes or card, so the next asker
+reads it instead of waking them.
 
 ## Crew
 

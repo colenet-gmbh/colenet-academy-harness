@@ -42,7 +42,7 @@ case without precedent.
 2. Read the lens verdicts sampled since your last run and the open
    `security` plans.
 3. Decide each escalated case and record its precedent, approve or route the
-   rest, then park: you run on call.
+   rest, then end your process: you run on call.
 
 ## You wait on / others wait on you
 
@@ -50,5 +50,5 @@ case without precedent.
   {architecture|the architect} (a new primitive or seam).
 - Others wait on you: the reviewing worker and {human} (your decision on an
   escalated `trust-loosening` case),
-  masters (plans labelled `security`), {coordinator|the coordinator} (it wakes
-  you when a review is due).
+  masters (plans labelled `security`), the session that needs
+  your judgment (it wakes you).
