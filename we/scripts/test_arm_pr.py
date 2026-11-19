@@ -479,3 +479,33 @@ def test_the_merge_tools_load_a_real_crew_file_at_a_revision(tmp_path, labels, c
     got, out, calls = run(tmp_path, reads, ["ok"], extra=("--check", "--sha", sha))
     assert (got, out) == (code, [line.replace("{sha}", sha)])
     assert arm_calls(calls) == []
+
+
+RISK_RULES = HERE.parents[1] / ".weside" / "risk-paths"
+
+
+def risk_checkout(tmp_path):
+    """A checkout whose origin/main carries the plugin's own risk rules; HEAD is origin/main."""
+    (tmp_path / ".weside").mkdir()
+    shutil.copy(RISK_RULES, tmp_path / ".weside" / "risk-paths")
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "add", ".weside/risk-paths")
+    _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "rules")
+    _git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+@pytest.mark.parametrize("extra", [(), ("--check",)], ids=["arm", "check"])
+def test_an_uncommitted_risk_path_is_refused_not_armed(tmp_path, extra):
+    sha = risk_checkout(tmp_path)
+    stray = tmp_path / "we" / "process" / "zz-untracked.md"  # a brake path, untracked
+    stray.parent.mkdir(parents=True)
+    stray.write_text("x\n")
+    got, out, calls = run(tmp_path, [{"head": sha, "checks": GREEN}], ["ok"], extra=extra)
+    assert got == 6
+    assert out == [
+        "refused: one-way not classified (risk_paths.py exit 3: T? uncommitted changes under we/process/zz-untracked.md: commit first)"
+    ]
+    assert arm_calls(calls) == []

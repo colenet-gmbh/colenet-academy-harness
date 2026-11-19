@@ -47,6 +47,8 @@ Every verb that commits a planning document follows this section: `/we:epic`, `/
      onto `origin/<default>`, refuses paths outside `plans.push_paths` (default `docs/plans/**`, plus
      a staging-check file still in its planned state travelling with its plan), runs the secret scan
      (`plans.secret_scan`, default gitleaks) and pushes, retrying a lost race up to three times.
+     `plans.push_paths` may take dated records (ADRs, logbooks, handoffs, incidents, a date in the name;
+     the human's decision); living docs take the PR way, which the drift check reads, and so does a mixed batch, unsplit.
      - Exit 0: the document is on the default branch. A step that needs it there (Ready gate,
        `board.py select`, a dispatch reading the plan) runs at once, after `git fetch origin`, on
        `origin/<default>`; no PR, no wait.

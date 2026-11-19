@@ -264,9 +264,9 @@ gate reads, check 9).
 `ready_gate.py story <plan>` prints one line per failure, `<plan>:<line>: <place>: <what is
 missing>` (the line to fix; without `:<line>` where nothing in the plan marks the place, such as
 a missing section), and exits 1; exit 0 is ready, 2 a usage error. It reads the plan file it is
-given, the epic plan beside it and the crew of its checkout, not the plan from `origin/main`: the refiner runs
-it on its branch before the plan lands; only the tier waits for main (one warning), and the short
-form's two limits are read there. Warnings go to stderr, prefixed `warning:`, and never
+given and the crew of its checkout, not the plan from `origin/main`: the refiner runs it on its
+branch before the plan lands; only the tier waits for main (one warning), and the short form's two
+limits and the epic plan (when it is there; else the one beside the plan) are read there. Warnings go to stderr, prefixed `warning:`, and never
 change the exit. The gate takes the mode and the plan, nothing else: no option turns a check off.
 Every repo value comes from the crew (`scripts/crew.py`).
 
@@ -305,7 +305,9 @@ frontmatter fields the gate reads:
   plan's repo, `<repo>:` another repo by its `**Repo:**` name. `**` matches any depth, `*` within
   one segment, `?` one character (the same matcher serves `walk_paths`). A path outside it is a
   `scope change` line naming the approver (`roles.product`, and `human.name` if it changes the
-  outcome); approval is widening `fence:` on the default branch, the epic file is the record.
+  outcome); approval is widening `fence:` on the default branch, the epic file is the record. The gate reads the
+  epic from `risk.rules_from` (the tree's copy only when the ref has none), so a fence widened on a
+  branch counts once it landed (`plan_push.py`): a session cannot approve its own scope change.
 - `serves: <metric part>; <metric part>` — each part starts (casefolded, whitespace collapsed)
   with a metric name of the goal file, followed by the end, a space or `(`.
 

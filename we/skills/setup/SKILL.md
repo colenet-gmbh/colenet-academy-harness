@@ -126,6 +126,7 @@ one-way check before a worker's merge has no rules.
 
 `plans.secret_scan` stays `null` (gitleaks) unless the user names a scanner: a command with `{range}`
 and an optional `{report}`, or `"none"` (`${CLAUDE_PLUGIN_ROOT}/scripts/plan_push.py`).
+`plans.push_paths` takes the repo's dated records only when the user names them (`${CLAUDE_PLUGIN_ROOT}/references/plan-commit.md` step 5).
 `plans.short_max_files` (default 3) caps the files of a short-form plan (`${CLAUDE_PLUGIN_ROOT}/references/story-plan.md`
 § Short form); write it only when the user names another limit.
 

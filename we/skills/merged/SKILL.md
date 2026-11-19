@@ -106,8 +106,7 @@ silently. If the workflow rejects the move, report it and continue.
 
 ## 6 · Refresh the record
 
-- **Plan:** if `docs/plans/{KEY}-story.md` still describes an intention rather than what was built, correct it.
-  The next agent reads the plan, not the diff.
+- **Plan:** a `docs/plans/{KEY}-story.md` that still describes an intention is corrected to what was built (`story-plan.md` § Lifecycle).
 - **Epic upkeep:** `we-worker close` writes the one `## Updates Log` line (§ 4); a learning the
   next plan needs goes in through its `--learning`, never as a second line.
 - **Finish line:** the line's trigger fires where Done is set (`/we:accept` § 4, the coordinator's

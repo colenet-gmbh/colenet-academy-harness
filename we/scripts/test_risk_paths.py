@@ -113,6 +113,35 @@ def test_emptied_rules_and_a_hook_change_still_classify_by_mains_rules(repo: Pat
     )
 
 
+@pytest.mark.parametrize("staged", [False, True])
+def test_an_uncommitted_change_under_a_risk_path_refuses(repo: Path, staged: bool) -> None:
+    """Before the commit the classifier printed `T0` for a diff that was one-way once committed:
+    it reads committed history only, so a dirty risk path refuses instead of answering."""
+    rel = BRAKE[1]
+    write(repo, rel, "# changed, not committed\n")
+    if staged:
+        git(repo, "add", rel)
+    out = classify(repo)
+    assert out.returncode == 3, out.stdout
+    assert out.stdout.splitlines()[0] == f"T? uncommitted changes under {rel}: commit first"
+
+
+def test_an_untracked_file_under_a_risk_path_refuses(repo: Path) -> None:
+    write(repo, "we/process/new.md", "# new\n")
+    out = classify(repo)
+    assert out.returncode == 3, out.stdout
+    assert out.stdout.splitlines()[0] == (
+        "T? uncommitted changes under we/process/new.md: commit first"
+    )
+
+
+def test_an_uncommitted_change_off_the_risk_paths_still_classifies(repo: Path) -> None:
+    write(repo, "README.md", "dirty\n")
+    out = classify(repo)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.splitlines() == ["T0", "review: standard"]
+
+
 def test_a_rename_away_from_a_brake_path_counts(repo: Path) -> None:
     git(repo, "mv", "we/hooks/verification_gate.py", "we/hooks/gate_old.py")
     commit(repo, "rename")
@@ -257,6 +286,23 @@ def test_flipping_build_pr_owner_is_one_way_and_the_rest_of_the_config_is_not(
     lines = out.stdout.splitlines()
     assert lines[0] == "T2 one-way brake-change"
     assert ".weside/config.json\tbrake-change: json .weside/config.json build" in lines
+
+
+@pytest.mark.parametrize("rules", [RULES, TEMPLATE], ids=["plugin", "setup-template"])
+def test_widening_plans_push_paths_is_one_way(repo: Path, rules: Path) -> None:
+    """`plans.push_paths` decides what lands on main by push, past every gate: one-way by value."""
+    write(repo, ".weside/risk-paths", rules.read_text())
+    write(repo, ".weside/config.json", '{"plans": {"push_paths": ["docs/plans/**"]}}\n')
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "base config")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    write(repo, ".weside/config.json", '{"plans": {"push_paths": ["**"]}}\n')
+    commit(repo, "widen")
+    out = classify(repo)
+    assert out.returncode == 0, out.stderr
+    lines = out.stdout.splitlines()
+    assert lines[0] == "T2 one-way brake-change"
+    assert ".weside/config.json\tbrake-change: json .weside/config.json plans" in lines
 
 
 def test_a_json_rule_fails_closed_on_a_file_that_does_not_parse(repo: Path) -> None:

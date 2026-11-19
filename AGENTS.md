@@ -131,6 +131,9 @@ bump stays invisible to users. Workers do not bump: the master sets the version 
 before it arms auto-merge; `scripts/check-version-bump.sh` checks it is above `main`, and with
 `--armed` also against every open PR with auto-merge armed. Patch for fixes and docs, minor for new or changed behaviour, major
 for removed or renamed verbs. After a pushed bump: `claude plugins update we@weside-ai`.
+After a merge, bump the next PR in the merge order above the new `main` (a one-way PR waiting for
+the human included), or the Version Bump Check blocks it; bump the others when their turn comes, so
+`plugin.json` does not conflict across the sibling PRs.
 
 ## Plugin and weside backend
 

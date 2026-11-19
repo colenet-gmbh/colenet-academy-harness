@@ -14,6 +14,8 @@ path .weside/crew.json
 path .weside/risk-paths
 # `build.pr_owner: worker` gives process workers the merge rights: switching it loosens trust.
 json .weside/config.json build
+# `plans` (`land`, `push_paths`, `secret_scan`) decides what lands on main without PR or gates.
+json .weside/config.json plans
 # The review workflows (`claude-code-review.yml`, `codex-code-review.yml`); helpers such as a skip
 # gate are named per repo.
 path .github/workflows/*-code-review.yml
