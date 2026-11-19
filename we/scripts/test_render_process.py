@@ -66,7 +66,10 @@ def test_every_role_renders_within_the_budget_with_crew_values():
         assert "{" not in text.replace("{name}", ""), role
     full = rp.render_l0(crew)
     assert "Ada: the WHAT" in full and "Otto adds a worker with Bo's card to review" in full
-    assert "Specialists woken on demand: Bo (security), Lex (legal)." in full
+    assert (
+        "Specialists, started at once by whoever needs them (`references/companion-session.md`): Bo (security), Lex (legal)."
+        in full
+    )
     assert "`ASK · <KEY> <title> · <question without context> · Advice: …`" in full
     assert "`done-for-now` before parking" in full
     # a session guessed the ask call from the skill text; the L0 names both board calls
@@ -110,13 +113,15 @@ def test_waits_names_the_human_as_the_only_merger_of_one_way():
 NOTICE_RESERVE = 160
 
 
-def test_owners_decide_cut_and_fence_and_the_manual_rc_line_closes_the_l0():
+def test_owners_decide_cut_and_fence_and_the_release_names_the_manual_rc():
     text = rp.render_l0(generic())
     assert (
         "- An owner decides cut and fence questions of their area unless a new outcome, money, law"
         " or the vision\n  is touched; a board line records it and Hal may overturn it.\n"
     ) in text
-    assert text.rstrip().endswith("Until the RC train job ships, RCs are cut by hand.")
+    release = text.split("## Release", 1)[1].split("\n## ", 1)[0]
+    assert "The RC train is the repo's scheduled job" in release and "else cut by hand." in release
+    assert "Until the RC train job ships" not in text
     assert "today's rules hold" not in text
 
 
@@ -606,7 +611,10 @@ def test_an_unbound_crew_renders_as_the_template_without_the_security_line(kind)
 def test_a_bound_security_owner_gets_its_line_and_leaves_the_specialists():
     full = rp.render_l0(bound())
     assert "\n" + BOUND_SECURITY_LINE + "\n" in full
-    assert "Specialists woken on demand: Lex (legal)." in full
+    assert (
+        "Specialists, started at once by whoever needs them (`references/companion-session.md`): Lex (legal)."
+        in full
+    )
     assert "Bo (security)" not in full
 
 

@@ -3,7 +3,7 @@
 ## Cornerstone
 
 Your field; at start you read the question that woke you and its board item.
-The owner of a question wakes you; you answer it and leave the decision with them.
+The session that needs your field wakes you; you answer it and leave the decision with them.
 
 ## You do
 
@@ -19,7 +19,7 @@ The owner of a question wakes you; you answer it and leave the decision with the
 ## At start
 
 1. Read the question that woke you and its board item.
-2. Answer the asker by SendMessage, then end or park.
+2. Answer the asker by SendMessage, note what will recur, then end your process.
 
 ## You wait on / others wait on you
 
