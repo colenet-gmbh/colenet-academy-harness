@@ -9,7 +9,7 @@ from pathlib import Path
 SCRIPT = Path(__file__).parent / "watch-pr-conflicts.sh"
 
 
-def run(tmp_path, answers, *prs, lifetime="60"):
+def run(tmp_path, answers, *prs, lifetime="60", notice=""):
     """answers: {pr: [ {state, mergeStateStatus, mergeable, baseRefName} …]}, last one repeats."""
     for pr, seq in answers.items():
         q = tmp_path / f"q{pr}"
@@ -20,6 +20,7 @@ def run(tmp_path, answers, *prs, lifetime="60"):
     gh.write_text(
         "#!/usr/bin/env bash\n"
         f'echo "$(pwd) | $1 $2 $3 $4 $5" >> "{tmp_path}/calls.log"\n'
+        '[ -n "$GH_NOTICE" ] && printf "%s\\n" "$GH_NOTICE" >&2\n'
         'if [ "$1 $2" = "repo view" ]; then echo o/r; exit 0; fi\n'
         f'q="{tmp_path}/q$3"; n=$(cat "$q/count" 2>/dev/null || echo 0); echo $((n+1)) > "$q/count"\n'
         'f="$q/$n.json"; [ -f "$f" ] || f=$(ls "$q"/*.json | sort -V | tail -n 1)\n'
@@ -31,6 +32,7 @@ def run(tmp_path, answers, *prs, lifetime="60"):
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "WATCH_INTERVAL": "0",
         "WATCH_MAX_LIFETIME": lifetime,
+        "GH_NOTICE": notice,
     }
     env.pop("WATCH_REPO", None)
     res = subprocess.run(
@@ -78,6 +80,16 @@ def test_from_a_worktree_gh_runs_in_the_main_checkout_with_the_remotes_repo(tmp_
     calls = (tmp_path / "calls.log").read_text().splitlines()
     assert calls[0].startswith(f"{main.resolve()} | repo view"), calls
     assert all(c.startswith(f"{main.resolve()} | pr view 5 -R o/r") for c in calls[1:]), calls
+
+
+def test_notices_on_stderr_never_become_the_state(tmp_path):
+    dirty = {"state": "OPEN", "mergeStateStatus": "DIRTY", "mergeable": "CONFLICTING"}
+    notice = "A new preview command is available: gh event listen\nHide this notice: gh config set notices false"
+    code, out = run(tmp_path, {"5": [OPEN_CLEAN, dirty]}, "5", notice=notice)
+    assert (code, out) == (
+        1,
+        ["5 DIRTY/CONFLICTING — merge origin/main, run the after-merge check, push"],
+    )
 
 
 def test_behind_counts_and_unknown_waits(tmp_path):

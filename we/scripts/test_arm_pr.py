@@ -27,6 +27,8 @@ FAKE = r"""
 import json, os, subprocess, sys
 d = os.environ["FAKE_DIR"]
 args = sys.argv[1:]
+if os.environ.get("GH_NOTICE"):
+    sys.stderr.write(os.environ["GH_NOTICE"] + "\n")
 with open(os.path.join(d, "calls.log"), "a") as f:
     f.write(json.dumps(args) + "\n")
 jq = args[args.index("--jq") + 1] if "--jq" in args else None
@@ -76,7 +78,7 @@ GREEN = [check("lint"), check("Claude Review")]
 PENDING = [check("lint"), check("Claude Review", "IN_PROGRESS", None)]
 
 
-def run(tmp_path, reads, arms, required=REQUIRED, merge=None, extra=()):
+def run(tmp_path, reads, arms, required=REQUIRED, merge=None, extra=(), env_extra=None):
     if merge is not None:  # a crew with a `merge` block; `.git` bounds the crew lookup at tmp_path
         (tmp_path / ".git").mkdir()
         (tmp_path / ".weside").mkdir()
@@ -94,6 +96,7 @@ def run(tmp_path, reads, arms, required=REQUIRED, merge=None, extra=()):
         "FAKE_DIR": str(tmp_path),
         "ARM_INTERVAL": "0",
         "ARM_REGISTER_TIMEOUT": "2",
+        **(env_extra or {}),
     }
     res = subprocess.run(
         ["bash", str(SCRIPT), "7", "--repo", "o/r", *extra],
@@ -364,6 +367,44 @@ def test_check_reads_once_and_never_arms(tmp_path, read, code, line):
     )
     assert (got, out) == (code, [line.replace("{sha}", sha)])
     assert arm_calls(calls) == []
+
+
+NOTICE = "A new preview command is available: gh event listen\nHide this notice: gh config set notices false"
+
+
+def test_notices_on_stderr_never_become_the_answer(tmp_path):
+    sha = checkout(tmp_path)
+    code, out, _ = run(
+        tmp_path,
+        [{"head": sha, "checks": GREEN}],
+        ["ok"],
+        extra=("--check", "--sha", sha),
+        env_extra={"GH_NOTICE": NOTICE},
+    )
+    assert (code, out) == (
+        0,
+        [
+            f"ready: all required checks green on {sha} — merge: gh pr merge 7 --merge --match-head-commit {sha}"
+        ],
+    )
+
+
+def test_notices_on_stderr_still_arm(tmp_path):
+    code, out, _ = run(
+        tmp_path, [{"head": NEW, "checks": PENDING}], ["ok"], env_extra={"GH_NOTICE": NOTICE}
+    )
+    assert (code, out) == (0, [f"armed: auto-merge on {NEW} (merge)", "pending: Claude Review"])
+
+
+def test_a_clean_answer_is_read_from_stderr_beside_a_notice(tmp_path):
+    reads = [{"head": NEW, "checks": GREEN, "merge": "UNSTABLE"}]
+    code, out, _ = run(tmp_path, reads, [CLEAN], env_extra={"GH_NOTICE": NOTICE})
+    assert (code, out) == (
+        3,
+        [
+            f"ready: all required checks green on {NEW} — merge: gh pr merge 7 --merge --match-head-commit {NEW}"
+        ],
+    )
 
 
 def test_check_refuses_another_head(tmp_path):

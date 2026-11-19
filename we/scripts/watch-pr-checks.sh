@@ -170,12 +170,14 @@ RUNS='.[] | "\(.databaseId)\t\(.attempt)\t\(.status)\t\(.conclusion // "")\t\(.w
 CODEX_BODY='[.comments[]? | select(.body | contains("<!-- codex-review -->"))] | last | .body // ""'
 
 ERRORS=0
+GH_ERR=$(mktemp) && trap 'rm -f "$GH_ERR"' EXIT
 gh_try() {  # gh_try <var> <gh args...>: stores stdout in <var>; exits 2 after MAX_ERRORS failures
+  # stdout only: gh prints notices (upgrade, preview commands) on stderr, even on success.
   local var=$1 out; shift
-  if out=$(gh "$@" 2>&1); then ERRORS=0; printf -v "$var" '%s' "$out"; return 0; fi
+  if out=$(gh "$@" 2>"$GH_ERR"); then ERRORS=0; printf -v "$var" '%s' "$out"; return 0; fi
   ERRORS=$((ERRORS + 1))
   if [ "$ERRORS" -ge "$MAX_ERRORS" ]; then
-    echo "gh failed $ERRORS times in a row: $(tail -n 1 <<<"$out")"; exit 2
+    echo "gh failed $ERRORS times in a row: $(sed '/^[[:space:]]*$/d' "$GH_ERR" | tail -n 1)"; exit 2
   fi
   return 1
 }
@@ -293,10 +295,10 @@ merge_stuck() {  # green, but GitHub will not merge it by itself
 disarm() {  # prints the auto-merge note after disarming an armed PR; never exits
   local out
   if [ "$(field 4)" != on ]; then echo "auto-merge off"; return; fi
-  if out=$(gh pr merge "$PR" -R "$REPO" --disable-auto 2>&1); then
+  if out=$(gh pr merge "$PR" -R "$REPO" --disable-auto 2>"$GH_ERR"); then
     echo "auto-merge disarmed"
   else
-    echo "auto-merge on (disarm failed: $(tail -n 1 <<<"$out")) — run \`gh pr merge $PR --disable-auto\`"
+    echo "auto-merge on (disarm failed: $(sed '/^[[:space:]]*$/d' "$GH_ERR" | tail -n 1)) — run \`gh pr merge $PR --disable-auto\`"
   fi
 }
 failed_log() {  # failed_log <run id>: the last lines the failed steps printed, empty on any error
