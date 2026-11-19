@@ -160,7 +160,7 @@ Run Skill("we:develop") for <KEY> [--phases N]. Plan: docs/plans/<KEY>-story.md.
 Branch: <type>/<KEY>-<slug> (-p<N> for a parallel chunk); rename `worktree-…` to it before the first commit.
 [Base: first `git merge <PR branch>` — the chunk builds on it.]
 Finish: [you are the last writer: run the finish sequence | not yours]. Verification: [<journeys> | none].
-[PR owner: worker]   (when `worker_launch.py pr-owner` prints `worker`: the single build worker or the finisher; worker-dispatch.md § PR-carrying worker)
+[PR owner: worker — open the PR with /we:pr]   (naming /we:pr keeps the ticketing tools; when `worker_launch.py pr-owner` prints `worker`: the single build worker or the finisher; worker-dispatch.md § PR-carrying worker)
   (Order verification whenever `.weside/config.json` has `verification.required: true`.)
 Report: worker-dispatch.md § Report, as your final message or to your `Lead:`; a skill's output is never it.
 ## Tools and sources

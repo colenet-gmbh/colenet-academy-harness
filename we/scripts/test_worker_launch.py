@@ -1086,6 +1086,7 @@ INSTALLED = ["atlassian@claude-plugins-official", "sentry@claude-plugins-officia
         ("/we:develop KEY-1\nNeeds: ticketing\n", []),  # the brief asks for it
         ("/we:develop KEY-1\nNeeds: `atlassian@claude-plugins-official`\n", []),
         ("/we:develop then /we:pr\n", []),  # one skill needs it
+        ('Run Skill("we:develop")\nPR owner: worker — open the PR with /we:pr\n', []),
         ('Run Skill("we:plan-story") for KEY-1.\n', []),
         ("Fix the flaky test in board.py.\n", []),  # no skill: every tool stays
         ("", []),
