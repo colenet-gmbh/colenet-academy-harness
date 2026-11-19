@@ -358,7 +358,9 @@ def _keep_reason(top, tree, living, session_pids, procs, base, merged_oids) -> s
     return None
 
 
-def _remove_tree(top: Path, tree: dict, procs: list, living: set, out: list) -> bool:
+def _remove_tree(
+    top: Path, tree: dict, procs: list, living: set, out: list, base: str, merged_oids: set
+) -> bool:
     path, branch, name = Path(tree["path"]), tree["branch"], tree["marker"].get("name")
     ended = []
     for pid, comm in procs:
@@ -374,7 +376,7 @@ def _remove_tree(top: Path, tree: dict, procs: list, living: set, out: list) -> 
     out.append(f"removed {path}" + (f"; ended {', '.join(ended)}" if ended else ""))
     if _git(top, "branch", "-D", branch) is not None:
         out.append(f"deleted branch {branch}")
-    out.append(remote_branch(top, branch))
+    out.append(remote_branch(top, branch, base, merged_oids))
     if name and name not in living:
         gone = ws._remove_files(ws.state_dir(), name)
         if gone:
@@ -409,21 +411,50 @@ def teardown(top: Path, key: str, prs: list, base: str, out: list) -> bool:
         if why:
             out.append(f"keep {tree['path']}: {why}")
             ok = False
-        elif not _remove_tree(top, tree, procs, living, out):
+        elif not _remove_tree(top, tree, procs, living, out, base, merged_oids):
             ok = False
     return ok
 
 
-def remote_branch(top: Path, branch: str) -> str:
+def remote_branch(top: Path, branch: str, base: str, merged_oids: set) -> str:
+    """Delete origin/<branch> when no PR is open on it and its head is in the merged history.
+
+    A commit pushed to the branch after the merge is in no PR: deleting the branch would lose it.
+    The delete carries the head it judged as a lease, so a push between the check and the delete
+    makes the delete fail instead of taking that push along.
+    """
     data, why = _gh(["pr", "list", "--head", branch, "--state", "open", "--json", "url"], top)
     if why or not isinstance(data, list):
         return f"keep origin/{branch}: open PRs unreadable ({why})"
     if data:
         return f"keep origin/{branch}: open PR {data[0].get('url')}"
-    rc, _o, err = _run(["git", "push", "-q", "origin", "--delete", branch], top)
-    if rc == 0 or "remote ref does not exist" in err:
-        return f"deleted origin/{branch}"
-    return f"keep origin/{branch}: push --delete failed: {err.strip()[-200:]}"
+    rc, out, err = _run(["git", "ls-remote", "origin", f"refs/heads/{branch}"], top)
+    if rc != 0:
+        why = (err.strip().splitlines() or [f"exit {rc}"])[-1]
+        return f"keep origin/{branch}: remote head unreadable ({why})"
+    head = out.split()[0] if out.strip() else ""  # empty: the branch is gone already
+    after = _after_merge(top, branch, base, merged_oids, head) if head else None
+    if after:
+        return f"keep origin/{branch}: {after} after the merged head ({head[:7]})"
+    if head:
+        lease = f"--force-with-lease=refs/heads/{branch}:{head}"
+        rc, _o, err = _run(["git", "push", "-q", "origin", "--delete", lease, branch], top)
+        if rc != 0 and "remote ref does not exist" not in err:
+            return f"keep origin/{branch}: push --delete failed: {err.strip()[-200:]}"
+    return f"deleted origin/{branch}"
+
+
+def _after_merge(top: Path, branch: str, base: str, merged_oids: set, head: str) -> str | None:
+    """None when the remote head `head` is merged, else "<n> commit(s)" pushed after the merge."""
+    if head in merged_oids:
+        return None
+    _run(["git", "fetch", "-q", "origin", base, f"refs/heads/{branch}"], top)
+    if _git(top, "merge-base", "--is-ancestor", head, f"origin/{base}") is not None:
+        return None
+    known = [o for o in merged_oids if _git(top, "cat-file", "-e", f"{o}^{{commit}}") is not None]
+    count = _git(top, "rev-list", "--count", head, "--not", f"origin/{base}", *known)
+    n = count.strip() if count and count.strip().isdigit() else "?"
+    return f"{n} commit(s)"
 
 
 def own_slug(top: Path) -> str:

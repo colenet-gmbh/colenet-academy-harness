@@ -338,8 +338,36 @@ class TestRefusals:
 
     def test_a_remote_branch_with_an_open_pr_stays(self, world):
         world.pr(5, "OPEN", "feat/shared")
-        line = worker_close.remote_branch(world.top, "feat/shared")
+        line = worker_close.remote_branch(world.top, "feat/shared", "main", set())
         assert line == "keep origin/feat/shared: open PR https://github.com/acme/app/pull/5"
+
+    def test_the_remote_branch_at_the_merged_head_is_deleted(self, world):
+        world.worker()
+        oids = {world.gh["prs"]["acme/app"][0]["headRefOid"]}
+        line = worker_close.remote_branch(world.top, f"feat/{KEY}-export", "main", oids)
+        assert line == f"deleted origin/feat/{KEY}-export"
+        assert f"feat/{KEY}-export" not in world.remote_branches()
+
+    def test_a_commit_pushed_after_the_merge_keeps_the_remote_branch(self, world, capsys):
+        tree = world.worker()
+        world.write("src/late.py", "y = 2\n", tree)
+        late = world.commit("feat: late", tree)
+        git(tree, "push", "-q", "origin", f"HEAD:refs/heads/feat/{KEY}-export")
+        git(tree, "reset", "-q", "--hard", "HEAD~1")  # pushed from elsewhere: the tree is merged
+        assert close(KEY) == 0
+        out = capsys.readouterr().out
+        branch = f"feat/{KEY}-export"
+        assert f"keep origin/{branch}: 1 commit(s) after the merged head ({late[:7]})" in out
+        assert git(world.origin, "rev-parse", f"refs/heads/{branch}") == late
+
+    def test_an_unreadable_remote_keeps_the_remote_branch(self, world):
+        world.worker()
+        oids = {world.gh["prs"]["acme/app"][0]["headRefOid"]}
+        git(world.top, "remote", "set-url", "origin", str(world.tmp / "gone.git"))
+        line = worker_close.remote_branch(world.top, f"feat/{KEY}-export", "main", oids)
+        assert line.startswith(f"keep origin/feat/{KEY}-export: remote head unreadable (")
+        git(world.top, "remote", "set-url", "origin", str(world.origin))
+        assert f"feat/{KEY}-export" in world.remote_branches()
 
     def test_another_keys_tree_is_not_the_storys(self, world):
         world.worker()

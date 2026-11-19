@@ -7,10 +7,15 @@
 #                     `--sha "$(git rev-parse HEAD)"`; GitHub reports the old head for seconds).
 #   --until-merged    for an auto-merge PR: on green keep watching until MERGED or CLOSED, the
 #                     interval doubling up to WATCH_MAX_INTERVAL while it waits; exit 0 then means
-#                     merged (`final … merged`) or green but not merging (conflict, behind,
-#                     auto-merge off): read the final line, the code alone does not tell them apart. A failed check that is
+#                     merged (`final … merged`) or green but not merging (conflict, behind):
+#                     read the final line, the code alone does not tell them apart. A failed check that is
 #                     no review does not end it while the PR can still merge (armed, mergeStateStatus
 #                     CLEAN, UNSTABLE or HAS_HOOKS: GitHub merges past a red non-required check).
+#                     Green with auto-merge off prints `waiting <sha>: green · merge: <state> · auto-merge
+#                     off — <who arms it> — watching to the merge` once per head and keeps polling (a
+#                     BLOCKED past WATCH_BLOCKED_GRACE still ends it, armed or not), and a
+#                     moved head prints `head moved <old> -> <new> — watching it` and is followed: a
+#                     watcher that ended there left its master sitting next to a PR that merged later.
 #   --human-merge     for a PR only a human merges (one-way, never armed): --until-merged that
 #                     waits past `auto-merge off` and BLOCKED (the approve) until MERGED or CLOSED;
 #                     only a conflict or a stale base (DIRTY, BEHIND) still ends it with exit 0 (as
@@ -21,7 +26,8 @@
 #   final <sha>: red · failed: <names> · merge: <state>     exit 1  (also on the first failure with --fail-fast;
 #       a failed check matching WATCH_REVIEW_RX on an armed PR adds ` · auto-merge disarmed`)
 #   gh failed <n> times in a row: <error>                   exit 2  (wrong PR, not logged in, offline)
-#   head moved <old> -> <new>                               exit 3  (a push landed: watch again, never "green")
+#   head moved <old> -> <new>                               exit 3  (a push landed: watch again, never "green";
+#       --until-merged follows the new head instead)
 #   no checks on <sha> after <n>s                           exit 4
 #   head never reached <expected> (still <sha>) after <n>s  exit 5
 #   final <sha>: codex <WARNING|BLOCKING> · auto-merge <disarmed|off> — then /we:ci-review   exit 6
@@ -77,7 +83,9 @@
 # head); a second on the same PR prints `watcher already running on <repo>#<PR>: <holder> — this one
 # exits` and exits 14. A second started with `--sha` for another head than the holder's waits for the
 # lock instead, up to the holder's longest gap between two reads (WATCH_MAX_INTERVAL doubled plus an
-# hour of quota sleep): the holder ends with exit 3 on its next read. Without `flock` there is no lock.
+# hour of quota sleep): the holder ends with exit 3 on its next read. A holder started with
+# --until-merged follows new heads and never ends there (its line says `follows new heads`), so the
+# second exits 14 at once. Without `flock` there is no lock.
 # Quota: before each read (once per interval) it reads `gh api rate_limit`; when core or graphql
 # has fewer than WATCH_QUOTA_FLOOR calls left it prints `quota: <n> left, sleeping until <reset>`
 # and sleeps until that reset instead of polling. The interval never drops under 60 s.
@@ -115,6 +123,7 @@ done
 MIN_INTERVAL=${WATCH_MIN_INTERVAL:-60}
 INTERVAL=${WATCH_INTERVAL:-60}
 [ "$INTERVAL" -ge "$MIN_INTERVAL" ] 2>/dev/null || INTERVAL=$MIN_INTERVAL
+BASE_INTERVAL=$INTERVAL
 QUOTA_FLOOR=${WATCH_QUOTA_FLOOR:-500}
 QUIET=${WATCH_QUIET:-60}
 REGISTER_TIMEOUT=${WATCH_REGISTER_TIMEOUT:-900}
@@ -218,6 +227,7 @@ take_lock() {  # one watcher per PR; a second exits 14 naming the holder (header
   if ! flock -n 9; then
     holder=$(head -n 1 "$LOCK" 2>/dev/null)
     case "$holder" in
+      *"follows new heads"*) false ;;
       *" head "*) [ -n "$EXPECT" ] && case "${holder##* head }" in "$EXPECT"*) false ;; *) true ;; esac \
         && flock -w $((MAX_INTERVAL > INTERVAL ? MAX_INTERVAL * 2 + 3660 : INTERVAL * 2 + 3660)) 9 ;;
       *) false ;;
@@ -226,7 +236,7 @@ take_lock() {  # one watcher per PR; a second exits 14 naming the holder (header
   echo "pid $$" >"$LOCK"
 }
 lock_head() {  # the holder line names the head it watches
-  [ -n "$LOCK" ] && echo "pid $$ head $1" >"$LOCK"
+  [ -n "$LOCK" ] && echo "pid $$ head $1${UNTIL_MERGED:+ (follows new heads)}" >"$LOCK"
 }
 
 view() {
@@ -406,21 +416,30 @@ if [ -n "$EXPECT" ]; then
     view && SHA=$(head -n 1 <<<"$OUT")
   done
 fi
-lock_head "$SHA"
-START=$(date +%s)
-SEEN=""
-LAST=""
-STABLE_SINCE=$START
-READS=0
-CODEX_SEEN=""
-CODEX_TRIES=0
-RERUN=""
-WAITING=""
+watch_head() {  # (re)start the per-head state: on start and, with --until-merged, on a moved head
+  lock_head "$SHA"
+  START=$(date +%s)
+  SEEN=""
+  LAST=""
+  STABLE_SINCE=$START
+  READS=0
+  CODEX_SEEN=""
+  CODEX_TRIES=0
+  RERUN=""
+  WAITING=""
+  OFF_SAID=""
+}
+watch_head
 while :; do
   if view && gh_try RUNROWS run list -R "$REPO" --commit "$SHA" --limit 100 --json databaseId,attempt,status,conclusion,workflowName,event --jq "$RUNS"; then
     closed_exit "$SHA"
     NOW_SHA=$(head -n 1 <<<"$OUT")
-    if [ "$NOW_SHA" != "$SHA" ]; then echo "head moved $SHA -> $NOW_SHA"; exit 3; fi
+    if [ "$NOW_SHA" != "$SHA" ]; then
+      [ -n "$UNTIL_MERGED" ] || { echo "head moved $SHA -> $NOW_SHA"; exit 3; }
+      # The caller waits for the merge, not for this head: the new head is judged from scratch.
+      echo "head moved $SHA -> $NOW_SHA — watching it"
+      SHA=$NOW_SHA; INTERVAL=$BASE_INTERVAL; watch_head; tick; continue
+    fi
     if [ "$(field 2)" = CONFLICTING ]; then
       echo "final $SHA: conflicts with the base — merge it"; exit 12
     fi
@@ -496,7 +515,16 @@ while :; do
         fi
         red_exit "$FAILED"
       fi
-      if [ -z "$UNTIL_MERGED" ] || merge_stuck; then echo "final $SHA: green · $(merge_note)"; exit 0; fi
+      # Auto-merge off is said once and watched past: the caller arms it (or the human merges) and
+      # still gets the `merged` exit; DIRTY, BEHIND and a long BLOCKED need the session, so they end.
+      if [ -n "$UNTIL_MERGED" ] && [ -z "$HUMAN_MERGE" ] && [ "$(field 4)" = off ] \
+        && [ "$(field 1)" != DIRTY ] && [ "$(field 1)" != BEHIND ] \
+        && ! { [ "$(field 1)" = BLOCKED ] && [ $(($(date +%s) - STABLE_SINCE)) -ge "$BLOCKED_GRACE" ]; }; then
+        [ "$OFF_SAID" = "$SHA" ] || echo "waiting $SHA: green · $(merge_note) — watching to the merge"
+        OFF_SAID=$SHA
+      elif [ -z "$UNTIL_MERGED" ] || merge_stuck; then
+        echo "final $SHA: green · $(merge_note)"; exit 0
+      fi
       backoff
     fi
   fi
