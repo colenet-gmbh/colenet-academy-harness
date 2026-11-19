@@ -370,6 +370,10 @@ NEVER = [
     ("gh pr merge 7 --admin", "merge (gh pr merge --admin)"),
     ("gh pr merge 7 --auto --squash", "merge (gh pr merge --auto)"),
     ("gh pr merge 7 --merge", "merge (a worker merges only under build.pr_owner: worker)"),
+    (
+        "gh pr merge 7 --disable-auto && gh pr merge 7 --squash",
+        "merge (gh pr merge only as a command of its own)",
+    ),
 ]
 
 
@@ -662,6 +666,7 @@ def test_under_worker_the_ready_merge_line_on_the_own_head_is_allowed(world):
         ("gh pr merge 7 --admin --match-head-commit {sha}", "gh pr merge --admin"),
         ("gh pr merge 7 --auto --match-head-commit {sha}", "gh pr merge --auto"),
         ("gh pr merge 7 --disable-auto --merge", "takes no other flag"),
+        ("gh pr merge 7 --disable-auto && gh pr merge 7 --squash", "a command of its own"),
         ("gh pr merge 8 --disable-auto", "not this branch's PR"),
         ("bash arm_pr.sh 8", "not this branch's PR"),
         ("arm_pr.sh --repo other/app 7", "another repo"),

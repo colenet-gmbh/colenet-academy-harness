@@ -19,7 +19,8 @@ a ref pattern, `--all`, `--mirror`, `--branches`, any `git push` from a checkout
 `ALLOW_COMMIT_TO_MAIN`); guard bypass (a `git push` of a tag, `ALLOW_PUSH_WITHOUT_MAIN`,
 `--no-verify`, `git commit -n`, `core.hooksPath`); merge (`gh pr merge --admin` or `--auto`; any
 other `gh pr merge` than `--disable-auto` unless it is the merge line below, typed as a command of
-its own under `build.pr_owner: worker`); the crew's `deny_text` anywhere in the command.
+its own under `build.pr_owner: worker`; any `gh pr merge` in a compound command, `--disable-auto`
+included); the crew's `deny_text` anywhere in the command.
 
 Rights (crew `worker_rights`, read from the default branch of origin, never from the worktree; opt-in
 per repo, all off by default): in a repo whose `origin` is one
@@ -275,12 +276,14 @@ def never(  # noqa: PLR0911
     for entry in rights.get("deny_commands") or []:
         if entry and _word_hit(text, entry):
             return f"secrets (crew deny_commands: {entry})"
-    if re.search(_GH_PR_MERGE, text) and not re.search(r"--disable-auto\b", text):
+    if re.search(_GH_PR_MERGE, text):
+        # judged on the one command, never on the text: a `--disable-auto` beside a second merge
+        # (`… --disable-auto && gh pr merge 7 --squash`) must not open the second one
         argv = simple_argv(command)
-        if owner != "worker":
-            return "merge (a worker merges only under build.pr_owner: worker)"
         if argv is None:
             return "merge (gh pr merge only as a command of its own)"
+        if "--disable-auto" not in argv and owner != "worker":
+            return "merge (a worker merges only under build.pr_owner: worker)"
     return None
 
 
