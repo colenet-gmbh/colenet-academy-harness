@@ -1077,6 +1077,26 @@ def test_merge_rev_reads_the_crew_the_commit_has_through_its_pointer(tmp_path):
     assert out.returncode == 1 and "crew team/gone.json not found" in out.stderr
 
 
+def test_merge_rev_reads_a_crew_with_file_paths_and_the_working_tree_still_checks_them(tmp_path):
+    """A crew read at a revision has no working tree to check `files.*` against; the readers that
+    open those paths load the working-tree crew, and that load still refuses a missing one."""
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t"}
+    env.update(GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+    repo = tmp_path / "repo"
+    (repo / ".weside").mkdir(parents=True)
+    (repo / ".weside" / "dod.md").write_text("done\n")
+    data = {**CREW, "files": {"dod": ".weside/dod.md"}, "merge": {"armer": "workflow"}}
+    (repo / ".weside" / "crew.json").write_text(json.dumps(data))
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "c"], check=True, env=env)
+    out = run(repo, "merge", "armer", "--rev", "HEAD")
+    assert (out.returncode, out.stdout) == (0, "workflow\n"), out.stderr
+    (repo / ".weside" / "dod.md").unlink()
+    with pytest.raises(crew.CrewError, match=r"files\.dod"):
+        crew.load(repo / ".weside" / "crew.json")
+
+
 def test_launch_worker_mode_is_default_or_bypass(tmp_path):
     """The default says what it does: no --permission-mode; `auto` still validates."""
     assert crew.DEFAULTS["launch"]["worker_mode"] == "default"
