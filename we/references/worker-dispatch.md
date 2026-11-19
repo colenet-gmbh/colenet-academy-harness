@@ -303,7 +303,8 @@ hook `worker_report_gate.py` sends a report with any other last line back once.
 
 Rights: under `worker` the rights gate opens, read from the default branch, `git push` of a branch
 carrying the key, `gh pr create`, `gh pr edit` and `gh pr comment` on the own PR, `arm_pr.sh` on it,
-`gh pr merge` only as `--disable-auto` or as the `--match-head-commit <checkout HEAD>` line, and
+`gh pr merge` only as `--disable-auto` or as the `--match-head-commit <checkout HEAD>` line while
+`arm_pr.sh --check` answers `ready` on that HEAD, and
 `gh api graphql` with `resolveReviewThread` alone (`scripts/worker_rights.py`, its docstring); any
 other `gh pr merge` and the whole never-list stay denied.
 

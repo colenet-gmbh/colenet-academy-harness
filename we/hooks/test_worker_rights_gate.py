@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -29,19 +30,46 @@ RIGHTS = {
 CREW = {"version": 2, "roles": {"product": "po"}, "members": {"po": {"name": "Ada"}}}
 
 # `gh pr view <sel> --repo <r> --json …`: the PR table in $FAKE_GH_PRS, exit 1 for an unknown one.
+# `arm_pr.sh --check` reads: the PR (GraphQL, `--jq` through jq) from $FAKE_GH_READ, the head being
+# the checkout's HEAD unless the read names one; the base's required names from $FAKE_GH_REQUIRED.
+# A read of {"fail": "<error>"} exits 1 with that error.
 FAKE_GH = r"""#!/usr/bin/env python3
-import json, os, sys
+import json, os, subprocess, sys
 args = sys.argv[1:]
 with open(os.environ["FAKE_GH_LOG"], "a") as fh:
     fh.write(json.dumps(args) + "\n")
+jq = args[args.index("--jq") + 1] if "--jq" in args else None
+def out(obj):
+    if jq is None:
+        print(json.dumps(obj)); sys.exit(0)
+    sys.exit(subprocess.run(["jq", "-r", jq], input=json.dumps(obj), text=True).returncode)
+def load(var, default):
+    return json.load(open(os.environ[var])) if os.environ.get(var) else default
 if args[:2] == ["pr", "view"]:
     pr = json.load(open(os.environ["FAKE_GH_PRS"])).get(args[2])
     if pr is None:
         print("no pull requests found", file=sys.stderr); sys.exit(1)
     print(json.dumps(pr)); sys.exit(0)
-if args[:2] == ["pr", "checks"]:
-    print(open(os.environ["FAKE_GH_CHECKS"]).read() if os.environ.get("FAKE_GH_CHECKS") else "[]")
-    sys.exit(0)
+if args[:2] == ["api", "graphql"] and not any(a.startswith("query=mutation") for a in args):
+    s = load("FAKE_GH_READ", {})
+    if "fail" in s:
+        print(s["fail"], file=sys.stderr); sys.exit(1)
+    head = s.get("head") or subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    nodes = [{"__typename": "CheckRun", "name": n, "status": st, "conclusion": c, "isRequired": r}
+             for n, st, c, r in s.get("checks", [])]
+    out({"data": {"repository": {"pullRequest": {
+        "id": "PR_7", "state": "OPEN", "isDraft": False, "headRefOid": head,
+        "baseRefName": "main", "mergeStateStatus": s.get("merge", "CLEAN"),
+        "reviewDecision": s.get("review"),
+        "labels": {"nodes": [{"name": n} for n in s.get("labels", [])]},
+        "commits": {"nodes": [{"commit": {"oid": head,
+            "statusCheckRollup": {"contexts": {"nodes": nodes}}}}]}}}}})
+if args[:1] == ["api"] and "/rules/branches/" in args[1]:
+    out([{"type": "required_status_checks", "parameters": {"required_status_checks":
+        [{"context": c} for c in load("FAKE_GH_REQUIRED", [])]}}])
+if args[:1] == ["api"] and "/branches/" in args[1]:
+    out({"name": "main", "protection": {"required_status_checks": {"contexts": []}}})
 sys.exit(0)
 """
 
@@ -97,16 +125,19 @@ def world(tmp_path):
     (bindir / "gh").chmod(0o755)
     prs = {
         "7": {
+            "number": 7,
             "headRefName": BRANCH,
             "headRepository": {"name": "app"},
             "headRepositoryOwner": {"login": "acme"},
         },
         "8": {
+            "number": 8,
             "headRefName": "feat/ABC-99-other",
             "headRepository": {"name": "app"},
             "headRepositoryOwner": {"login": "acme"},
         },
         "10": {
+            "number": 10,
             "headRefName": BRANCH,
             "headRepository": {"name": "app"},
             "headRepositoryOwner": {"login": "fork"},
@@ -121,6 +152,7 @@ def world(tmp_path):
         WE_ROLE="worker",
         WE_STORY_KEY=KEY,
         HOME=str(tmp_path / "home"),
+        GIT_SSH_COMMAND="false",  # arm_pr.sh fetches the base; the fake origin answers nothing
     )
     return {"tmp": tmp_path, "env": env, "repo": make_repo(tmp_path)}
 
@@ -581,10 +613,29 @@ def test_under_worker_the_pr_owner_rights_are_allowed(world, command):
     assert decision == "allow", reason
 
 
+needs_jq = pytest.mark.skipif(not shutil.which("jq"), reason="the fake gh delegates --jq to jq")
+GREEN = [["Tests", "COMPLETED", "SUCCESS", True], ["Claude Review", "COMPLETED", "SUCCESS", True]]
+
+
+def _merge_line(world, read=None, required=("Tests", "Claude Review"), repo=None):
+    """The worker's own merge line on its HEAD, with the PR read and the base's required names
+    `arm_pr.sh --check` sees."""
+    repo = repo or world["repo"]
+    (world["tmp"] / "read.json").write_text(json.dumps(read if read is not None else {}))
+    (world["tmp"] / "required.json").write_text(json.dumps(list(required)))
+    return hook(
+        world,
+        f"gh pr merge 7 --merge --match-head-commit {_head(repo)}",
+        cwd=repo,
+        FAKE_GH_READ=str(world["tmp"] / "read.json"),
+        FAKE_GH_REQUIRED=str(world["tmp"] / "required.json"),
+    )
+
+
+@needs_jq
 def test_under_worker_the_ready_merge_line_on_the_own_head_is_allowed(world):
     _pr_owner(world["repo"], "worker")
-    sha = _head(world["repo"])
-    decision, reason = hook(world, f"gh pr merge 7 --merge --match-head-commit {sha}")
+    decision, reason = _merge_line(world, {"checks": GREEN})  # every required name green
     assert decision == "allow", reason
 
 
@@ -658,30 +709,82 @@ def _hold_crew(repo):
     _publish(repo)
 
 
+@needs_jq
 def test_under_worker_the_merge_line_is_denied_on_a_hold_label(world):
     _hold_crew(world["repo"])
     _pr_owner(world["repo"], "worker")
-    prs = json.loads((world["tmp"] / "prs.json").read_text())
-    prs["7"]["labels"] = [{"name": "hold"}]
-    (world["tmp"] / "prs.json").write_text(json.dumps(prs))
-    decision, reason = hook(
-        world, f"gh pr merge 7 --merge --match-head-commit {_head(world['repo'])}"
-    )
-    assert decision == "deny" and "label hold" in reason
+    decision, reason = _merge_line(world, {"checks": GREEN, "labels": ["hold"]})
+    assert decision == "deny" and "refused: label hold — only the human merges it" in reason
     decision, reason = hook(world, "gh pr edit 7 --remove-label hold")
     assert decision == "deny" and "hold label" in reason
     assert hook(world, "gh pr edit 7 --remove-label other")[0] == "allow"
 
 
-def test_under_worker_the_merge_line_is_denied_on_a_red_required_check(world):
+@needs_jq
+@pytest.mark.parametrize(
+    ("read", "required", "line"),
+    [
+        (
+            {"checks": [GREEN[0], ["Claude Review", "COMPLETED", "FAILURE", True]]},
+            ("Tests", "Claude Review"),
+            "red: Claude Review on {sha} — not ready",
+        ),
+        # A required run not registered yet is absent, and absent is not green.
+        ({"checks": [GREEN[0]]}, ("Tests", "Claude Review"), "pending: Claude Review on {sha}"),
+        # No run of the head registered at all (gh: "no required checks reported").
+        ({"checks": []}, ("Tests",), "no checks on {sha} — not ready"),
+        (
+            {"checks": [GREEN[0], ["Claude Review", "IN_PROGRESS", None, True]]},
+            ("Tests", "Claude Review"),
+            "pending: Claude Review on {sha}",
+        ),
+        (
+            {"checks": GREEN, "merge": "BLOCKED", "review": "REVIEW_REQUIRED"},
+            ("Tests", "Claude Review"),
+            "not ready on {sha} (BLOCKED, review REVIEW_REQUIRED)",
+        ),
+        (
+            {"checks": GREEN, "review": "CHANGES_REQUESTED"},
+            ("Tests", "Claude Review"),
+            "not ready on {sha} (CLEAN, review CHANGES_REQUESTED)",
+        ),
+        ({"fail": "HTTP 502"}, ("Tests",), "gh failed: HTTP 502"),
+        (
+            {"checks": GREEN, "head": "c" * 40},
+            ("Tests",),
+            "refused: head moved {sha} -> " + "c" * 40,
+        ),
+    ],
+    ids=[
+        "red",
+        "required-absent",
+        "no-run-registered",
+        "pending",
+        "review-required",
+        "changes-requested",
+        "gh-failure",
+        "head-moved",
+    ],
+)
+def test_under_worker_the_merge_line_is_denied_unless_arm_pr_says_ready(
+    world, read, required, line
+):
     _pr_owner(world["repo"], "worker")
-    checks = world["tmp"] / "checks.json"
-    checks.write_text(json.dumps([{"name": "Tests", "bucket": "fail"}]))
-    command = f"gh pr merge 7 --merge --match-head-commit {_head(world['repo'])}"
-    decision, reason = hook(world, command, FAKE_GH_CHECKS=str(checks))
-    assert decision == "deny" and "required checks not green (Tests)" in reason
+    decision, reason = _merge_line(world, read, required)
+    assert decision == "deny", reason
+    assert f"arm_pr.sh --check: {line.replace('{sha}', _head(world['repo']))}" in reason, reason
 
 
+def test_under_worker_the_merge_line_is_denied_when_the_pr_number_is_unreadable(world):
+    _pr_owner(world["repo"], "worker")
+    prs = json.loads((world["tmp"] / "prs.json").read_text())
+    del prs["7"]["number"]
+    (world["tmp"] / "prs.json").write_text(json.dumps(prs))
+    decision, reason = _merge_line(world, {"checks": GREEN})
+    assert decision == "deny" and "the PR number could not be read" in reason, reason
+
+
+@needs_jq
 def test_under_worker_the_merge_line_is_denied_on_a_one_way_class(world):
     repo = world["repo"]
     (repo / ".weside" / "risk-paths").write_text("[brake-change]\npath src/brake.py\n")
@@ -692,5 +795,5 @@ def test_under_worker_the_merge_line_is_denied_on_a_one_way_class(world):
     (repo / "src" / "brake.py").write_text("x = 1\n")
     _git(repo, "add", "src/brake.py")
     _commit(repo, "brake")
-    decision, reason = hook(world, f"gh pr merge 7 --merge --match-head-commit {_head(repo)}")
-    assert decision == "deny" and "T2 one-way brake-change" in reason
+    decision, reason = _merge_line(world, {"checks": GREEN})
+    assert decision == "deny" and "refused: one-way brake-change" in reason, reason

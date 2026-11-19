@@ -20,8 +20,9 @@ branch conditions it may also run `git push` (`push`: every destination branch c
 `gh pr create` (`pr_create`: no argument, `--head` only its branch), `gh pr edit` and `gh pr comment`
 (`pr_edit`, `pr_comment`: its own PR), `arm_pr.sh` (`arm`: its own PR), `gh pr merge` (`merge`: its
 own PR, either `--disable-auto` alone or `--match-head-commit <its checkout's HEAD>`, the line
-`arm_pr.sh` prints as `ready`, never `--admin` or `--auto`, and only when the gate reads the same
-facts `ready` stands for: no one-way class, no hold label, every required check green; every other
+`arm_pr.sh` prints as `ready`, never `--admin` or `--auto`, and only when `arm_pr.sh --check` answers
+`ready` on that HEAD, the one owner of those facts (hold labels, one-way class, every required name
+green with absent as pending, merge state, review decision); every other
 `gh pr merge` is denied; `gh pr edit` never removes a hold label) and
 `gh api graphql` with `resolveReviewThread` as its only mutation (`resolve_thread`). The switch is the
 opt-in: `worker_rights.repos` is not needed for these. Under `master` (the default) none of them is
@@ -64,6 +65,7 @@ FLAG_PREFIXES = {"sudo", "env", "timeout", "xargs", "nice", "stdbuf", "time", "c
 MAX_DEPTH = 4
 GIT_TIMEOUT_S = 10
 GH_TIMEOUT_S = 30
+ARM_CHECK_TIMEOUT_S = 50  # under the hook's 60 s: a fetch, three gh reads, the classifier
 MAIN_NAMES = ("main", "master")
 GUARD_WORDS = ("ALLOW_PUSH_WITHOUT_MAIN", "--no-verify", "core.hooksPath")
 WRITE_FIELDS = ("-f", "-F", "--field", "--raw-field", "--input")
@@ -998,47 +1000,42 @@ def _gh_json(cwd: str | None, *args: str) -> tuple[Any, str]:
         return None, out.stderr.strip() or f"gh exited {out.returncode}"
 
 
-def _merge_facts_refusal(selector: str, slug: str | None, cwd: str | None) -> str | None:  # noqa: PLR0911
-    """The `ready` facts `arm_pr.sh` checks before it prints the merge line, checked again here,
-    because a worker can type that line without running the helper: no one-way class
-    (`risk_paths.py` on this checkout, which `_merge_refusal` tied to the PR head), no hold label,
-    every required check green. A fact that cannot be read refuses."""
-    base = default_branch(cwd)
-    if _git(cwd, "cat-file", "-e", f"origin/{base}:.weside/risk-paths") is not None:
-        try:
-            out = subprocess.run(
-                [sys.executable, str(Path(__file__).with_name("risk_paths.py")), f"origin/{base}"],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=GH_TIMEOUT_S,
-                cwd=cwd or None,
-            )
-            line = out.stdout.splitlines()[0] if out.stdout.strip() else ""
-        except (OSError, subprocess.TimeoutExpired, IndexError):
-            line = ""
-        if not line:
-            return (
-                "gh pr merge: the risk class could not be read; only arm_pr.sh's ready line merges"
-            )
-        if line.startswith("T2 one-way"):
-            return f"gh pr merge: {line}: only the human merges it"
-    view, err = _gh_json(cwd, "pr", "view", selector, "--repo", slug or "", "--json", "labels")
-    if not isinstance(view, dict):
-        return f"gh pr merge: the PR's labels could not be read ({err})"
-    names = {str((x or {}).get("name")) for x in view.get("labels") or []}
-    held = sorted(names & _hold_labels(cwd))
-    if held:
-        return f"gh pr merge: label {held[0]}: only the human merges it"
-    checks, err = _gh_json(
-        cwd, "pr", "checks", selector, "--repo", slug or "", "--required", "--json", "name,bucket"
-    )
-    if checks is None and "no required checks" not in err:
-        return f"gh pr merge: the required checks could not be read ({err})"
-    red = [c.get("name") for c in checks or [] if c.get("bucket") not in ("pass", "skipping")]
-    if red:
-        return f"gh pr merge: required checks not green ({', '.join(map(str, red))})"
-    return None
+def _merge_facts_refusal(selector: str, slug: str | None, cwd: str | None) -> str | None:
+    """`arm_pr.sh --check` on this checkout's HEAD, because a worker can type the merge line
+    without running the helper: the gate holds exactly the facts `ready` stands on (crew merge
+    block, hold labels, one-way class, every required name green with absent as pending, the merge
+    state, the review decision), from the one script that owns them. Only `ready` on that HEAD
+    passes; any other line, an unreadable PR or a failed call refuses with that line."""
+    head = _git(cwd, "rev-parse", "HEAD") or ""
+    view, err = _gh_json(cwd, "pr", "view", selector, "--repo", slug or "", "--json", "number")
+    number = view.get("number") if isinstance(view, dict) else None
+    if not head or not isinstance(number, int):
+        return f"gh pr merge: the PR number could not be read ({err or 'no number'})"
+    try:
+        out = subprocess.run(
+            [
+                "bash",
+                str(Path(__file__).with_name("arm_pr.sh")),
+                str(number),
+                "--check",
+                "--sha",
+                head,
+                "--repo",
+                slug or "",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=ARM_CHECK_TIMEOUT_S,
+            cwd=cwd or None,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"gh pr merge: arm_pr.sh --check failed ({exc})"
+    lines = out.stdout.strip().splitlines()
+    line = lines[-1] if lines else f"no verdict (exit {out.returncode})"
+    if out.returncode == 0 and line.startswith(f"ready: all required checks green on {head} "):
+        return None
+    return f"gh pr merge: arm_pr.sh --check: {line}"
 
 
 def _own_pr_refusal(selector: str, slug: str | None, branch: str, cwd: str | None) -> str | None:

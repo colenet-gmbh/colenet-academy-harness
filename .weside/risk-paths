@@ -1,12 +1,14 @@
 # Risk rules of this repo, read by we/scripts/risk_paths.py from origin/main only.
 # A PR touching a [brake-change] path is `T2 one-way brake-change`: the owner merges it
 # by hand (code owner review per .github/CODEOWNERS).
-# Grammar: `[section]` and `path <glob>` lines (risk_paths.py's docstring).
+# Grammar: `[section]`, `path <glob>` and `json <file> <key>` lines (risk_paths.py's docstring).
 
 [brake-change]
 path .github/CODEOWNERS
 path .weside/crew.json
 path .weside/risk-paths
+# `build.pr_owner: worker` gives process workers the merge rights: switching it loosens trust.
+json .weside/config.json build
 path we/hooks/hooks.json
 path we/hooks/verification_gate.py
 path we/scripts/ready_gate.py

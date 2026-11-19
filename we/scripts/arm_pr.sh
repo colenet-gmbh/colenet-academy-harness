@@ -2,7 +2,7 @@
 # shellcheck disable=SC2016  # GraphQL and jq variables stay literal
 # Arm one PR's auto-merge on the head it read. It never merges, in any branch of its code.
 #
-# Usage: arm_pr.sh <PR> [--method merge|squash|rebase] [--repo <owner/repo>]
+# Usage: arm_pr.sh <PR> [--method merge|squash|rebase] [--repo <owner/repo>] [--check [--sha <sha>]]
 #
 # Arms only through the GraphQL mutation `enablePullRequestAutoMerge`, with the head SHA it read as
 # `expectedHeadOid`: GitHub then merges that head once the repo's required checks pass, and a push
@@ -46,16 +46,29 @@
 # file or the caller is outside any git repo: the rule that holds a PR must not be editable by that
 # PR, and a PR's own worktree carries its crew file. A base that cannot be read is a `crew:` error.
 #
+# `--check` reads once and arms nothing: the same facts as above (crew merge block, hold labels,
+# one-way class, required names absent = pending, mergeStateStatus, reviewDecision) give one line
+# and exit 0 only on `ready`. `--sha` binds it to that head (a different head is `refused: head
+# moved`). The one-way check is strict here: a checkout that is not the PR head, or a classifier
+# that prints nothing, refuses. The worker rights gate calls it before a worker's own merge line:
+#   ready: … (as above)                                                         exit 0
+#   pending: <names> on <sha> — not ready                                        exit 8
+#   not ready on <sha> (<mergeStateStatus>, review <decision>)                   exit 8
+#   refused: one-way not classified (<reason>)                                   exit 6
+#   every other line and code as above (gh failed, crew, refused, red: … — not ready)
+#
 # Env: ARM_INTERVAL (seconds between reads, default 10), ARM_REGISTER_TIMEOUT (default 300).
 set -uo pipefail
 
-usage() { echo "gh failed: usage: arm_pr.sh <PR> [--method merge|squash|rebase] [--repo <owner/repo>]"; exit 2; }
+usage() { echo "gh failed: usage: arm_pr.sh <PR> [--method merge|squash|rebase] [--repo <owner/repo>] [--check [--sha <sha>]]"; exit 2; }
 
-PR="" METHOD=merge REPO=""
+PR="" METHOD=merge REPO="" CHECK="" SHA=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --method) METHOD=${2:-}; shift 2 || usage ;;
     --repo|-R) REPO=${2:-}; shift 2 || usage ;;
+    --check) CHECK=1; shift ;;
+    --sha) SHA=${2:-}; shift 2 || usage ;;
     -h|--help) sed -n '3,/^set -uo/p' "$0" | sed '$d'; exit 0 ;;
     -*) usage ;;
     *) [ -z "$PR" ] || usage; PR=$1; shift ;;
@@ -63,6 +76,7 @@ while [ $# -gt 0 ]; do
 done
 [[ "$PR" =~ ^[0-9]+$ ]] || usage
 case "$METHOD" in merge|squash|rebase) ;; *) usage ;; esac
+[ -z "$SHA" ] || { [ -n "$CHECK" ] && [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; } || usage
 INTERVAL=${ARM_INTERVAL:-10}
 TIMEOUT=${ARM_REGISTER_TIMEOUT:-300}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -114,7 +128,6 @@ ARM='mutation($id:ID!,$sha:GitObjectID!,$method:PullRequestMergeMethod!){
   enablePullRequestAutoMerge(input:{pullRequestId:$id,expectedHeadOid:$sha,mergeMethod:$method}){
     pullRequest{autoMergeRequest{enabledAt}}}}'
 
-SHA=""
 read_pr() {  # sets ID STATE DRAFT HEAD BASE MSTATE REVIEW LABELS CHECKS; exits on a gh failure or a moved head
   local out
   out=$(gh api graphql -f query="$READ" -f owner="$OWNER" -f name="$NAME" -F number="$PR" --jq "$JQ" 2>&1) \
@@ -136,9 +149,13 @@ read_pr() {  # sets ID STATE DRAFT HEAD BASE MSTATE REVIEW LABELS CHECKS; exits 
 
 one_way() {  # refuses a one-way class when this checkout is the PR head; a stderr note otherwise
   local line skip="one-way: not classified here (this checkout is not the PR head) — the class is the caller's"
-  [ "$(git rev-parse HEAD 2>/dev/null)" = "$SHA" ] || { echo "$skip" >&2; return 0; }
+  if [ "$(git rev-parse HEAD 2>/dev/null)" != "$SHA" ]; then
+    [ -z "$CHECK" ] || { echo "refused: one-way not classified (this checkout is not the PR head)"; exit 6; }
+    echo "$skip" >&2; return 0
+  fi
   git cat-file -e "origin/$BASE:.weside/risk-paths" 2>/dev/null || return 0
-  line=$(python3 "$HERE/risk_paths.py" "origin/$BASE" 2>/dev/null | head -n 1) || return 0
+  line=$(python3 "$HERE/risk_paths.py" "origin/$BASE" 2>/dev/null | head -n 1)
+  if [ -n "$CHECK" ] && [ -z "$line" ]; then echo "refused: one-way not classified (risk_paths.py printed nothing)"; exit 6; fi
   case "$line" in "T2 one-way "*) echo "refused: one-way ${line#T2 one-way } — only the human merges it"; exit 6 ;; esac
 }
 
@@ -202,6 +219,25 @@ verdict() {  # pending | pass | fail:<names> for the required checks on the head
   else echo pass; fi
 }
 
+ready_line() { echo "ready: all required checks green on $SHA — merge: gh pr merge $PR --$METHOD --match-head-commit $SHA"; }
+
+if [ -n "$CHECK" ]; then  # one read, no arm, no wait
+  read_pr
+  one_way
+  required_names
+  [ -n "$CHECKS" ] || { echo "no checks on $SHA — not ready"; exit 8; }
+  v=$(verdict)
+  case "$v" in
+    fail:*) echo "red: ${v#fail:} on $SHA — not ready"; exit 7 ;;
+    pending) p=$(pending_line); echo "${p} on $SHA — not ready"; exit 8 ;;
+  esac
+  case "$MSTATE" in CLEAN|UNSTABLE|HAS_HOOKS) ;; *) echo "not ready on $SHA ($MSTATE, review $REVIEW)"; exit 8 ;; esac
+  if [ "$REVIEW" = REVIEW_REQUIRED ] || [ "$REVIEW" = CHANGES_REQUESTED ]; then
+    echo "not ready on $SHA ($MSTATE, review $REVIEW)"; exit 8
+  fi
+  ready_line; exit 0
+fi
+
 read_pr
 one_way
 arm  # returns only on a clean answer
@@ -226,7 +262,6 @@ while :; do
       # required) and HAS_HOOKS merge like CLEAN: the required checks were judged by name above.
       case "$MSTATE" in CLEAN|UNSTABLE|HAS_HOOKS) ;; *) arm; continue ;; esac
       [ "$REVIEW" != REVIEW_REQUIRED ] && [ "$REVIEW" != CHANGES_REQUESTED ] || { arm; continue; }
-      echo "ready: all required checks green on $SHA — merge: gh pr merge $PR --$METHOD --match-head-commit $SHA"
-      exit 3 ;;
+      ready_line; exit 3 ;;
   esac
 done

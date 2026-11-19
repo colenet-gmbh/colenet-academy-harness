@@ -226,3 +226,38 @@ def test_a_card_section_is_two_way_with_a_high_review(repo: Path) -> None:
     write(repo, "pay.py", "x\n")
     commit(repo, "money wins")
     assert classify(repo).stdout.splitlines()[0] == "T2 one-way money"
+
+
+TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "risk-paths"
+
+
+@pytest.mark.parametrize("rules", [RULES, TEMPLATE], ids=["plugin", "setup-template"])
+def test_flipping_build_pr_owner_is_one_way_and_the_rest_of_the_config_is_not(
+    repo: Path, rules: Path
+) -> None:
+    """The switch that hands process workers the merge rights loosens trust: one-way by value."""
+    write(repo, ".weside/risk-paths", rules.read_text())
+    write(repo, ".weside/config.json", '{"build": {"pr_owner": "master"}, "review": {}}\n')
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "base config")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    write(repo, ".weside/config.json", '{"build": {"pr_owner": "master"}, "review": {"x": 1}}\n')
+    commit(repo, "another key")
+    out = classify(repo)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.splitlines()[0] == "T0"
+    write(repo, ".weside/config.json", '{"build": {"pr_owner": "worker"}, "review": {"x": 1}}\n')
+    commit(repo, "flip")
+    out = classify(repo)
+    assert out.returncode == 0, out.stderr
+    lines = out.stdout.splitlines()
+    assert lines[0] == "T2 one-way brake-change"
+    assert ".weside/config.json\tbrake-change: json .weside/config.json build" in lines
+
+
+def test_a_json_rule_fails_closed_on_a_file_that_does_not_parse(repo: Path) -> None:
+    write(repo, ".weside/config.json", "{not json\n")
+    commit(repo, "broken")
+    out = classify(repo)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.splitlines()[0] == "T2 one-way brake-change"

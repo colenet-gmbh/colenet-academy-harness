@@ -76,7 +76,7 @@ GREEN = [check("lint"), check("Claude Review")]
 PENDING = [check("lint"), check("Claude Review", "IN_PROGRESS", None)]
 
 
-def run(tmp_path, reads, arms, required=REQUIRED, merge=None):
+def run(tmp_path, reads, arms, required=REQUIRED, merge=None, extra=()):
     if merge is not None:  # a crew with a `merge` block; `.git` bounds the crew lookup at tmp_path
         (tmp_path / ".git").mkdir()
         (tmp_path / ".weside").mkdir()
@@ -96,7 +96,7 @@ def run(tmp_path, reads, arms, required=REQUIRED, merge=None):
         "ARM_REGISTER_TIMEOUT": "2",
     }
     res = subprocess.run(
-        ["bash", str(SCRIPT), "7", "--repo", "o/r"],
+        ["bash", str(SCRIPT), "7", "--repo", "o/r", *extra],
         capture_output=True,
         text=True,
         env=env,
@@ -296,4 +296,89 @@ def test_an_unreadable_base_is_a_crew_error_not_the_checkouts_block(tmp_path):
     reads = [{"head": NEW, "checks": PENDING, "labels": ["review"]}]
     code, out, calls = run(tmp_path, reads, ["ok"])
     assert (code, out[-1]) == (2, "crew: origin/main unreadable here (fetch it)")
+    assert arm_calls(calls) == []
+
+
+def checkout(tmp_path):
+    """A git checkout whose HEAD is the PR head `--check` classifies (no risk-paths: no class)."""
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(
+        tmp_path,
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "i",
+    )
+    _git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+@pytest.mark.parametrize(
+    ("read", "code", "line"),
+    [
+        (
+            {"checks": GREEN},
+            0,
+            "ready: all required checks green on {sha} — merge: gh pr merge 7 --merge --match-head-commit {sha}",
+        ),
+        ({"checks": PENDING}, 8, "pending: Claude Review on {sha} — not ready"),
+        ({"checks": [check("lint")]}, 8, "pending: Claude Review on {sha} — not ready"),
+        ({"checks": []}, 8, "no checks on {sha} — not ready"),
+        (
+            {"checks": GREEN, "merge": "BLOCKED", "review": "REVIEW_REQUIRED"},
+            8,
+            "not ready on {sha} (BLOCKED, review REVIEW_REQUIRED)",
+        ),
+        (
+            {"checks": GREEN, "review": "CHANGES_REQUESTED"},
+            8,
+            "not ready on {sha} (CLEAN, review CHANGES_REQUESTED)",
+        ),
+        (
+            {"checks": [check("lint"), check("Claude Review", conclusion="FAILURE")]},
+            7,
+            "red: Claude Review on {sha} — not ready",
+        ),
+    ],
+    ids=[
+        "ready",
+        "pending",
+        "required-absent",
+        "no-checks",
+        "review-required",
+        "changes-requested",
+        "red",
+    ],
+)
+def test_check_reads_once_and_never_arms(tmp_path, read, code, line):
+    sha = checkout(tmp_path)
+    got, out, calls = run(
+        tmp_path, [{"head": sha, **read}], ["ok"], extra=("--check", "--sha", sha)
+    )
+    assert (got, out) == (code, [line.replace("{sha}", sha)])
+    assert arm_calls(calls) == []
+
+
+def test_check_refuses_another_head(tmp_path):
+    sha = checkout(tmp_path)
+    reads = [{"head": NEW, "checks": GREEN}]
+    got, out, calls = run(tmp_path, reads, ["ok"], extra=("--check", "--sha", sha))
+    assert (got, out) == (5, [f"refused: head moved {sha} -> {NEW}"])
+    assert arm_calls(calls) == []
+
+
+def test_check_refuses_a_checkout_that_is_not_the_pr_head(tmp_path):
+    checkout(tmp_path)
+    got, out, calls = run(tmp_path, [{"head": NEW, "checks": GREEN}], ["ok"], extra=("--check",))
+    assert (got, out) == (
+        6,
+        ["refused: one-way not classified (this checkout is not the PR head)"],
+    )
     assert arm_calls(calls) == []

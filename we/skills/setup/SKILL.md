@@ -118,7 +118,10 @@ prints as a warning: a worker started for that skill is refused.
 `build.pr_owner` (default `master`: the master pushes, opens, arms and watches every build PR) set to
 `worker` makes a story's build worker carry its own PR to one end line
 (`${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md` § PR-carrying worker); it opens that worker's PR
-rights once on the default branch. Write it only when the user asks for it.
+rights once on the default branch. Write it only when the user asks for it. The rights hang on the
+switch, not on the brief: every process worker on a branch carrying its key holds them, a refiner
+or a multi-chunk build too. A repo that sets `worker` carries a `.weside/risk-paths`: without it the
+one-way check before a worker's merge has no rules.
 
 `plans.secret_scan` stays `null` (gitleaks) unless the user names a scanner: a command with `{range}`
 and an optional `{report}`, or `"none"` (`${CLAUDE_PLUGIN_ROOT}/scripts/plan_push.py`).
