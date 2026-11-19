@@ -822,7 +822,7 @@ def test_the_merge_line_check_refuses_at_its_deadline_and_kills_the_check_group(
     started = time.monotonic()
     reason = wr._merge_facts_refusal(7, "acme/app", str(world["repo"]), started + 1.0)
     assert time.monotonic() - started < 5, "the check ran past its deadline"
-    assert "arm_pr.sh --check ran past the merge-line check's" in reason, reason
+    assert "arm_pr.sh --check ran past the worker gate's" in reason, reason
     child = int(pid_file.read_text())
     for _ in range(50):  # the killed child is reaped by init; give it a moment
         try:
@@ -836,7 +836,7 @@ def test_the_merge_line_check_refuses_at_its_deadline_and_kills_the_check_group(
 
 def test_the_merge_line_check_refuses_once_the_deadline_is_spent(world):
     reason = wr._merge_facts_refusal(7, "acme/app", str(world["repo"]), time.monotonic() - 1)
-    assert "ran past the merge-line check's" in reason, reason
+    assert "ran past the worker gate's" in reason, reason
     assert wr._own_pr("7", "acme/app", BRANCH, str(world["repo"]), time.monotonic() - 1)[0]
 
 
@@ -853,3 +853,17 @@ def test_under_worker_the_merge_line_is_denied_on_a_one_way_class(world):
     _commit(repo, "brake")
     decision, reason = _merge_line(world, {"checks": GREEN})
     assert decision == "deny" and "refused: one-way brake-change" in reason, reason
+
+
+def test_a_spent_hook_deadline_refuses_every_gated_gh_read(world):
+    """The hook passes one deadline to every command of a call: a second `gh pr edit` after the
+    first spent the budget refuses instead of running past the hook's timeout (which lets it by)."""
+    repo = str(world["repo"])
+    _pr_owner(world["repo"], "worker")
+    rights = wr.crew_rights(repo)
+    argv = ["gh", "pr", "edit", "7", "--title", "x"]
+    spent = time.monotonic() - 1
+    reason = wr.right_refusal(argv, "pr_edit", rights, KEY, repo, "worker", spent)
+    assert reason and "ran past the worker gate's" in reason, reason
+    arm = wr.right_refusal(["arm_pr.sh", "7"], "arm", rights, KEY, repo, "worker", spent)
+    assert arm and "ran past the worker gate's" in arm, arm

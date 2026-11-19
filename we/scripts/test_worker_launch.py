@@ -993,9 +993,10 @@ def test_brief_skills_reads_every_form_once():
 
 
 def test_the_ticketing_skills_declare_the_need():
-    for skill in ("plan-story", "develop", "merged", "pr", "epic", "master"):
+    for skill in ("plan-story", "merged", "pr", "epic", "master", "accept", "standup"):
         assert wl.skill_needs(skill) == ["ticketing"], skill
-    assert wl.skill_needs("grill") == []
+    for skill in ("grill", "develop", "ci-review"):  # build and fix workers touch no ticket
+        assert wl.skill_needs(skill) == [], skill
     assert wl.skill_needs("no-such-skill") == []
 
 
@@ -1018,9 +1019,9 @@ def test_ticketing_plugin_overrides_the_default_map(env):
         {"tool": "jira", "plugin": "tracker"},
         disable=["atlassian@claude-plugins-official"],
     )
-    assert _needs(env["wt"], "/we:develop KEY-1\n").returncode == 0  # the map is not consulted
+    assert _needs(env["wt"], "/we:pr KEY-1\n").returncode == 0  # the map is not consulted
     _config(env["wt"], {"tool": "jira", "plugin": ["tracker"]}, disable=["tracker@market"])
-    proc = _needs(env["wt"], "/we:develop KEY-1\n")
+    proc = _needs(env["wt"], "/we:pr KEY-1\n")
     assert proc.returncode == 2 and "turns it off (tracker@market)" in proc.stderr
 
 
@@ -1066,10 +1067,89 @@ def test_needs_all_lists_every_skill_the_context_starves(env):
     proc = _needs(env["wt"], "", "--all")
     assert proc.returncode == 2
     named = {line.split("/we:")[1].split(",")[0] for line in proc.stdout.splitlines()}
-    assert {"plan-story", "develop", "merged", "pr", "epic"} <= named
+    assert {"plan-story", "merged", "pr", "epic"} <= named and "develop" not in named
     _config(env["wt"], {"tool": "github-issues"}, disable=["atlassian"])
     proc = _needs(env["wt"], "", "--all")
     assert (proc.returncode, proc.stdout) == (0, "")
+
+
+# --- ticketing_unneeded: the ticketing plugin loads only for a brief that needs it ---------------
+
+INSTALLED = ["atlassian@claude-plugins-official", "sentry@claude-plugins-official"]
+
+
+@pytest.mark.parametrize(
+    ("brief", "off"),
+    [
+        ("/we:develop KEY-1\n", ["atlassian"]),  # build worker: no ticket
+        ("/we:ci-review on #12\n", ["atlassian"]),
+        ("/we:develop KEY-1\nNeeds: ticketing\n", []),  # the brief asks for it
+        ("/we:develop KEY-1\nNeeds: `atlassian@claude-plugins-official`\n", []),
+        ("/we:develop then /we:pr\n", []),  # one skill needs it
+        ('Run Skill("we:develop")\nPR owner: worker — open the PR with /we:pr\n', []),
+        ('Run Skill("we:plan-story") for KEY-1.\n', []),
+        ("Fix the flaky test in board.py.\n", []),  # no skill: every tool stays
+        ("", []),
+    ],
+)
+def test_ticketing_unneeded_follows_the_briefs_skills(env, brief, off):
+    _config(env["wt"], {"tool": "jira"})
+    assert wl.ticketing_unneeded(brief, env["wt"]) == off
+
+
+@pytest.mark.parametrize("ticketing", [{"tool": "github-issues"}, {"tool": "none"}, None])
+def test_no_ticketing_plugin_turns_nothing_off(env, ticketing):
+    _config(env["wt"], ticketing)
+    assert wl.ticketing_unneeded("/we:develop KEY-1\n", env["wt"]) == []
+
+
+def test_the_configured_ticketing_plugin_is_the_one_turned_off(env):
+    _config(env["wt"], {"tool": "jira", "plugin": ["tracker", "tracker-mcp"]})
+    assert wl.ticketing_unneeded("/we:develop\n", env["wt"]) == ["tracker", "tracker-mcp"]
+    assert wl.ticketing_unneeded("/we:develop\nNeeds: tracker\n", env["wt"]) == []
+
+
+def test_a_pointer_brief_is_read_through_its_file(env, tmp_path):
+    _config(env["wt"], {"tool": "jira"})
+    (tmp_path / "b.md").write_text("/we:develop\nPlugin we, one PR.\n")
+    pointer = f"Read {tmp_path / 'b.md'} and follow it.\n"
+    assert wl.ticketing_unneeded(pointer, env["wt"]) == ["atlassian"]
+    (tmp_path / "b.md").write_text("/we:merged\n")
+    assert wl.ticketing_unneeded(pointer, env["wt"]) == []
+    missing = f"Read {tmp_path / 'gone.md'} and follow it.\n"
+    assert wl.ticketing_unneeded(missing, env["wt"]) == []  # unreadable: no skill, all stays
+
+
+def test_turn_off_disables_an_installed_plugin_and_denies_any_other_server():
+    doc = wl.turn_off({"env": {}}, ["atlassian", "tickets"], INSTALLED)
+    assert doc["enabledPlugins"] == {"atlassian@claude-plugins-official": False}
+    assert doc["deniedMcpServers"] == [{"serverName": "tickets"}]
+    assert wl.turn_off({}, [], INSTALLED) == {}
+
+
+def test_settings_verb_turns_the_ticketing_plugin_off_for_a_develop_brief(env, tmp_path):
+    _config(env["wt"], {"tool": "jira"})
+    home = tmp_path / "claude-home"
+    (home / "plugins").mkdir(parents=True)
+    (home / "plugins" / "installed_plugins.json").write_text(
+        json.dumps({"plugins": {i: [] for i in INSTALLED}})
+    )
+    out = tmp_path / "w.settings.json"
+
+    def settings(brief):
+        subprocess.run(
+            [sys.executable, str(SCRIPT), "settings", "--repo", str(env["wt"]), "--key", "KEY-1",
+             "--out", str(out), "--brief-stdin"],
+            input=brief, text=True, check=True, capture_output=True,
+            env={**os.environ, "CLAUDE_CONFIG_DIR": str(home)},
+        )  # fmt: skip
+        return json.loads(out.read_text())
+
+    assert settings("/we:develop KEY-1\n")["enabledPlugins"] == {
+        "atlassian@claude-plugins-official": False
+    }
+    assert "enabledPlugins" not in settings("/we:pr KEY-1\n")
+    assert "enabledPlugins" not in settings("")
 
 
 # ---------------------------------------------------------------- build.pr_owner

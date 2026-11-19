@@ -2,8 +2,8 @@
 """Flow intervals: who in the crew works, who waits on whom, from the state files the plugin writes.
 
 Usage:
-  flow_intervals.py [--since 14d] [--until UTC] [--board FILE] [--from FILE]… [--note TEXT]…
-                    [--jsonl | --html FILE]
+  flow_intervals.py [--since 14d] [--until UTC] [--board FILE] [--project NAME] [--from FILE]…
+                    [--note TEXT]… [--jsonl | --html FILE]
 
 Prints one JSON object per interval (JSON Lines, the default) or writes one self-contained HTML
 page (``--html``); stderr names every source with the rows it read and the intervals written.
@@ -11,7 +11,27 @@ Write the file; publishing it is the caller's step. ``--since`` and ``--until`` 
 ``flow_report.py``. ``--board`` names the board whose logs to read (default: the crew's board,
 ``crew.resolve_board``); the sampler directory and the day zone come from the crew
 (``flow_log.settings``), the worker markers from ``worker_supervisor.state_dir()``. Exit 0 whenever
-it printed or wrote, 2 on a usage error.
+it printed or wrote, 2 on a usage error (also: ``--project`` names another project than the stamp
+beside the board).
+
+Project: one page, one project. Its name (``resolve_project``) is the crew stamp beside the board
+(``crew.read_stamp``, the crew id ``board.py`` writes there), else ``crew.crew_id`` of the crew file,
+else none; ``--project`` names it when the board carries no stamp. The page's title reads
+``Crew flow · <project>``, its header ``Project: <project>``, its JSON block ``project``. The sampler
+and the worker markers are one per host and mix every project on it, so each sampled session is
+attributed (``Attribution``) and kept only when it belongs, first match wins: its ``session_id``,
+else its ``name``, is on a line of this board's ``sessions`` (the most reliable field: a session
+writes its board line into its own project's board; a probe carries no cwd, and a board line's
+``cwd`` names any repo the crew works in); it is a member of the crew (slug or name); a key of its
+probes or of its name (``naming.key``) is one of the project's keys (this board's transitions log
+and its lines' ``key``/``keys``/``epic``), which keeps a worker whose marker and starter are gone;
+or it is a worker whose starter (marker ``starter_session``/``starter``, else a ``blocked`` event's
+``starter``) belongs. Its ``blocked`` events and the locks it holds go with it. A board log's wait
+(waits, questions) of a session that fails the same test is dropped too (the rows' keys count
+for a session the sampler and the events did not judge; a judged one keeps one verdict): a
+board that served several projects before each had its own keeps their old lines. A ``--from`` row
+with a ``project`` field of another project is dropped; one without the field is kept. Every drop
+is counted in a gap line (source ``project``) and on stderr, never silent.
 
 Row contract (harness-neutral). Required: ``id, start, end, kind, who, source``; optional: ``key``,
 ``role``, ``waiting_on``; any other field is kept and ignored. Times are UTC ISO with ``Z``; ``id``
@@ -70,6 +90,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import html
 import json
 import math
 import re
@@ -90,6 +111,7 @@ import worker_supervisor  # noqa: E402
 
 ISO = "%Y-%m-%dT%H:%M:%SZ"
 REQUIRED = ("id", "start", "end", "kind", "who", "source")
+NO_PROJECT = "none (no crew stamp, no crew, no --project)"
 RESERVED = ("waiting:ci", "waiting:lock")
 OVERLAY = "holding:"
 NOT_WAITING = {"working", "no-data"}
@@ -165,6 +187,92 @@ def locate_board(args, cwd: Path, crew_path: Path | None, crew: dict | None) -> 
     if crew_path is None:
         return None, None
     return crew_mod.resolve_board(cwd), crew_mod.state_dir(crew_path, crew)
+
+
+def resolve_project(board: Path | None, crew_path: Path | None) -> str | None:
+    """The project a board belongs to: its crew stamp, else the crew's id, else None."""
+    stamp = crew_mod.read_stamp(board) if board is not None else None
+    if stamp:
+        return stamp
+    return crew_mod.crew_id(crew_path) if crew_path is not None else None
+
+
+def board_sessions(src, board: Path | None) -> list:
+    """The `sessions` lines of the board file; a missing or unreadable board is a gap."""
+    if board is None:
+        return []
+    try:
+        doc = json.loads(Path(board).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        src.gap(
+            "project", f"no data: board file {Path(board).name} (no session can be attributed)"
+        )
+        return []
+    except (OSError, ValueError, UnicodeDecodeError):
+        src.gap("project", f"source unreadable: board file {Path(board).name}")
+        return []
+    lines = doc.get("sessions") if isinstance(doc, dict) else None
+    return [x for x in lines or [] if isinstance(x, dict)]
+
+
+class Attribution:
+    """Which sessions belong to the project (module docstring § Project)."""
+
+    def __init__(self, lines: list, crew: dict, markers: dict, events: list, transitions: list):
+        self.sids = {x["session_id"] for x in lines if isinstance(x.get("session_id"), str)}
+        self.names = {x["name"].casefold() for x in lines if isinstance(x.get("name"), str)}
+        for slug, entry in (crew.get("members") or {}).items():
+            self.names.add(str(slug).casefold())
+            if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+                self.names.add(entry["name"].casefold())
+        self.key_rx = re.compile((crew.get("naming") or {}).get("key") or r"[A-Z]+-\d+")
+        # the project's keys: the stories its board moved and the keys its lines carry
+        self.keys = {t["key"] for t in transitions if isinstance(t.get("key"), str)}
+        for x in lines:
+            for field in ("key", "keys", "epic"):
+                self.keys.update(self.key_rx.findall(str(x.get(field) or "")))
+        # a worker's starter: its marker, else the last `blocked` event naming one
+        self.starter: dict = {}
+        for e in sorted(events, key=lambda e: str(e.get("ts"))):
+            if isinstance(e.get("name"), str) and isinstance(e.get("starter"), str):
+                self.starter[e["name"].casefold()] = (None, e["starter"])
+        for name, m in markers.items():
+            sid = m.get("starter_session") if isinstance(m.get("starter_session"), str) else None
+            who = m.get("starter") if isinstance(m.get("starter"), str) else None
+            if sid or who:
+                self.starter[str(name).casefold()] = (sid, who)
+        self.sid_of: dict = {}
+        self.keys_of: dict = defaultdict(set)
+
+    def see(self, entry: dict) -> None:
+        """Learn a probe's `session_id` and `key` for its name."""
+        name = entry["name"].casefold()
+        if isinstance(entry.get("session_id"), str):
+            self.sid_of.setdefault(name, entry["session_id"])
+        if isinstance(entry.get("key"), str):
+            self.keys_of[name].add(entry["key"])
+
+    def direct(self, name: str, sid=None, keys=()) -> bool:
+        if (sid is not None and sid in self.sids) or name.casefold() in self.names:
+            return True
+        mine = set(keys) | self.keys_of.get(name.casefold(), set())
+        mine.update(self.key_rx.findall(name))
+        return bool(mine & self.keys)
+
+    def belongs(self, name: str, keys=(), seen=None) -> bool:
+        """On the board, in the crew, on one of its keys, or started by a session that belongs
+        (chains followed)."""
+        if self.direct(name, self.sid_of.get(name.casefold()), keys):
+            return True
+        seen = seen or set()
+        key = name.casefold()
+        if key in seen or key not in self.starter:
+            return False
+        seen.add(key)
+        s_sid, s_name = self.starter[key]
+        if s_sid is not None and s_sid in self.sids:
+            return True
+        return bool(s_name) and self.belongs(s_name, (), seen)
 
 
 def question_waits(questions: list, answers: list) -> list:
@@ -384,7 +492,7 @@ def read_foreign(src: Sources, paths: list) -> list:
                 src.gap(source, f"refused row: {path.name}:{n} ({reason})")
                 continue
             src.counts[source]["rows"] += 1
-            out.append(item)
+            out.append({**item, "_file": path.name})
     return out
 
 
@@ -619,19 +727,14 @@ def _run_rows(name: str, run: list, role, starter, ctx: dict) -> list:
     return rows
 
 
-def build(board, state_dir, log_dir, tz, crew, since, until, foreign=()) -> dict:
+def build(board, state_dir, log_dir, tz, crew, since, until, foreign=(), project=None) -> dict:
     """The one builder both readers call: `{intervals, gaps, counts, lanes, transitions, markers,
-    interval_s, missing_started}`."""
+    interval_s, missing_started, project, attribution}`; only rows of `project` (module docstring
+    § Project)."""
     crew = crew or crew_mod.DEFAULTS
     src = Sources(since, until)
     src.missing_started = 0
     samples, events = read_sampler(src, log_dir, tz)
-    # a marker goes when its worker ends; the flow log's `blocked` events keep the starter
-    event_starters = {
-        e["name"]: e["starter"]
-        for e in sorted(events, key=lambda e: str(e.get("ts")))
-        if isinstance(e.get("name"), str) and isinstance(e.get("starter"), str) and e["starter"]
-    }
 
     def beside(suffix):
         return board.with_name(f"{board.stem}-{suffix}.jsonl") if board is not None else None
@@ -642,6 +745,19 @@ def build(board, state_dir, log_dir, tz, crew, since, until, foreign=()) -> dict
     answers = src.log(beside("answers"), "answers log", "answers")
     markers = read_markers(src, state_dir)
     rows_from = read_foreign(src, list(foreign))
+    samples, events, markers, keep, attribution = attribute(
+        src, board, crew, samples, events, markers, transitions
+    )
+    rows_from, foreign_dropped = _drop_foreign(rows_from, project, attribution)
+    explicit = _explicit_waits(src, waits, events, questions, answers)
+    _drop_logs(explicit, keep, attribution)
+    _drop_gaps(src, attribution, foreign_dropped, project)
+    # a marker goes when its worker ends; the flow log's `blocked` events keep the starter
+    event_starters = {
+        e["name"]: e["starter"]
+        for e in sorted(events, key=lambda e: str(e.get("ts")))
+        if isinstance(e.get("name"), str) and isinstance(e.get("starter"), str) and e["starter"]
+    }
 
     interval = Counter(int(s.get("interval_s") or 300) for _, s in samples).most_common(1)
     interval_s = interval[0][0] if interval else 300
@@ -670,12 +786,11 @@ def build(board, state_dir, log_dir, tz, crew, since, until, foreign=()) -> dict
         },
         "member_cf": member_cf,
         "lanes_cf": lanes_cf,
-        "explicit": _explicit_waits(src, waits, events, questions, answers),
+        "explicit": explicit,
         "global_ts": [ts for ts, _ in samples],
         "gapmax": gapmax,
         "until": until,
     }
-    explicit = ctx["explicit"]
     rows = []
     lanes: dict = {}
     for name, plist in probes.items():
@@ -708,7 +823,105 @@ def build(board, state_dir, log_dir, tz, crew, since, until, foreign=()) -> dict
         "cuts": src.cuts,
         "since": since,
         "until": until,
+        "project": project,
+        "attribution": attribution,
     }
+
+
+def attribute(src, board, crew, samples, events, markers, transitions) -> tuple:
+    """`(samples, events, markers, keep, counts)` with every sampled row of another
+    project or of none dropped (module docstring § Project); `keep(name, keys)` judges the lanes
+    of the board logs."""
+    att = Attribution(board_sessions(src, board), crew, markers, events, transitions)
+    for _ts, s in samples:
+        for e in s.get("sessions") or []:
+            if isinstance(e, dict) and isinstance(e.get("name"), str) and e["name"]:
+                att.see(e)
+    verdict: dict = {}
+
+    def keep(name, keys=()) -> bool:
+        if name not in verdict:
+            verdict[name] = att.belongs(name, keys)
+        return verdict[name]
+
+    out, sampled, kept_rows, dropped_rows, dropped_locks = _filter_samples(samples, keep)
+    kept_events = [e for e in events if not isinstance(e.get("name"), str) or keep(e["name"])]
+    kept_markers = {n: m for n, m in markers.items() if keep(n)}
+    dropped_sessions = sum(1 for n in sampled if not verdict[n])
+    counts = {
+        "kept_rows": kept_rows,
+        "dropped_rows": dropped_rows,
+        "kept_sessions": len(sampled) - dropped_sessions,
+        "dropped_sessions": dropped_sessions,
+        "dropped_events": len(events) - len(kept_events),
+        "dropped_locks": dropped_locks,
+        "dropped_log_rows": 0,
+        "dropped_foreign": 0,
+    }
+    return out, kept_events, kept_markers, keep, counts
+
+
+def _drop_logs(explicit: dict, keep, counts: dict) -> None:
+    """Drop the recorded waits of a session of another project from the board logs in place."""
+    for who in list(explicit):
+        if not keep(who, {w[6] for w in explicit[who] if isinstance(w[6], str)}):
+            counts["dropped_log_rows"] += len(explicit.pop(who))
+
+
+def _drop_foreign(rows_from: list, project, counts: dict) -> tuple:
+    """`(kept rows, {file: dropped})`: a `--from` row naming another `project` goes."""
+    kept, dropped = [], Counter()
+    for r in rows_from:
+        file = r.pop("_file", None)
+        other = r.get("project")
+        if isinstance(other, str) and other and other != project:
+            dropped[file] += 1
+            continue
+        kept.append(r)
+    counts["dropped_foreign"] = sum(dropped.values())
+    return kept, dropped
+
+
+def _drop_gaps(src, counts: dict, foreign: Counter, project) -> None:
+    c = counts
+    if c["dropped_rows"] or c["dropped_events"] or c["dropped_locks"] or c["dropped_log_rows"]:
+        src.gap(
+            "project",
+            f"not attributed to {project or NO_PROJECT}: {c['dropped_rows']} sampler rows of "
+            f"{c['dropped_sessions']} sessions, {c['dropped_events']} blocked events, "
+            f"{c['dropped_locks']} lock probes, {c['dropped_log_rows']} board log waits dropped",
+        )
+    for file, n in sorted(foreign.items()):
+        src.gap("project", f"other project: {n} rows of {file} dropped")
+
+
+def _filter_samples(samples, keep) -> tuple:
+    """`(samples, sampled names, kept rows, dropped rows, dropped lock probes)`: each probe with
+    only the sessions and the lock holders `keep` accepts."""
+    kept_rows = dropped_rows = dropped_locks = 0
+    sampled: set = set()
+    out = []
+    for ts, s in samples:
+        sessions = []
+        for e in s.get("sessions") or []:
+            if not (isinstance(e, dict) and isinstance(e.get("name"), str) and e["name"]):
+                continue
+            sampled.add(e["name"])
+            if keep(e["name"]):  # `see` recorded its session_id and keys
+                sessions.append(e)
+                kept_rows += 1
+            else:
+                dropped_rows += 1
+        locks = s.get("locks") if isinstance(s.get("locks"), dict) else {}
+        mine = {}
+        for lock, held in locks.items():
+            holder = held.get("holder") if isinstance(held, dict) else None
+            if isinstance(holder, str) and held.get("held") and not keep(holder):
+                dropped_locks += 1
+                continue
+            mine[lock] = held
+        out.append((ts, {**s, "sessions": sessions, "locks": mine}))
+    return out, sampled, kept_rows, dropped_rows, dropped_locks
 
 
 def _bare_lane(name: str, group: str, role=None) -> dict:
@@ -1044,6 +1257,8 @@ def page_data(built: dict, notes=()) -> dict:
         item["edge_to"] = target if target in lanes and target != r["who"] else None
         intervals.append(item)
     return {
+        "project": built.get("project") or NO_PROJECT,
+        "attribution": built.get("attribution"),
         "window": {"since": iso(built["since"]), "until": iso(built["until"])},
         "interval_s": built["interval_s"],
         "header": [fmt["sample_error"], FIXED_SENTENCE, CI_LINE, *notes],
@@ -1068,17 +1283,20 @@ def embed_json(data: dict, escape: bool = True) -> str:
 
 
 def render_page(data: dict, escape: bool = True) -> str:
-    return (
-        PAGE.replace("/*CSS*/", CSS)
-        .replace("/*DATA*/", embed_json(data, escape))
-        .replace("/*JS*/", JS)
-    )
+    parts = {
+        "TITLE": html.escape(f"Crew flow · {data.get('project') or NO_PROJECT}"),
+        "CSS": CSS,
+        "DATA": embed_json(data, escape),
+        "JS": JS,
+    }
+    # one pass: a placeholder inside a filled-in value (a project name, a key) stays text
+    return re.sub(r"/\*(TITLE|CSS|DATA|JS)\*/", lambda m: parts[m.group(1)], PAGE)
 
 
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Crew flow</title>
+<title>/*TITLE*/</title>
 <style>/*CSS*/</style></head>
 <body><main id="app"></main>
 <script type="application/json" id="flow-data">/*DATA*/</script>
@@ -1146,7 +1364,8 @@ function kcls(k){if(k==='working'||k==='blocked'||k==='idle-after-end'||k==='idl
  if(k==='waiting:human')return 'k-waiting-human';if(k==='waiting:coordinator')return 'k-waiting-coordinator';
  if(k.indexOf('waiting:')===0)return 'k-waiting-role';return 'k-unknown';}
 var hdr=add(app,el('div','hdr'));
-add(hdr,el('h1',null,'Crew flow'));
+add(hdr,el('h1',null,'Crew flow \u00b7 '+D.project));
+add(hdr,el('p',null,'Project: '+D.project));
 add(hdr,el('p','mut','Window '+D.window.since+' \u2192 '+D.window.until+' (UTC)'));
 D.header.forEach(function(s){add(hdr,el('p',null,s));});
 D.gaps.forEach(function(g){add(hdr,el('p','gapline',g.reason));});
@@ -1255,6 +1474,13 @@ def report_sources(built: dict, out=None) -> None:
     ]
     if orphans:
         print(f"flow_intervals: workers without a starter: {len(orphans)}", file=out)
+    a = built.get("attribution") or {}
+    print(
+        f"flow_intervals: project {built.get('project') or NO_PROJECT}: "
+        f"{a.get('kept_rows', 0)} sampler rows of {a.get('kept_sessions', 0)} sessions kept, "
+        f"{a.get('dropped_rows', 0)} rows of {a.get('dropped_sessions', 0)} sessions dropped",
+        file=out,
+    )
     for g in built["gaps"]:
         print(f"flow_intervals: gap: {g['reason']}", file=out)
 
@@ -1264,6 +1490,7 @@ def main(argv=None, now: datetime | None = None, cwd: Path | None = None) -> int
     p.add_argument("--since", default="14d")
     p.add_argument("--until", help="the window's end, UTC YYYY-MM-DDTHH:MM (default: now)")
     p.add_argument("--board", help="board file whose logs to read (default: the crew's)")
+    p.add_argument("--project", help="the project's name when its board carries no crew stamp")
     p.add_argument(
         "--from", dest="from_", action="append", default=[], help="a JSONL file of foreign rows"
     )
@@ -1287,8 +1514,16 @@ def main(argv=None, now: datetime | None = None, cwd: Path | None = None) -> int
     except crew_mod.CrewError:
         crew_path, crew = None, None
     board, _state = locate_board(args, cwd, crew_path, crew)
+    project = resolve_project(board, crew_path)
+    if args.project:
+        stamp = crew_mod.read_stamp(board) if board is not None else None
+        if stamp and stamp != args.project:
+            p.error(f"--project {args.project!r}: the board {board} belongs to {stamp!r}")
+        project = args.project
     log_dir, tz = settings_for(crew)
-    built = build(board, worker_supervisor.state_dir(), log_dir, tz, crew, since, now, args.from_)
+    built = build(
+        board, worker_supervisor.state_dir(), log_dir, tz, crew, since, now, args.from_, project
+    )
     report_sources(built)
     if args.html:
         Path(args.html).write_text(render_page(page_data(built, args.note)), encoding="utf-8")

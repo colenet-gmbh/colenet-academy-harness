@@ -360,6 +360,22 @@ def test_the_worker_gets_its_settings_file_and_key(tmp_path):
     assert call["key"] == "AC-12"
 
 
+def test_a_develop_brief_starts_without_the_ticketing_plugin(tmp_path):
+    project, env = setup(tmp_path)
+    (project / ".weside" / "config.json").write_text(json.dumps({"ticketing": {"tool": "jira"}}))
+    plugins = tmp_path / "home" / ".claude" / "plugins"  # the global login's, not the pinned dir
+    plugins.mkdir(parents=True)
+    (plugins / "installed_plugins.json").write_text(
+        json.dumps({"plugins": {"atlassian@claude-plugins-official": []}})
+    )
+    workers = tmp_path / "home" / ".claude" / "we-state" / "workers"
+    assert run(project, env, "AC-12-impl", "--bg", "/we:develop AC-12").returncode == 0
+    doc = json.loads((workers / "AC-12-impl.settings.json").read_text())
+    assert doc["enabledPlugins"] == {"atlassian@claude-plugins-official": False}
+    assert run(project, env, "AC-12-pr", "--bg", "/we:pr AC-12").returncode == 0
+    assert "enabledPlugins" not in json.loads((workers / "AC-12-pr.settings.json").read_text())
+
+
 def test_a_window_worker_carries_settings_and_key_too(tmp_path):
     project, env = setup(tmp_path)
     run(project, env, "AC-12-impl", GO)
@@ -1031,7 +1047,7 @@ def test_under_tree_caller_a_start_in_the_main_checkout_stays_there_with_a_tip(t
     _tree_mode(project, "caller")
     proc = run(project, env, "AC-12-impl", "--bg", GO)
     assert proc.returncode == 0, proc.stderr
-    assert "tip: --tree/--here, or workers.tree: own" in proc.stderr
+    assert "works in the main checkout" in proc.stderr and "workers.tree: own" in proc.stderr
     assert [c["cwd"] for c in started(tmp_path)] == [str(project)]
     assert not (tmp_path / "project-AC-12-impl").exists()
     assert not Path(_git(project, "rev-parse", "--absolute-git-dir"), "we-worker.json").exists()

@@ -23,8 +23,10 @@
   report to its marker's starter, `hooks/worker_report_gate.py`'s test) and idle for
   `workers.idle_stop_minutes` (default 30) is stopped with `we-worker stop`, its tree stays (close
   owns the teardown) and the starter gets one line; 161 workers sat idle after their end, median
-  0.84 h. Never a worker that is `blocked` or `working`, has a queued start of its name, or whose
-  launcher marker carries `parked` (work parked for a checkpoint). `0` or `null` turns a key off;
+  0.84 h. Never a worker that is `blocked` or `working`, has a queued start of its name, whose
+  launcher marker carries `parked` (work parked for a checkpoint), or whose job still runs a
+  background task (`tasks_in_flight`: a worker that reported and waits on its CI watcher reads
+  `done`; 30 of 844 `done` job states carried one). `0` or `null` turns a key off;
 - then it removes the worker's settings file and timer file, unless a living session of the same
   name holds them again, or the worker ended on a usage limit or an auth error: a resumable worker
   keeps both (the timer file names its starter, limit and deadline), `gc` ages them out after 7 days. A worker never seen within 5 minutes keeps its files (a start
@@ -397,12 +399,29 @@ def stop_by_launcher(row: dict) -> bool:
     return out.returncode == 0
 
 
+def tasks_in_flight(jobs: Path, row: dict) -> int:
+    """The background tasks (shells, monitors) a background session's job still runs: Claude Code's
+    `<jobs>/<short id>/state.json` `inFlight.tasks`; `claude agents --json` does not show them, its
+    `state` reads `done` while a watcher runs. 0 without a readable job file (a window worker)."""
+    short = str(row.get("id") or "") or str(row.get("sessionId") or "")[:8]
+    if not short or "/" in short:
+        return 0
+    try:
+        doc = json.loads((jobs / short / "state.json").read_text())
+        tasks = (doc.get("inFlight") or {}).get("tasks") or 0
+    except (OSError, ValueError, AttributeError):
+        return 0
+    return tasks if isinstance(tasks, int) and not isinstance(tasks, bool) else 0
+
+
 class Idle:
     """The blocked notice and the idle stop of one supervised worker, one `poll` per sample."""
 
-    def __init__(self, name, tree, sid, limits, projects, state, send, board, stop, log):
+    def __init__(
+        self, name, tree, sid, limits, projects, state, send, board, stop, log, jobs=None
+    ):
         self.name, self.tree, self.sid, self.limits = name, tree, sid, limits
-        self.projects, self.state = projects, state
+        self.projects, self.state, self.jobs = projects, state, jobs or jobs_dir()
         self.send, self.board, self.stop, self.log = send, board, stop, log
         self.blocked_since: float | None = None
         self.blocked_said = False
@@ -432,7 +451,11 @@ class Idle:
     def _idle(self, row: dict, now: float) -> None:
         limit = self.limits.get("idle_stop_minutes")
         marker = wl.read_marker(self.tree) if limit is not None else None
-        if limit is None or not report_in(row, marker, self.projects, self.sid):
+        if (
+            limit is None
+            or not report_in(row, marker, self.projects, self.sid)
+            or tasks_in_flight(self.jobs, row)
+        ):
             self.idle_since = None
             return
         if self.idle_since is None:
@@ -468,6 +491,7 @@ def supervise(
     log: Callable[[str], None] = lambda _line: None,
     stop: Callable[[dict], bool] = stop_by_launcher,
     limits: dict | None = None,
+    jobs: Path | None = None,
 ) -> str:
     """Watch the worker `name` until its process ends; returns what happened as one word."""
     state = state or state_dir()
@@ -488,7 +512,7 @@ def supervise(
     pid, sid = row.get("pid"), row.get("sessionId")
     first_seen: dict[str, float] = {}
     reported: set[str] = set()
-    idle = Idle(name, tree, sid, limits, projects, state, send, board, stop, log)
+    idle = Idle(name, tree, sid, limits, projects, state, send, board, stop, log, jobs)
     while True:
         try:
             mine = [r for r in _named(sessions(), name) if r.get("pid") == pid]

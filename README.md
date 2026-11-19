@@ -62,6 +62,7 @@ Requirements: Claude Code (2.1.302 or later for the `/flow` pane), Git, Python 3
 - `/we:standup` — picks you back up: what we work on, where it stands, what you must do next; read-only (`--branch` for the branch view).
 - `/we:retro` — retrospective on a session or PR cycle; findings go to the optimization inbox.
 - `/we:instruction-audit` — audits rules, skills and AGENTS.md against fresh Anthropic sources and a budget gate.
+- `/we:harness-review` — the periodic review of the crew's harness: 14 days measured, each role asked its top friction, a deletion test over rules, gates and skills, a fresh agent attacking the result; one plan ranked by hours saved and inbox entries.
 - `/we:optimize` — decides inbox candidates with evidence, applies the approved ones, keeps the ledger.
 - `/we:resume` — after a usage-limit stop ("weiter"): resumes open items, workers and CI watches.
 - `/we:pin` — which account bills this master session; `on`/`off` restarts it on a fixed account or on the global login. [docs/companion.md](docs/companion.md)
