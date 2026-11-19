@@ -1,6 +1,6 @@
 ---
 name: optimization-store
-description: Format of a repo's `.weside/optimization/` store — charter, ledger, inbox entries, frozen audits, source lock, measurement adapter — and the config keys the instruction loop reads. Shared by /we:retro, /we:instruction-audit, /we:optimize, /we:setup.
+description: Format of a repo's `.weside/optimization/` store — charter, ledger, inbox entries, frozen audits, source lock, measurement adapter — and the config keys the instruction loop reads. Shared by /we:retro, /we:instruction-audit, /we:harness-review, /we:optimize, /we:setup.
 ---
 
 # Optimization store
@@ -20,7 +20,7 @@ Plugin checkout and workspace.
 |---|---|---|
 | `CHARTER.md` | goal, decisions, current findings, next steps; frontmatter `last_optimize: YYYY-MM-DD` | `/we:optimize` |
 | `LEDGER.md` | one row per decided candidate | `/we:optimize` |
-| `inbox/<YYYY-MM-DD>-<key>.md` | one open finding per file | `/we:retro`, `/we:instruction-audit` |
+| `inbox/<YYYY-MM-DD>-<key>.md` | one open finding per file | `/we:retro`, `/we:instruction-audit`, `/we:harness-review` |
 | `inbox/expired/<YYYY-MM-DD>-<key>.md` | an expired entry, readable until a new evidence line revives it | `scripts/optimization_close.py` |
 | `audits/<YYYY-MM-DD>-<repo>.md` | frozen audit report: gate output plus the `/doctor prompt-audit` report | `/we:instruction-audit` |
 | `sources.md` | optional repo-specific source URLs, one Markdown list item each | the user |
@@ -28,6 +28,7 @@ Plugin checkout and workspace.
 | `measure/README.md` | the repo's measurement adapter | the user |
 | `reports/flow-<YYYY-MM-DD>.md` | the flow report's table (UTC date) | `scripts/flow_report.py --md` |
 | `reports/context-<YYYY-MM-DD>.md` | what each role's cold start loads (UTC date) | `scripts/context_load.py --md` |
+| `reviews/<YYYY-MM-DD>-harness.md` | a harness review's plan: findings ranked by hours saved | `/we:harness-review` |
 | `feedback-sources.md` | optional: other repos that run the plugin, one local path per Markdown list item; `/we:optimize` reads only their plugin findings | the user |
 
 A store exists only where a human created it (`/we:setup` asks). A verb that finds no
@@ -63,7 +64,7 @@ target: AGENTS.md           # repo-relative path; `plugin:<path>` for a plugin f
 target_repo: this           # this · plugin
 action: rewrite             # remove · rewrite · move · replace-with-API-feature · add · flag
 confidence: High            # High · Medium · Low
-source: audit               # audit · gate · retro · guideline · sunset · ablation
+source: audit               # audit · gate · retro · guideline · sunset · ablation · review
 ---
 
 The quoted line, why it no longer fits, and the proposed replacement text.
