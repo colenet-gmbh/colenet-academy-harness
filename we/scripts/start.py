@@ -17,6 +17,14 @@ Usage:
                                          human, WESIDE_COMPANION, WE_ROLE and the pin against the
                                          crew, exit 1 on a mismatch
   start.py restore [--from DIR]          the crew's ``launch.restore`` command, exit 1 when unset
+  start.py launch <role|member> [--brief FILE] [--fresh] [--consult] [--from DIR]
+                                         starts that member's session in the background
+                                         (``launch_command``): its name, ``WESIDE_COMPANION``,
+                                         ``WE_ROLE`` (``master``; ``worker`` with ``--consult``, a
+                                         consultation), ``WE_ROLE_ID``, workplace and pin from the
+                                         crew, the brief (default ``READ_STATE``) as first message,
+                                         ``--resume`` of its last session unless ``--fresh``; exit 3
+                                         while it runs (steer it with SendMessage instead)
 
 The crew decides, never this code: whose machine this is (``crew.current_human``: ``WE_HUMAN``,
 else ``git config user.email``), what starts here (``humans.<me>.runs``; a crew without ``humans``
@@ -37,6 +45,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -48,6 +58,7 @@ if _HERE not in sys.path:
 import claude_home  # noqa: E402
 import crew as crewlib  # noqa: E402
 import worker_launch  # noqa: E402
+import worker_supervisor  # noqa: E402
 
 HEAD_BYTES = 64 * 1024
 TAIL_BYTES = 256 * 1024
@@ -167,20 +178,30 @@ def last_session(name: str, workplace: Path, projects: Path) -> str:
     return ""
 
 
-PIN_KEY = b"WESIDE_COMPANION="
+# the only keys ever read from another process's environment; every other one holds what may be a
+# secret and is dropped unread
+ENV_KEYS = ("WESIDE_COMPANION", "WE_ROLE", "WE_ROLE_ID")
 
 
-def companion_pin(pid: Any) -> str | None:
-    """``WESIDE_COMPANION`` of a live process; every other key of its environment is dropped unread
-    (it holds secrets). None where ``/proc`` cannot be read (macOS, another user)."""
+def env_values(pid: Any, keys: tuple[str, ...] = ENV_KEYS) -> dict[str, str] | None:
+    """The ``keys`` (a subset of ``ENV_KEYS``) a live process's environment sets; every other key is
+    dropped unread. None where ``/proc`` cannot be read (macOS, another user)."""
+    wanted = {k.encode() + b"=": k for k in keys if k in ENV_KEYS}
+    found: dict[str, str] = {}
     try:
         with open(f"/proc/{int(pid)}/environ", "rb") as fh:
             for entry in fh.read().split(b"\0"):
-                if entry.startswith(PIN_KEY):
-                    return entry[len(PIN_KEY) :].decode(errors="replace")
+                head = entry[: entry.find(b"=") + 1]
+                if head in wanted:
+                    found[wanted[head]] = entry[len(head) :].decode(errors="replace")
     except (OSError, ValueError, TypeError):
         return None
-    return None
+    return found
+
+
+def companion_pin(pid: Any) -> str | None:
+    """``WESIDE_COMPANION`` of a live process (``env_values``), None when unset or unreadable."""
+    return (env_values(pid, ("WESIDE_COMPANION",)) or {}).get("WESIDE_COMPANION")
 
 
 def _rows(name: str, sessions: Any) -> list[dict]:
@@ -407,7 +428,145 @@ def _restore(start: str | None, _rest: list[str]) -> int:
     return 0
 
 
-VERBS = {"plan": _plan, "side": _side, "roster": _roster, "check": _check, "restore": _restore}
+READ_STATE = (
+    "Fresh start: before anything else, read your state (your memory file with open commitments, "
+    "your board line, the git status of your workplace), then carry on from there."
+)
+LAUNCH_TIMEOUT_S = 60
+
+
+def _member_target(start: str | Path | None, who: str, env: Any) -> Target:
+    """A role key goes through ``target``; a member slug or name names that member, its role the
+    role key it holds (else ``specialist``)."""
+    path, crew = _crew(start)
+    if who in crewlib.ROLE_KEYS or who in (crew.get("roles") or {}):
+        return target(start, who, env)
+    found = crewlib.member(crew, who)
+    if found is None:
+        raise StartError(f"{who} is neither a role key nor a member of {path}")
+    slug, entry = found
+    held = [r for r, s in (crew.get("roles") or {}).items() if s == slug]
+    if held:
+        return target(start, held[0], env)
+    try:
+        human = (crewlib.current_human(crew, env, path.parent) or ("", {}))[0]
+    except crewlib.CrewError as exc:
+        raise StartError(str(exc)) from exc
+    name = crewlib.display_name(crew, slug, human) or entry["name"]
+    return Target(path, crew, human, {}, "specialist", slug, entry, name)
+
+
+def launch_command(
+    start: str | Path | None,
+    who: str,
+    brief: str | None = None,
+    fresh: bool = False,
+    consult: bool = False,
+    env: Any = None,
+    sessions: Any = None,
+) -> tuple[list[str], dict[str, str], Path, dict, Path]:
+    """(argv, environment, settings file, settings, cwd) that start ``who`` in the background, the way ``we-worker
+    --bg`` starts a worker: ``claude --bg -n <name> --settings <file>``, the start's variables in the
+    settings' ``env`` (a ``--bg`` session runs in the daemon's environment, not this one), every
+    ``CLAUDE*`` variable of the caller dropped. A pinned member starts through ``$WCLAUDE_PIN``
+    (refused when unset). ``RunningError`` while it runs: steer it with SendMessage instead."""
+    env = os.environ if env is None else env
+    t = _member_target(start, who, env)
+    row = running(t.name, sessions)
+    if row:
+        raise RunningError(_runs_already(t.name, row) + f"; SendMessage to {t.name} instead")
+    try:
+        place = crewlib.workplace_path(t.path, t.crew, t.slug)
+    except crewlib.CrewError as exc:
+        raise StartError(str(exc)) from exc
+    text = READ_STATE if brief is None else brief
+    if not text.strip():
+        raise StartError("the brief is blank; nothing started")
+    settings = {
+        "env": {
+            "WESIDE_COMPANION": t.name,
+            # a consultation answers one question and ends (L0 §Sessions); a companion is a master
+            "WE_ROLE": "worker" if consult else "master",
+            "WE_ROLE_ID": t.role if t.role in crewlib.ROLE_KEYS else "",
+            "WE_HUMAN": t.human,
+            "WE_START": "",
+            "WE_WORKER_STARTER": "",
+            "WE_STORY_KEY": "",
+        }
+    }
+    base = ["claude"]
+    if t.member.get("pin"):
+        if not env.get("WCLAUDE_PIN"):
+            raise StartError(f"the crew pins {t.name}, but WCLAUDE_PIN is not set")
+        base = shlex.split(str(env["WCLAUDE_PIN"]))
+    try:
+        safe = worker_supervisor.safe_name(t.name)
+    except worker_launch.LaunchError as exc:
+        raise StartError(str(exc)) from exc
+    # the worker's settings path: worker_supervisor.py gc ages it out once the session is gone
+    settings_file = worker_supervisor.state_dir() / f"{safe}.settings.json"
+    argv = [*base, "--bg", "-n", t.name, "--settings", str(settings_file)]
+    if (t.crew.get("launch") or {}).get("allow_bypass"):
+        argv.append("--allow-dangerously-skip-permissions")
+    sid = "" if fresh else last_session(t.name, place, projects_dir(env))
+    if sid:
+        argv += ["--resume", sid]
+    argv.append(text)
+    child = {k: v for k, v in env.items() if not k.startswith("CLAUDE")}
+    return argv, child, settings_file, settings, place
+
+
+def launch(
+    start: str | Path | None,
+    who: str,
+    brief: str | None = None,
+    fresh: bool = False,
+    consult: bool = False,
+    env: Any = None,
+    sessions: Any = None,
+    runner: Any = subprocess.run,
+) -> str:
+    argv, child, settings_file, settings, place = launch_command(
+        start, who, brief, fresh, consult, env, sessions
+    )
+    settings_file.parent.mkdir(parents=True, exist_ok=True)
+    settings_file.write_text(json.dumps(settings, indent=2) + "\n")
+    try:
+        done = runner(argv, cwd=str(place), env=child, check=False, timeout=LAUNCH_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise StartError(f"{argv[0]} --bg failed: {exc}") from exc
+    if done.returncode != 0:
+        raise StartError(f"{argv[0]} --bg exited {done.returncode}; nothing started")
+    name = argv[argv.index("-n") + 1]
+    return f"{name} starts in the background in {place}; steer it with SendMessage to {name}"
+
+
+def _launch(start: str | None, rest: list[str]) -> int:
+    args = [a for a in rest if not a.startswith("--")]
+    for flag in ("--from", "--brief"):
+        if flag in rest[:-1]:
+            args.remove(rest[rest.index(flag) + 1])
+    if len(args) != 1:
+        print("start: launch takes one role key or member", file=sys.stderr)
+        return 2
+    brief = None
+    if "--brief" in rest[:-1]:
+        try:
+            brief = Path(rest[rest.index("--brief") + 1]).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise StartError(f"brief not readable: {exc}") from exc
+    print(launch(start, args[0], brief, "--fresh" in rest, "--consult" in rest))
+    return 0
+
+
+VERBS = {
+    "plan": _plan,
+    "side": _side,
+    "roster": _roster,
+    "check": _check,
+    "restore": _restore,
+    "launch": _launch,
+}
 
 
 def main(argv: list[str] | None = None) -> int:

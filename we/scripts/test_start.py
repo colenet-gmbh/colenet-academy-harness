@@ -258,3 +258,65 @@ def test_roster_lists_every_companion_with_roles_human_and_state(tmp_path):
         "Ada: product · start: wclaude --start --role product",
         "Lea: coordinator · start: wclaude --start --role coordinator",
     ]
+
+
+# --- launch: a member's session in the background ------------------------------------------------
+
+
+class Ran:
+    def __init__(self, code=0):
+        self.code, self.calls = code, []
+
+    def __call__(self, argv, **kw):
+        self.calls.append((argv, kw))
+        return subprocess.CompletedProcess(argv, self.code)
+
+
+def test_launch_starts_a_member_in_the_background_with_its_settings(tmp_path, monkeypatch):
+    root = repo(tmp_path)
+    monkeypatch.setenv("WE_WORKER_STATE_DIR", str(tmp_path / "state"))
+    brief = "Question for Ada: is the wording right?"
+    env = {
+        "HOME": str(tmp_path),
+        "CLAUDE_CONFIG_DIR": "/pinned",
+        "CLAUDE_CODE_X": "1",
+        "PATH": "/bin",
+    }
+    ran = Ran()
+    out = start.launch(root, "Ada", brief, False, True, env, no_agents, ran)
+    argv, kw = ran.calls[0]
+    settings = tmp_path / "state" / "Ada.settings.json"
+    assert argv == ["claude", "--bg", "-n", "Ada", "--settings", str(settings), brief]
+    assert kw["cwd"] == str(root) and kw["env"] == {"HOME": str(tmp_path), "PATH": "/bin"}
+    doc = json.loads(settings.read_text())["env"]
+    assert doc["WESIDE_COMPANION"] == "Ada" and doc["WE_ROLE"] == "worker"
+    assert doc["WE_ROLE_ID"] == "product" and doc["WE_START"] == ""
+    assert out.endswith("steer it with SendMessage to Ada")
+
+
+def test_launch_by_role_pins_resumes_and_reads_state_by_default(tmp_path, monkeypatch):
+    root = repo(tmp_path)
+    monkeypatch.setenv("WE_WORKER_STATE_DIR", str(tmp_path / "state"))
+    cfg = tmp_path / "cfg"
+    transcript(cfg / "projects", root, "last", [{"type": "agent-name", "agentName": "Lea"}], 100)
+    env = {"CLAUDE_CONFIG_DIR": str(cfg), "WCLAUDE_PIN": "cswap run main --"}
+    ran = Ran()
+    start.launch(root, "coordinator", None, False, False, env, no_agents, ran)
+    argv = ran.calls[0][0]
+    assert argv[:4] == ["cswap", "run", "main", "--"]
+    assert argv[-3:] == ["--resume", "last", start.READ_STATE]
+    ran = Ran()
+    start.launch(root, "coordinator", None, True, False, env, no_agents, ran)
+    assert "--resume" not in ran.calls[0][0]
+    with pytest.raises(start.StartError, match="WCLAUDE_PIN is not set"):
+        start.launch(root, "Lea", None, True, False, {}, no_agents, Ran())
+
+
+def test_launch_refuses_a_running_member_and_names_it_for_sendmessage(tmp_path):
+    root = repo(tmp_path)
+    with pytest.raises(
+        start.RunningError, match=r"Ada runs already .*; SendMessage to Ada instead"
+    ):
+        start.launch(root, "po", None, True, False, {}, lambda: [{"name": "Ada", "pid": 7}], Ran())
+    with pytest.raises(start.StartError, match="neither a role key nor a member"):
+        start.launch(root, "nobody", None, True, False, {}, no_agents, Ran())

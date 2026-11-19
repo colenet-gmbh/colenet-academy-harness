@@ -32,8 +32,9 @@ You own the question queue and keep the board, the tickets and git telling the s
   none.
 - Past 250 k context, run `/compact` at your next natural boundary (a sweep's end).
 - Several humans ({me} is yours): run `board.py signals` on every sweep and route a Selected event to its epic's master within one sweep.
-- After a release that changes the L0, a role card or a hook: roll-call each session's plugin
-  version and restart each one behind at its next natural break, never mid-story.
+- At start and on every sweep, run `session_refresh.py list --due` and carry out its `plan <name>`
+  for each due session at its next natural break, never mid-story
+  (`references/companion-session.md` § Refresh).
 
 ## You never
 

@@ -95,7 +95,8 @@ and starts with ``--apply``; ``/we:start`` offers it), ``merge`` (who arms a rea
 every ready PR, so ``arm_pr.sh`` refuses and the session's step is ``gh pr ready``); ``hold_labels``:
 a list of label names, a PR carrying one is merged by a human only, ``arm_pr.sh`` refuses it and
 ``conflict_gate.py`` names no re-arm for it), ``release``, ``cadences``,
-``files``, ``state_dir`` (the folder of the crew's board family and
+``files``, ``sessions`` (``refresh_after_days``, default 3: a session started longer ago is
+behind whatever changed, ``session_refresh.py``), ``state_dir`` (the folder of the crew's board family and
 ``l0-served.jsonl``: a ``~`` path or one relative to the crew file's directory in the repo's main
 worktree, so every worktree names the same folder; null, the default,
 is ``~/.claude/we-state``; ``WE_STATE_DIR`` wins over it, see ``state_dir()``), ``flow`` (the flow log: ``log_dir`` (null = no sampler bound, every
@@ -346,6 +347,9 @@ DEFAULTS: dict[str, Any] = {
         "goal_file": "monthly",
     },
     "files": {"goals": None, "dod": None, "verify": None},
+    # refresh_after_days: a session started that many days ago is offered a fresh start
+    # (session_refresh.py), whatever changed
+    "sessions": {"refresh_after_days": 3},
     "flow": {"log_dir": None, "stale_min": 15, "starter_wait_min": 30, "urgent_commands": []},
     "worker_rights": {
         "repos": [],

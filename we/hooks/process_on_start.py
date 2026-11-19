@@ -8,8 +8,11 @@ board path is a crew value). A crew with unknown keys renders with the line
 ``<labels.crew_unknown_keys>: <keys>`` first. The session kind (``crew.session_kind``) picks
 the text ``scripts/render_process.py`` renders: a worker (``agent_type``, a process worker, or
 ``WE_ROLE=worker`` without a pin) the short form ``process/L0-worker.md``, every other session
-(a consultation too) the L0 ``process/L0.md``. ``source`` is not read, so every source gets the
-same text. Claude Code replaces a hook output over its cap (``AUTHORING.md`` § Measured facts) by
+(a consultation too) the L0 ``process/L0.md``. ``source`` is read once: after a compaction
+(``source: compact``) in a session whose plugin is older than the one installed for its cwd, the
+installed version's own copy of this hook renders (``plugin_install.handover``, which also logs the
+serve) and its text follows the line ``plugin_install.stale_line``; an unreadable folder or a failing
+copy falls back to this version's text, silently. Every other source gets the same text. Claude Code replaces a hook output over its cap (``AUTHORING.md`` § Measured facts) by
 a preview, so the text is gated at ``render_process.BUDGET``: over it, nothing is printed, one
 stderr line names the template to read, exit 1.
 
@@ -38,9 +41,11 @@ except ImportError:  # pragma: no cover - no flock on Windows
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import crew as crewlib
+import plugin_install
 import render_process
 
 LOG_NAME = "l0-served.jsonl"
+HANDOVER_TIMEOUT_S = 10  # of this hook's 15 s in hooks.json: its own render still fits after
 LOG_KEEP = 1_000
 
 
@@ -116,6 +121,12 @@ def _locked(lock: Path):
 def output(hook_input: dict, environ: dict | None = None) -> tuple[str | None, str | None]:
     """(additionalContext or None, stderr line or None)."""
     env = os.environ if environ is None else environ
+    handed = plugin_install.handover("process_on_start.py", hook_input, env, HANDOVER_TIMEOUT_S)
+    if handed:
+        text, old, new = handed
+        full = f"{plugin_install.stale_line(old, new)}\n\n{text}"
+        # the newer L0 whole beats the line: over the budget Claude Code shows only a preview
+        return (full if len(full) <= render_process.BUDGET else text), None
     cwd = hook_input.get("cwd") or os.getcwd()
     crew_path = None
     try:
