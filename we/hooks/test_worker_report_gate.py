@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 HOOK = Path(__file__).resolve().parent / "worker_report_gate.py"
 
 
@@ -93,3 +95,54 @@ def test_the_lead_working_in_the_worker_tree_passes(tmp_path):
 
 def test_outside_a_repo_passes(tmp_path):
     assert _run(tmp_path, tmp_path, [_prompt("brief")]) is None
+
+
+# ---------------------------------------------------------------- the end line (PR owner: worker)
+
+OWNER_BRIEF = '## Goal\nRun Skill("we:develop") for ABC-1.\n## Output\nPR owner: worker\n'
+
+
+def _report(text):
+    block = {
+        "type": "tool_use",
+        "id": "u1",
+        "name": "SendMessage",
+        "input": {"to": "LEAD-1", "message": text},
+    }
+    return {"type": "assistant", "message": {"content": [block]}}
+
+
+@pytest.mark.parametrize(
+    "last",
+    [
+        "armed: #41 on 3fa9c1d2e4",
+        "held: #41 (one-way money)",
+        "parked: feat/ABC-1-x (time limit; resume: we-worker ABC-1 --resume ABC-1)",
+    ],
+)
+def test_a_pr_owner_report_with_an_end_line_passes(tmp_path, last):
+    wt = _repo(tmp_path)
+    entries = [_prompt(OWNER_BRIEF), _report(f"branch: x · commits: 2\n{last}\n"), _result()]
+    assert _run(tmp_path, wt, entries) is None
+
+
+@pytest.mark.parametrize("last", ["done: #41 merged", "armed: #41", "held: #41"])
+def test_a_pr_owner_report_without_an_end_line_blocks(tmp_path, last):
+    wt = _repo(tmp_path)
+    entries = [_prompt(OWNER_BRIEF), _report(f"branch: x\n{last}"), _result()]
+    out = _run(tmp_path, wt, entries)
+    assert out["decision"] == "block" and "armed: <PR> on <sha>" in out["reason"]
+
+
+def test_without_the_brief_line_any_report_passes(tmp_path):
+    wt = _repo(tmp_path)
+    entries = [_prompt("## Goal\nRun it.\n"), _report("branch: x\nblockers: none"), _result()]
+    assert _run(tmp_path, wt, entries) is None
+
+
+def test_the_brief_file_of_a_template_launch_carries_the_line(tmp_path):
+    wt = _repo(tmp_path)
+    brief = wt / ".git" / "we-brief.md"
+    brief.write_text(f"Lead: LEAD-1 — send your report.\n\n{OWNER_BRIEF}")
+    entries = [_prompt(f"Read {brief} and follow it."), _report("blockers: none"), _result()]
+    assert _run(tmp_path, wt, entries)["decision"] == "block"
