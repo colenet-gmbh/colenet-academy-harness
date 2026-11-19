@@ -869,7 +869,9 @@ def _arm_argv(argv: list[str]) -> list[str]:
     return []
 
 
-def _arm_refusal(argv: list[str], slug: str | None, branch: str, cwd: str | None) -> str | None:
+def _arm_refusal(
+    argv: list[str], slug: str | None, branch: str, cwd: str | None, deadline: float | None = None
+) -> str | None:
     run = _arm_argv(argv)
     repo = _flag_value(run[1:], "--repo", "-R")
     if repo and slug_of(repo) != slug:
@@ -884,7 +886,7 @@ def _arm_refusal(argv: list[str], slug: str | None, branch: str, cwd: str | None
         k += 1
     if selector is None:
         return "arm_pr.sh without a PR"
-    return _own_pr_refusal(selector, slug, branch, cwd)
+    return _own_pr_refusal(selector, slug, branch, cwd, deadline)
 
 
 def _thread_refusal(args: list[str]) -> str | None:
@@ -939,7 +941,7 @@ def right_refusal(  # noqa: PLR0911, PLR0912
     if right == "push":
         return _push_refusal(argv, key, cwd)
     if right == "arm":
-        return _arm_refusal(argv, slug, branch, cwd)
+        return _arm_refusal(argv, slug, branch, cwd, deadline)
     args, global_repo = _gh_split(argv)
     named = global_repo or _repo_flag(args)
     if named and slug_of(named) != slug:

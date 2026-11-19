@@ -840,3 +840,5 @@ def test_a_spent_hook_deadline_refuses_every_gated_gh_read(world):
     spent = time.monotonic() - 1
     reason = wr.right_refusal(argv, "pr_edit", rights, KEY, repo, "worker", spent)
     assert reason and "ran past the worker gate's" in reason, reason
+    arm = wr.right_refusal(["arm_pr.sh", "7"], "arm", rights, KEY, repo, "worker", spent)
+    assert arm and "ran past the worker gate's" in arm, arm
