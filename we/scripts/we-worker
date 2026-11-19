@@ -589,9 +589,11 @@ if [[ -n "$timer" ]]; then
   fi
 fi
 
-# The worker's rights and never-list as its settings file, the timer's hook in it.
+# The worker's rights and never-list as its settings file, the timer's hook in it; the brief decides
+# whether the ticketing plugin loads (`worker_launch.py ticketing_unneeded`), read from the worker's
+# own config dir (the global login, without CLAUDE_CONFIG_DIR).
 settings_file="${WE_WORKER_STATE_DIR:-$HOME/.claude/we-state/workers}/$name.settings.json"
-python3 "$wl" settings --repo "$PWD" --key "$key" --name "$name" --out "$settings_file" ${hook:+--session-start "$hook"} >/dev/null ||
+printf '%s' "$brief" | env -u CLAUDE_CONFIG_DIR python3 "$wl" settings --repo "$PWD" --key "$key" --name "$name" --out "$settings_file" --brief-stdin ${hook:+--session-start "$hook"} >/dev/null ||
   { echo "we-worker: the settings of $name could not be written; no worker started" >&2; exit 2; }
 extra+=(--settings "$settings_file")
 

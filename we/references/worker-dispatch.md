@@ -168,6 +168,12 @@ frontmatter (`needs: [<plugin or MCP server>, …]`; `ticketing` is the project'
 `references/ticketing.md`), and the refusal names the skill and the plugin. A brief needs no
 `Needs:` line for what its skills declare.
 
+A brief that names `/we:<skill>`s (directly or in the file of its `Read <path> and follow it.`
+line), none of which needs `ticketing`, starts without the ticketing plugin (`enabledPlugins`
+false, else `deniedMcpServers`; `worker_launch.py ticketing_unneeded`): its tools cost every cold
+start about 2.7k tokens, and most build and fix workers never touch a ticket; `Needs: ticketing`
+keeps it, a brief without a skill keeps every tool.
+
 Every variable the launcher decides stands in the file's `env`, a cleared one as `""`
 (`worker_rights.worker_env`): a `--bg` session inherits the daemon's environment, never the
 caller's shell.

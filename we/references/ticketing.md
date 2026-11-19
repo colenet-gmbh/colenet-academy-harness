@@ -11,7 +11,8 @@ description: Reading a ticket with its comments and moving it safely. Shared by 
   prints `carry:`. Two keys, two readers: the skills read `ticketing`, `board.py` reads `board.ticketing`.
   A skill that reads or moves a ticket declares `needs: [ticketing]` in its frontmatter;
   `worker_launch.py` resolves it to `ticketing.plugin`, else to its default for `ticketing.tool`,
-  and refuses a worker whose context turns that plugin off (`references/worker-dispatch.md`).
+  refuses a worker whose context turns that plugin off, and starts one whose skills declare no
+  such need without it (`references/worker-dispatch.md`).
 - An Atlassian MCP is recognised by its tool names, whatever the server prefix: Rovo
   (`getJiraIssue`, `searchJiraIssuesUsingJql`, `transitionJiraIssue`, `addOrEditJiraIssueComment`;
   e.g. the plugin `atlassian@claude-plugins-official`) is preferred, the community server
