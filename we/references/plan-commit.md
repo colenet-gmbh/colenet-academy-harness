@@ -38,8 +38,7 @@ Every verb that commits a planning document follows this section: `/we:epic`, `/
    git -C <scratch> commit -m "<conventional subject>" && git -C <scratch> log --oneline -1 -- <file>
    ```
 
-   A commit that did not move HEAD was aborted by an auto-fixing hook: `add` again and commit again,
-   never `--amend`.
+   A commit that did not move HEAD: `references/session-traps.md` (Check HEAD after every commit).
 5. **Land.** `plans.land` in the committed `.weside/config.json`
    (`git show origin/<default>:.weside/config.json`, the copy `plan_push.py` reads too; an uncommitted
    edit counts for neither) picks the way: `push` or `pr` (default; also every repo without the key).

@@ -274,4 +274,5 @@ not compared. A member without a skill gets a stub from `templates/companion-ski
 first start asks it to fill the stub and tell the coordinator in one line (for HR).
 
 Accounts and their rotation, launchers, remote control, secrets and how they are set, the concrete
-people and the heavy-gate lock of a repo live in the workspace's own instruction file, never here.
+people and the heavy-gate lock of a repo live in the workspace's own instruction file, never here: this
+file ships in a public plugin that serves every workspace.

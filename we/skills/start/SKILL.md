@@ -11,7 +11,7 @@ flow is owned by `${CLAUDE_PLUGIN_ROOT}/references/companion-session.md` § Laun
 1. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/start.py check` and relay its four lines.
    - A `FAIL human`, `FAIL companion` or `FAIL WE_ROLE` means a wrong start: tell the user to `/exit` and run
      `wclaude --start` from a shell; do nothing else in this session.
-   - A `FAIL pin` names the fix (`/we:pin on|off`); offer it, never run it unasked.
+   - A `FAIL pin` names the fix (`/we:pin on|off`); offer it, never unasked: it ends this session.
 2. Restore, only when this session resumed (its transcript holds turns before this one) or the user
    names a crash: run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/start.py restore`.
    - Exit 1: the crew sets no `launch.restore`; say so in one line and go on.

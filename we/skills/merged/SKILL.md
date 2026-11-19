@@ -13,7 +13,7 @@ needs: [ticketing]
 2. `we-worker close <KEY> --pr <N>` per story (§ 4) tears down and moves; anything foreign, dirty or unmerged stays and is named.
 3. Carry each `carry:` line to the ticket (§ 5) and read the status back.
 4. The report lists only what someone still has to do, one line each. It is not a retrospective.
-5. Never merge, release, or file a ticket on your own. Follow-ups are named in the report, not created.
+5. A release is a protected action, not yours; follow-ups are named in the report, not filed (`${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md` § Dev-only worker contract).
 
 ## Invocation
 
@@ -113,8 +113,6 @@ silently. If the workflow rejects the move, report it and continue.
 - **Finish line:** the line's trigger fires where Done is set (`/we:accept` § 4, the coordinator's
   sweep), never here. Once every other line key is Done and this merge is the last one, start no
   new story of the epic: the line is built (`epic-plan.md` § Finish line).
-- **No state file.** Run state lives in the PR and the ticket, and what is still open lives in
-  the report (owner decision 2026-09-25).
 - **Board:** in a repo with a crew, `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/board.py close-merged` drops the merge
   question on this PR from the owner's queue.
 - **Repo close-out:** run whatever the repo's `.weside/orchestrate.md` § *Close-out after a merge* names.

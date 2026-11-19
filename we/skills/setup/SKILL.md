@@ -227,7 +227,7 @@ the crew process L0 (`${CLAUDE_PLUGIN_ROOT}/process/L0.md`) and `${CLAUDE_PLUGIN
 
 1. **Store skeleton**: `.weside/optimization/` with `CHARTER.md` (frontmatter `last_optimize:`
    empty; sections Goal, Decisions, Findings, Next steps), `LEDGER.md` (the ledger table header),
-   and `inbox/.gitkeep`. Never in the plugin's own checkout. A re-run removes an
+   and `inbox/.gitkeep`. A re-run removes an
    `.weside/optimization/inbox/*.md merge=union` line from `.gitattributes` and says so (why:
    `optimization-store.md` § Inbox entry).
 2. **Authoring rule**: copy `${CLAUDE_PLUGIN_ROOT}/references/instruction-authoring.md` to
