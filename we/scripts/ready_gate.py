@@ -627,11 +627,11 @@ class Gate:
             ]
 
     def _oracle_line(self, text: str) -> None:
-        """Check 9b: warn now what the PR hook refuses at `gh pr create`."""
+        """Check 9b: warn now what the PR hook flags at `gh pr create`."""
         problem = verification_gate._receipt_problem(text)
         if problem is not None:
             self.warnings.append(
-                f"warning: {self.plan}: ## Verification: the PR hook will refuse this plan's "
+                f"warning: {self.plan}: ## Verification: the PR hook will flag this plan's "
                 f"block: {problem} The AC classes receipt, ci and walk belong in the AC markers; "
                 f"the `**Oracle:**` line names how the build was observed "
                 f"({verification_gate._MENU}); see references/story-plan.md § Two vocabularies "
