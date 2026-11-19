@@ -78,8 +78,9 @@ Usage:
                                                    writes its checked answer to <file>, prints one
                                                    line naming it; 2 = refused (no option, failed
                                                    command, a critical worker on a non-Claude account)
-  worker_launch.py account-need < brief            prints `uncritical` for a brief line
-                                                   `Account: uncritical`, else `critical`
+  worker_launch.py account-need < brief            prints `uncritical` when one of the brief's
+                                                   first ten lines is `Account: uncritical`,
+                                                   else `critical`
   worker_launch.py tree --repo <dir> --name <n> [--branch <b>] [--auto | --main-checkout]
                                                    creates the worker's own worktree beside the
                                                    main checkout (`add_tree`) and prints its path;
@@ -936,9 +937,6 @@ ACCOUNT_LINE_RE = re.compile(r"^\s*Account:\s*uncritical\b", re.MULTILINE | re.I
 ACCOUNT_HEAD_LINES = 10
 
 
-# a settings file is no place for a credential: a secret reaches the worker only through
-# `token_command`, which becomes `apiKeyHelper` and runs inside the worker
-# (a whole `_`-separated segment: `MAX_OUTPUT_TOKENS` or `API_KEY_HELPER_TTL_MS` are settings, not secrets)
 # `we-worker` drops every CLAUDE* variable so a worker never books on the starter's (pinned)
 # account, and WE_*/WESIDE_* steer the crew machinery: an account's `env` may not set them back.
 # `CLAUDE_CODE_*` stays open: those are the CLI's settings (provider switch, output limits).
@@ -949,8 +947,12 @@ def _reserved_env(name: str) -> bool:
     return upper.startswith("CLAUDE") and not upper.startswith("CLAUDE_CODE_")
 
 
+# a settings file is no place for a credential: a secret reaches the worker only through
+# `token_command`, which becomes `apiKeyHelper` and runs inside the worker
+# (a whole `_`-separated segment: `MAX_OUTPUT_TOKENS` or `API_KEY_HELPER_TTL_MS` are settings, not
+# secrets, and the CLI's `CLAUDE_CODE_SKIP_*_AUTH` flags carry none)
 SECRET_NAME_RE = re.compile(
-    r"(?:^|_)(?:KEY|APIKEY|TOKEN|SECRET|PASSWORD|PASSWD|PAT|AUTH|CREDENTIALS?)(?:_|$)(?!HELPER)",
+    r"^(?!CLAUDE_CODE_SKIP_\w+_AUTH$).*?(?:^|_)(?:KEY|APIKEY|TOKEN|SECRET|PASSWORD|PASSWD|PAT|AUTH|CREDENTIALS?)(?:_|$)(?!HELPER)",
     re.IGNORECASE,
 )
 
@@ -1037,7 +1039,7 @@ def _checked_account(chosen: object, account: str, need: str) -> dict:
         raise LaunchError(
             f"{ACCOUNTS_KEY} chose {name} (kind {kind}) for a critical worker; a critical "
             f"worker runs only on a {CLAUDE_KIND} account (mark the brief `Account: uncritical` "
-            "or name a claude account)",
+            "in its first ten lines, or name a claude account)",
             2,
         )
     doc = {"name": name, "kind": kind, "env": dict(env), "need": need}

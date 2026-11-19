@@ -1242,6 +1242,8 @@ class TestAccountAnswer:
             ("GITHUB_PAT", True),
             ("DB_PASSWD", True),
             ("PROXY_AUTH", True),
+            ("CLAUDE_CODE_SKIP_BEDROCK_AUTH", False),
+            ("CLAUDE_CODE_SKIP_VERTEX_AUTH", False),
         ],
     )
     def test_only_a_credential_name_counts_as_secret(self, name, secret):

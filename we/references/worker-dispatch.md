@@ -128,7 +128,7 @@ drops `CLAUDE_CONFIG_DIR`, so a pinned master sees the global login's sessions.
 `we-worker --account auto|<name>` asks the project's `agents.accounts_command` for the account
 (`<cmd> --need critical|uncritical`, critical unless one of the brief's first ten lines is
 `Account: uncritical`) and puts its `env` and its `token_command` as `apiKeyHelper` into that settings
-file (mode 0600), never a secret on a command line and never a `CLAUDE*` or `WE_*` variable; a critical worker on a non-Claude account refuses (`worker_launch.py choose_account`).
+file (mode 0600), never a secret on a command line and never a `CLAUDE*` (but the CLI's `CLAUDE_CODE_*`), `WE_*` or `WESIDE_*` variable; a critical worker on a non-Claude account refuses (`worker_launch.py choose_account`).
 The brake is the PreToolUse hook `hooks/worker_rights_gate.py`, which holds under `bypassPermissions`:
 in a repo the crew's `worker_rights.repos` names, a worker on its own keyed branch runs `gh pr ready`,
 `gh pr comment` on its own PR and the crew's `branch_rc` without asking; every worker is denied the

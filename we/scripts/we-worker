@@ -60,8 +60,8 @@
 #   --branch <b>  the branch of a tree the launcher creates (default feat/<name>; workers.tree: own)
 #   --account auto|<name>  the account the project's tool chooses (`.weside/config.json`
 #            `agents.accounts_command`, run as `<cmd> --need critical|uncritical [--account <name>]`;
-#            `worker_launch.py account`): the need is `critical` unless a brief line says
-#            `Account: uncritical`; the answer's `env` and `token_command` (as `apiKeyHelper`) go into
+#            `worker_launch.py account`): the need is `critical` unless one of the brief's first
+#            ten lines says `Account: uncritical`; the answer's `env` and `token_command` (as `apiKeyHelper`) go into
 #            the worker's settings file, never onto a command line; a critical worker on a non-Claude
 #            account, or --account without the option, refuses (exit 2); without --account nothing is asked
 #   --queue  (with --bg) a start the concurrency cap refuses is queued in the state dir instead: a
