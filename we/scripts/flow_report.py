@@ -3,7 +3,7 @@
 
 Usage:
   flow_report.py [--since 10d] [--until UTC] [--repo OWNER/NAME] [--json|--md] [--board FILE]
-                 [--gh-cache DIR] [--review-match REGEX]
+                 [--gh-cache DIR] [--review-match REGEX] [--from FILE]…
 
 ``--since`` takes ``<n>d``, ``<n>h`` or a UTC date ``YYYY-MM-DD``; the window ends now. ``--repo``
 defaults to the ``origin`` remote of the current directory. Plain output is an aligned table;
@@ -47,6 +47,12 @@ table is printed, 2 on a usage error.
 ``Transition writers: In Review`` counts the window's moves to In Review by their ``by``: ``we-worker
 close`` is the one writer (``worker_close.py``), any other writer bypassed it.
 
+Last, the section ``Flow efficiency`` prints story, master and worker efficiency, the
+group ``Waiting by kind``, the locks held and every gap of its sources, all as the strings of
+``flow_intervals.format_summary`` (the flow page prints the same); ``--from FILE`` (repeatable)
+adds a file of foreign interval rows (``flow_intervals.py`` § Row contract). Without a board it
+prints ``n/a`` like the other board rows.
+
 After the table, ``Writers per transition`` lists per transition kind (``from→to``) which
 sessions (the row's ``by``) wrote it in the window: a transition the report trusts has one writer.
 """
@@ -69,7 +75,18 @@ from typing import Any, Callable
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import crew as crew_mod  # noqa: E402
+import flow_intervals  # noqa: E402
 import lens_verdict  # noqa: E402
+import worker_supervisor  # noqa: E402
+from flow_intervals import (  # noqa: E402  (one home: the lower module)
+    hours,
+    locate_board,
+    p90,
+    parse_since,
+    parse_ts,
+    question_waits,
+    read_jsonl,
+)
 
 ACTIONS_APP_ID = 15368  # the GitHub Actions app: its check suites are workflow runs
 RED = {"FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"}
@@ -130,62 +147,12 @@ class SourceMissingError(Exception):
 # --- small helpers ------------------------------------------------------------------------------
 
 
-def parse_ts(value: Any) -> datetime | None:
-    """A UTC datetime from the logs' ISO forms (`Z`, milliseconds, minutes only), else None."""
-    if not isinstance(value, str) or not value:
-        return None
-    text = value.strip().replace("Z", "+00:00")
-    try:
-        ts = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
-
-
-def parse_since(text: str, now: datetime) -> datetime:
-    found = re.fullmatch(r"(\d+)([dh])", text.strip())
-    if found:
-        n = int(found.group(1))
-        return now - (timedelta(days=n) if found.group(2) == "d" else timedelta(hours=n))
-    try:
-        return datetime.strptime(text.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    except ValueError:
-        raise argparse.ArgumentTypeError(
-            f"--since {text!r}: expected <n>d, <n>h or YYYY-MM-DD"
-        ) from None
-
-
-def p90(values: list) -> float | None:
-    """Nearest-rank 90th percentile."""
-    if not values:
-        return None
-    ordered = sorted(values)
-    return ordered[max(0, math.ceil(0.9 * len(ordered)) - 1)]
-
-
 def med(values: list) -> float | None:
     return statistics.median(values) if values else None
 
 
-def hours(a: datetime, b: datetime) -> float:
-    return (b - a).total_seconds() / 3600
-
-
 def pct(part: float, whole: float) -> str:
     return f"{100 * part / whole:.0f} %" if whole else "-"
-
-
-def read_jsonl(path: Path) -> list:
-    out = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            try:
-                item = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(item, dict):
-                out.append(item)
-    return out
 
 
 def row(name, n=None, median=None, p90_=None, value="", source="", unit=""):
@@ -983,15 +950,10 @@ def question_rows(
             source=f"{src}: posted lines by cause",
         )
     ]
-    first: dict = {}
-    for a in answers:
-        ts = parse_ts(a.get("ts"))
-        if ts and isinstance(a.get("id"), str) and a.get("answer") != "read":
-            first[a["id"]] = min(first.get(a["id"], ts), ts)
     waits = [
-        hours(ts, first[q["id"]])
-        for ts, q in posted
-        if q.get("id") in first and first[q["id"]] >= ts
+        hours(ts, answered)
+        for ts, _q, answered in question_waits(questions, answers)
+        if ts >= since and answered is not None
     ]
     rows.append(
         row(
@@ -1189,13 +1151,109 @@ def build(
 
     rows += ready_rows(root, since, None)
     rows += log_rows(board, state, board_why, since, now)
+    flow, summary = flow_rows(
+        board, crew, since, now, getattr(args, "from_", None) or [], board_why
+    )
     return {
         "repo": repo,
         "since": since.strftime("%Y-%m-%dT%H:%MZ"),
         "until": now.strftime("%Y-%m-%dT%H:%MZ"),
         "rows": rows,
         "writers": writers(transitions, since) if transitions is not None else None,
+        "flow_efficiency": {"rows": flow, "summary": summary},
     }
+
+
+FLOW_SRC = "flow_intervals: sampler + board logs + worker markers"
+
+
+def flow_rows(board, crew, since, until, foreign: list, board_why) -> tuple:
+    """`(rows, formatted summary or None)` of the section `Flow efficiency`: the strings of
+    `flow_intervals.format_summary`, the formatter the flow page prints too."""
+    if board is None and not foreign:
+        return [na("Flow efficiency", board_why or "board log not found: no crew file")], None
+    log_dir, tz = flow_intervals.settings_for(crew)
+    built = flow_intervals.build(
+        board, worker_supervisor.state_dir(), log_dir, tz, crew, since, until, foreign
+    )
+    fmt = flow_intervals.format_summary(flow_intervals.summary(built))
+    rows = []
+    for name, part, label in (
+        ("stories", fmt["stories"], "Story efficiency"),
+        ("masters", fmt["masters"], "Master efficiency"),
+        ("workers", fmt["workers"], "Worker efficiency"),
+    ):
+        rows.append(
+            row(
+                f"{label} (ratio)",
+                part["n"],
+                part["median"],
+                part["p90"],
+                value=part["window"],
+                source=FLOW_SRC,
+            )
+        )
+        for x in part["rows"]:
+            if name == "stories":
+                rows.append(
+                    row(
+                        f"{label}: {x['key']}",
+                        value=(
+                            f"{x['ratio']} = working {x['working_h']} h / lead {x['lead_h']} h, {x['sessions']} sessions"
+                        ),
+                        source="transitions + sampler",
+                    )
+                )
+            elif name == "masters":
+                rows.append(
+                    row(
+                        f"{label}: {x['who']}",
+                        value=(
+                            f"{x['ratio']} = working {x['working_h']} h / alive {x['alive_h']} h; "
+                            f"others wait on it {x['waited_on_h']} h"
+                        ),
+                        source="sampler + waits",
+                    )
+                )
+            else:
+                rows.append(
+                    row(
+                        f"{label}: {x['who']}",
+                        value=(
+                            f"{x['ratio']} = working {x['working_h']} h / {x['span_h']} h ({x['start']}, "
+                            f"stop = last probe, ±5 min); blocked {x['blocked_h']} h; "
+                            f"idle after end {x['idle_after_end_h']} h; starter {x['starter']}"
+                        ),
+                        source="sampler + marker",
+                    )
+                )
+    for kind, v in fmt["waiting"].items():
+        if v["n"] == "n/a":
+            rows.append(na(f"Waiting by kind: {kind}", "no source yet"))
+            continue
+        rows.append(
+            row(
+                f"Waiting by kind: {kind}",
+                v["n"],
+                v["median"],
+                v["p90"],
+                unit="h",
+                value=f"{v['hours']} h",
+                source=FLOW_SRC,
+            )
+        )
+    for x in fmt["locks"]:
+        rows.append(
+            row(
+                f"Lock held: {x['lock']} by {x['holder']}",
+                x["n"],
+                value=f"{x['hours']} h, in no ratio",
+                source="sampler locks",
+            )
+        )
+    for g in built["gaps"]:
+        rows.append(na(f"Flow gap: {g['source']}", g["reason"]))
+    return rows, fmt
 
 
 def read_required(repo: str | None, reader: Callable[[str], list] | None) -> tuple:
@@ -1231,18 +1289,6 @@ def fetch_github(
         return None, str(exc)
     except (KeyError, TypeError, ValueError) as exc:
         return None, f"gh: unexpected answer ({exc})"
-
-
-def locate_board(args, cwd: Path, crew_path: Path | None, crew: dict | None) -> tuple:
-    """`(board file, state dir)`: `--board` and its folder, else the crew's board
-    (`crew.resolve_board`) and state dir, else `(None, None)`: without a crew the
-    default board belongs to no repo."""
-    if args.board:
-        board = Path(args.board).expanduser()
-        return board, board.parent
-    if crew_path is None:
-        return None, None
-    return crew_mod.resolve_board(cwd), crew_mod.state_dir(crew_path, crew)
 
 
 def log_rows(board: Path | None, state: Path | None, board_why, since, now) -> list:
@@ -1301,6 +1347,11 @@ def render_text(report: dict) -> str:
     for line in table:
         out.append("  ".join(c.ljust(w) for c, w in zip(line, widths)) + "  " + line[-1])
     out += _writer_lines(report, "")
+    flow = [HEAD] + [cells(r) for r in report["flow_efficiency"]["rows"]]
+    widths = [max(len(line[i]) for line in flow) for i in range(len(HEAD) - 1)]
+    out += ["", "Flow efficiency", ""]
+    for line in flow:
+        out.append("  ".join(c.ljust(w) for c, w in zip(line, widths)) + "  " + line[-1])
     return "\n".join(line.rstrip() for line in out) + "\n"
 
 
@@ -1316,6 +1367,11 @@ def render_md(report: dict) -> str:
     ]
     out += ["| " + " | ".join(esc(c) for c in cells(r)) + " |" for r in report["rows"]]
     out += _writer_lines(report, "- ")
+    out += ["", "## Flow efficiency", "", "| " + " | ".join(HEAD) + " |", "|" + "---|" * len(HEAD)]
+    out += [
+        "| " + " | ".join(esc(c) for c in cells(r)) + " |"
+        for r in report["flow_efficiency"]["rows"]
+    ]
     return "\n".join(out) + "\n"
 
 
@@ -1356,6 +1412,13 @@ def main(
         "--review-match", default="review", help="regex for the review workflows (default: review)"
     )
     parser.add_argument("--until", help="the window's end, UTC YYYY-MM-DDTHH:MM (default: now)")
+    parser.add_argument(
+        "--from",
+        dest="from_",
+        action="append",
+        default=[],
+        help="a JSONL file of foreign interval rows",
+    )
     args = parser.parse_args(argv)
     if args.until:
         now = parse_ts(args.until if args.until.endswith("Z") else args.until + "Z")

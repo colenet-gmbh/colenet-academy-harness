@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -322,6 +323,9 @@ def test_no_crew_no_board_prints_github_rows_and_na(tmp_path, capsys, monkeypatc
     text = capsys.readouterr().out
     assert "n/a (board log not found: no crew file)" in text
     assert "Heads per code PR" in text
+    flow = text.split("\nFlow efficiency\n", 1)[1]
+    assert re.search(r"^Flow efficiency +n/a \(board log not found: no crew file\)", flow, re.M)
+    assert out["flow_efficiency"]["summary"] is None
 
 
 def test_missing_gh_turns_the_github_rows_into_na(tmp_path, monkeypatch):
@@ -393,6 +397,8 @@ def test_md_writes_into_the_store_or_says_why_not(tmp_path, capsys):
     text = target.read_text(encoding="utf-8")
     assert "| Heads per code PR | 3 | 2 | 2 | one head 33 % |" in text
     assert "## Writers per transition" in text
+    assert "## Flow efficiency" in text
+    assert "| Waiting by kind: waiting:ci |  |  |  | n/a (no source yet) |  |" in text
 
 
 def test_json_and_since_forms(tmp_path, capsys):
@@ -408,6 +414,12 @@ def test_json_and_since_forms(tmp_path, capsys):
         == 0
     )
     out = json.loads(capsys.readouterr().out)
+    flow = {r["row"]: r for r in out["flow_efficiency"]["rows"]}
+    assert flow["Worker efficiency (ratio)"]["value"].endswith("stop = last probe, ±5 min")
+    assert (
+        out["flow_efficiency"]["summary"]["waiting"]["waiting:ci"]["hours"]
+        == "n/a (no source yet)"
+    )
     assert out["since"] == "2026-11-08T00:00Z"
     assert out["until"] == "2026-11-10T12:00Z"
     with pytest.raises(SystemExit) as stop:
