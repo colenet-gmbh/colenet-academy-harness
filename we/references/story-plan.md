@@ -48,8 +48,8 @@ parallel_groups: []
 ## Readiness
 
 A plan is ready when `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ready_gate.py story <plan>` exits 0;
-it prints one line per gap (§ What the Ready gate reads). A plan carrying `## Open Fork` is never
-ready. An epic plan is checked with `ready_gate.py epic <epic plan>`.
+it prints one line per gap (§ What the Ready gate reads). An epic plan is checked with
+`ready_gate.py epic <epic plan>`.
 
 ## Lifecycle
 
@@ -134,8 +134,8 @@ Three lists here each cost review rounds when missing:
 ## Out of scope
 
 - <Work beyond the ticket's "done when": one named follow-up per line, with the reason it is
-  outside. Never a phase; nobody files it during the run. New visible behaviour goes to the epic's
-  `## Extensions` instead (`references/epic-plan.md` § Finish line), not into this plan.>
+  outside, not filed (`references/worker-dispatch.md` § Dev-only worker contract). New visible
+  behaviour goes to the epic's `## Extensions` instead (`references/epic-plan.md` § Finish line), not into this plan.>
 
 A story that corrects a kind of statement (claims, wording, copy across repos) lists every site in
 `## Context` before the Ready gate, from one search over all repos and languages; its done-when is

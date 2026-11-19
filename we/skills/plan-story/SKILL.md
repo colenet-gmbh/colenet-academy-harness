@@ -10,7 +10,7 @@ needs: [ticketing]
 
 You turn a ticket plus the brief you were handed into the plan at the path the brief names (default
 `<repo>/docs/plans/{TICKET}-story.md`), in the format of `${CLAUDE_PLUGIN_ROOT}/references/story-plan.md`.
-Dispatchers run you as a `we:dev-high` worker: plan-writing is a named `dev-high` case (owner 27.09.).
+Dispatchers run you as a `we:dev-high` worker: plan-writing is a named `dev-high` case (`references/worker-dispatch.md` § Choosing the worker).
 There is no user to ask. What the brief, the ticket, the decision records and the code do not settle is an Open Fork, never a guess.
 You write the plan file, for `receipt` ACs the repo's staging-check file next to it (step 3), and the token
 line in the plan (step 5), nothing else: no commit, no push, no ticket write. Shell reads (`rg`, the code graph,
@@ -31,8 +31,8 @@ report ends you.
   constraint is not a decision: "the epic didn't fund it, so I'll take the cheap one" is the rationalisation this
   rule catches.
 - **The ticket's "done when" and scope bound the plan.** Work beyond them never becomes a phase; it goes into
-  `## Out of scope` as a named follow-up. Splitting it off is not a fork, and creating a ticket or story for it is
-  never a question (owner 25.09.). New visible behaviour no AC of the ticket states goes, in the same run, as one
+  `## Out of scope` as a named follow-up. Splitting it off is not a fork; follow-ups are named, not filed
+  (`references/worker-dispatch.md` § Dev-only worker contract). New visible behaviour no AC of the ticket states goes, in the same run, as one
   entry under the epic's `## Extensions` (`references/epic-plan.md` § Finish line), never as an AC of this plan.
 - **A correction story lists every site before Ready:** `references/story-plan.md` § Out of scope.
 - **Stopping is not writing nothing.** Write the plan as far as the fork allows, keep `status: draft`, and put

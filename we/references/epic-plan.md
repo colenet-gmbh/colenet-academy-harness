@@ -111,7 +111,7 @@ it; the next commit to the epic deletes it.
 2. Worktree and commit path: `${CLAUDE_PLUGIN_ROOT}/references/plan-commit.md` (repo fact first, else a detached scratch
    worktree off the default branch, landed by push or docs PR per `plans.land`).
 3. Dispatch `Agent(subagent_type: "we:dev-high", description: "draft epic <slug>", prompt: <brief>)`.
-   Plan-writing is a named `dev-high` case (owner 27.09.2026); the session's `medium` would write it
+   Plan-writing is a named `dev-high` case (`references/worker-dispatch.md` § Choosing the worker); the session's `medium` would write it
    otherwise. A subagent writes a plan file here, never code. Brief: first line `Read <abs>/skills/epic/references/template.md and <abs>/references/epic-plan.md, then follow § Writer contract.`
    (paths as they resolve here); the absolute target path in the scratch worktree; the goal file's
    metric; every interview decision with the rejected alternative and who decided; the user's words

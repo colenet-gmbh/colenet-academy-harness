@@ -19,7 +19,7 @@ the user is the whole instruction: ask nothing the open-items list already decid
    `wip/<branch without its type prefix>` and in the worktree's last commit):
    - stopped mid-task → `SendMessage(to=<name>, "continue where you stopped")`;
    - already reported → shut it down and verify it is gone (`TaskStop`, or no process under
-     `/proc`); never restart it.
+     `/proc`).
 3. **Waits.** Re-arm the monitors and background waits the stop killed: the CI watch on each open PR
    (`${CLAUDE_PLUGIN_ROOT}/scripts/watch-pr-checks.sh <PR>` as a background command, `--until-merged` for an armed PR), rollout and
    deploy waits.
