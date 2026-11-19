@@ -11,3 +11,7 @@
 /we/scripts/worker_launch.py       @fbiebl
 /we/scripts/arm_pr.sh              @fbiebl
 /we/scripts/required_checks.sh     @fbiebl
+/we/scripts/risk_runner.py         @fbiebl
+/we/scripts/worker_rights.py       @fbiebl
+/we/hooks/worker_rights_gate.py    @fbiebl
+/we/scripts/we-worker              @fbiebl

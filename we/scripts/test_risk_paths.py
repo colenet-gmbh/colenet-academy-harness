@@ -17,20 +17,22 @@ import pytest
 SCRIPT = Path(__file__).with_name("risk_paths.py")
 RULES = Path(__file__).resolve().parents[2] / ".weside" / "risk-paths"
 
-# AC 7: every path of the plugin's [brake-change] section.
-BRAKE = [
-    ".weside/risk-paths",
-    ".github/CODEOWNERS",
-    ".weside/crew.json",
-    "we/hooks/hooks.json",
-    "we/hooks/verification_gate.py",
-    "we/scripts/ready_gate.py",
-    "we/scripts/lens_verdict.py",
-    "we/scripts/risk_paths.py",
-    "we/scripts/worker_launch.py",
-    "we/scripts/arm_pr.sh",  # the worker merge gate trusts its --check
-    "we/scripts/required_checks.sh",
-]
+
+def _brake_paths() -> list[str]:
+    """Every `path` line of the plugin's [brake-change] section, `.weside/risk-paths` first (the
+    fixture writes it from the rules). A `json` rule names a key, not a file: CODEOWNERS cannot
+    hold it, so the classifier alone carries it."""
+    paths, section = [], None
+    for raw in RULES.read_text().splitlines():
+        line = raw.strip()
+        if line.startswith("["):
+            section = line
+        elif section == "[brake-change]" and line.startswith("path "):
+            paths.append(line.split(None, 1)[1])
+    return sorted(paths, key=lambda rel: rel != ".weside/risk-paths")
+
+
+BRAKE = _brake_paths()
 
 
 def git(repo: Path, *args: str) -> str:
