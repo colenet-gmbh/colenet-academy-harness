@@ -81,6 +81,8 @@ class World:
         if crew is not None:
             crew = {"version": 2, "roles": {}, "members": {}, **crew}
             write(self.clone, ".weside/crew.json", json.dumps(crew))
+            for rel in (crew.get("files") or {}).values():
+                write(self.clone, rel, "x\n")
         commit(self.clone, "README.md", "x\n", "init")
         git(self.clone, "push", "-q", "origin", "HEAD:main")
         git(self.clone, "worktree", "add", "-q", "--detach", str(self.scratch), "origin/main")
@@ -119,6 +121,18 @@ def test_lands_plan_with_its_planned_receipt(make, capsys):
     assert out.splitlines()[0].startswith("landed on main: ")
     assert "A\tdocs/plans/ACME-1-story.md" in out
     assert "A\t.weside/verify/ACME-1.yaml" in out
+    assert world.remote_head() == "docs(ACME-1): plan"
+
+
+def test_a_crew_pointing_outside_weside_still_names_its_receipt_dir(make, capsys):
+    """The base's `.weside/` alone is unpacked: `files.goals` elsewhere must not void the crew."""
+    world = make(
+        crew={"files": {"goals": "docs/goals.md"}, "oracles": {"receipt_dir": ".weside/verify"}}
+    )
+    write(world.scratch, ".weside/verify/ACME-1.yaml", "state: planned\nchecks: []\n")
+    commit(world.scratch, "docs/plans/ACME-1-story.md", "# plan\n", "docs(ACME-1): plan")
+
+    assert plan_push.main([]) == 0, capsys.readouterr().out
     assert world.remote_head() == "docs(ACME-1): plan"
 
 

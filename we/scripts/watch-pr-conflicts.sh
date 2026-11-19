@@ -36,12 +36,14 @@ LIFETIME=${WATCH_MAX_LIFETIME:-21600}
 BORN=$(date +%s)
 
 ERRORS=0
+GH_ERR=$(mktemp) && trap 'rm -f "$GH_ERR"' EXIT
 gh_try() {  # gh_try <var> <gh args...>: stores stdout in <var>; exits 2 after MAX_ERRORS failures
+  # stdout only: gh prints notices (upgrade, preview commands) on stderr, even on success.
   local var=$1 out; shift
-  if out=$(gh "$@" 2>&1); then ERRORS=0; printf -v "$var" '%s' "$out"; return 0; fi
+  if out=$(gh "$@" 2>"$GH_ERR"); then ERRORS=0; printf -v "$var" '%s' "$out"; return 0; fi
   ERRORS=$((ERRORS + 1))
   if [ "$ERRORS" -ge "$MAX_ERRORS" ]; then
-    echo "gh failed $ERRORS times in a row: $(tail -n 1 <<<"$out")"; exit 2
+    echo "gh failed $ERRORS times in a row: $(sed '/^[[:space:]]*$/d' "$GH_ERR" | tail -n 1)"; exit 2
   fi
   return 1
 }

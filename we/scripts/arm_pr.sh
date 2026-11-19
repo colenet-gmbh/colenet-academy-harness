@@ -81,8 +81,11 @@ INTERVAL=${ARM_INTERVAL:-10}
 TIMEOUT=${ARM_REGISTER_TIMEOUT:-300}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
+# stdout only is a gh value: gh prints notices (upgrade, preview commands) on stderr, even on success.
+GH_ERR=$(mktemp) && trap 'rm -f "$GH_ERR"' EXIT
+gh_err() { sed '/^[[:space:]]*$/d' "$GH_ERR" | tail -n 1; }
 if [ -z "$REPO" ]; then
-  REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>&1) || { echo "gh failed: $(tail -n 1 <<<"$REPO")"; exit 2; }
+  REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>"$GH_ERR") || { echo "gh failed: $(gh_err)"; exit 2; }
 fi
 OWNER=${REPO%%/*} NAME=${REPO#*/}
 
@@ -130,8 +133,8 @@ ARM='mutation($id:ID!,$sha:GitObjectID!,$method:PullRequestMergeMethod!){
 
 read_pr() {  # sets ID STATE DRAFT HEAD BASE MSTATE REVIEW LABELS CHECKS; exits on a gh failure or a moved head
   local out
-  out=$(gh api graphql -f query="$READ" -f owner="$OWNER" -f name="$NAME" -F number="$PR" --jq "$JQ" 2>&1) \
-    || { echo "gh failed: $(tail -n 1 <<<"$out")"; exit 2; }
+  out=$(gh api graphql -f query="$READ" -f owner="$OWNER" -f name="$NAME" -F number="$PR" --jq "$JQ" 2>"$GH_ERR") \
+    || { echo "gh failed: $(gh_err)"; exit 2; }
   IFS=$'\t' read -r ID STATE DRAFT HEAD BASE MSTATE REVIEW LABELS <<<"$(head -n 1 <<<"$out")"
   CHECKS=$(tail -n +2 <<<"$out")
   [ -n "${HEAD:-}" ] || { echo "gh failed: no PR $PR in $REPO"; exit 2; }
@@ -184,12 +187,13 @@ pending_line() {  # after `armed:`: the head's required checks still pending, by
 
 arm() {  # 0 armed (exits), 1 GitHub calls the PR clean, exits on any other answer
   local out
-  if out=$(gh api graphql -f query="$ARM" -f id="$ID" -f sha="$SHA" -f method="$(tr "[:lower:]" "[:upper:]" <<<"$METHOD")" 2>&1); then
+  if out=$(gh api graphql -f query="$ARM" -f id="$ID" -f sha="$SHA" -f method="$(tr "[:lower:]" "[:upper:]" <<<"$METHOD")" 2>"$GH_ERR"); then
     echo "armed: auto-merge on $SHA ($METHOD)"; pending_line; exit 0
   fi
-  if grep -qiE 'is in (clean|unstable) status' <<<"$out"; then return 1; fi
+  local why; why=$(gh_err)
+  if grep -qiE 'is in (clean|unstable) status' "$GH_ERR"; then return 1; fi
   read_pr  # a head that moved since the read refuses here, with both SHAs
-  echo "gh failed: $(tail -n 1 <<<"$out")"; exit 2
+  echo "gh failed: $why"; exit 2
 }
 
 verdict() {  # pending | pass | fail:<names> for the required checks on the head

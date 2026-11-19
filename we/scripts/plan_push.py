@@ -129,7 +129,8 @@ def receipt_dir(base: str) -> str | None:
         )
         path = crew.at(tmp)
         try:
-            data = crew.load(path) if path else None
+            # paths=False: only `.weside/` is unpacked, so `files.*` elsewhere cannot exist here.
+            data = crew.load(path, paths=False) if path else None
         except crew.CrewError:
             return None
     value = ((data or {}).get("oracles") or {}).get("receipt_dir")

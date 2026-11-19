@@ -70,6 +70,7 @@ def run(
     gh.write_text(
         "#!/usr/bin/env bash\n"
         f'a="$*"; echo "$(pwd) | ${{a%%--json*}}" >> "{log}"\n'
+        '[ -n "$GH_NOTICE" ] && printf "%s\\n" "$GH_NOTICE" >&2\n'
         'if [ "$1 $2" = "repo view" ]; then [ -n "$GH_REPO_VIEW_FAIL" ] && exit 1; echo o/r; exit 0; fi\n'
         'if [ "$1 $2" = "pr merge" ]; then [ -n "$GH_MERGE_FAIL" ] && { echo "$GH_MERGE_FAIL" >&2; exit 1; }; exit 0; fi\n'
         'if [ "$1 $2" = "run view" ] && [[ " $* " == *" --json "* ]]; then f=$(mktemp); printf "%s" "${GH_RUN_JOBS:-{\\"jobs\\":[]\\}}" > "$f"; '
@@ -122,6 +123,35 @@ def test_empty_then_pending_then_green_says_only_green(tmp_path):
     empty = {"headRefOid": SHA, "statusCheckRollup": []}
     code, out = run(tmp_path, [empty, empty, _pending(_green()), _green()])
     assert (code, out) == (0, [f"final {SHA}: green · {MERGE}"])
+
+
+# What gh 2.105.0 prints on stderr after `gh pr view`: a preview notice, never part of the answer.
+NOTICE = "\n".join(
+    [
+        "",
+        "A new preview command is available: gh event listen",
+        "Stream repository events to your terminal as they happen.",
+        "",
+        "Try it: gh event listen --repo o/r",
+        "Hide this notice: gh config set notices false",
+        "",
+    ]
+)
+
+
+def test_notices_on_stderr_never_become_the_head(tmp_path):
+    code, out = run(
+        tmp_path, [_pending(_green()), _green()], timeout_s="5", env_extra={"GH_NOTICE": NOTICE}
+    )
+    assert (code, out) == (0, [f"final {SHA}: green · {MERGE}"])
+
+
+def test_a_failing_gh_names_its_error_not_a_notice(tmp_path):
+    code, out = run(tmp_path, ["FAIL"], max_errors="2", env_extra={"GH_NOTICE": NOTICE})
+    assert (code, out) == (
+        2,
+        ["gh failed 2 times in a row: GraphQL: Could not resolve to a PullRequest"],
+    )
 
 
 def test_a_failure_is_emitted_once_and_named_in_the_final_line(tmp_path):
