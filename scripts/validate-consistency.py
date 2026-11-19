@@ -20,7 +20,8 @@ silently return:
    detail in any tracked file of this public repo (a hardcoded password once
    shipped here and had to be rotated).
 8. Config schema — every `agents.<key>` a hook or script reads appears in the
-   `.weside/config.json` schema block of skills/setup/SKILL.md § 3, and the
+   `.weside/config.json` schema block of skills/setup/SKILL.md § 3, `build.pr_owner`
+   there lists exactly worker_launch.py's `PR_OWNERS` (the rights gate opens on it), and the
    worker-launch placeholders in we/scripts/worker_launch.py are exactly the ones
    references/worker-dispatch.md § Worker launch backend lists.
 9. Lens skill — skills/lens/SKILL.md starts the panel through lens_verdict.py and
@@ -154,6 +155,7 @@ RETIRED_ARM = re.compile(r"gh pr merge\b[^\n`|]*?\s--auto(?![\w-])")
 RETIRED_ARM_ALLOWLIST = {
     "we/scripts/arm_pr.sh",
     "we/scripts/test_arm_pr.py",
+    "we/hooks/test_worker_rights_gate.py",  # asserts the gate denies a worker's auto merge
     "we/references/session-traps.md",
     "scripts/test_coldstart_cases.py",
     "evals/fix-push-then-arm/case.yaml",
@@ -373,6 +375,14 @@ def check_agents_config() -> None:
             fail(f"{rel} reads agents.{key}, which skills/setup/SKILL.md § 3 does not list")
 
     source = (WE / "scripts" / "worker_launch.py").read_text()
+    owners = re.search(r"^PR_OWNERS = \(([^)]*)\)", source, re.M)
+    known_owners = re.findall(r"\"(\w+)\"", owners.group(1)) if owners else []
+    documented_owner = (schema.get("build") or {}).get("pr_owner")
+    if not known_owners or documented_owner != "|".join(known_owners):
+        fail(
+            f"skills/setup/SKILL.md § 3 lists build.pr_owner {documented_owner!r}, "
+            f"worker_launch.py PR_OWNERS is {known_owners}"
+        )
     # the launch template's placeholders and the worktree template's (`workers.add_worktree`)
     known = re.findall(r"^(?:TREE_)?PLACEHOLDERS = \(([^)]*)\)", source, re.M)
     placeholders = {name for group in known for name in re.findall(r"\"(\w+)\"", group)}

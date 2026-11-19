@@ -1070,3 +1070,40 @@ def test_needs_all_lists_every_skill_the_context_starves(env):
     _config(env["wt"], {"tool": "github-issues"}, disable=["atlassian"])
     proc = _needs(env["wt"], "", "--all")
     assert (proc.returncode, proc.stdout) == (0, "")
+
+
+# ---------------------------------------------------------------- build.pr_owner
+
+
+@pytest.mark.parametrize(
+    ("config", "owner"),
+    [
+        ({}, "master"),
+        ({"build": {}}, "master"),
+        ({"build": "x"}, "master"),
+        ({"build": {"pr_owner": "master"}}, "master"),
+        ({"build": {"pr_owner": "worker"}}, "worker"),
+    ],
+)
+def test_pr_owner_reads_the_switch_with_master_as_default(config, owner):
+    assert wl.pr_owner_of(config) == owner
+
+
+def test_pr_owner_refuses_another_value():
+    with pytest.raises(wl.LaunchError) as exc:
+        wl.pr_owner_of({"build": {"pr_owner": "everyone"}})
+    assert exc.value.code == 2 and "build.pr_owner" in str(exc.value)
+
+
+def test_pr_owner_verb_prints_the_worktrees_value(tmp_path, capsys):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    assert wl.main(["pr-owner", "--repo", str(tmp_path)]) == 0
+    assert capsys.readouterr().out.strip() == "master"
+    (tmp_path / ".weside").mkdir()
+    (tmp_path / ".weside" / "config.json").write_text(
+        json.dumps({"build": {"pr_owner": "worker"}})
+    )
+    assert wl.main(["pr-owner", "--repo", str(tmp_path)]) == 0
+    assert capsys.readouterr().out.strip() == "worker"
+    (tmp_path / ".weside" / "config.json").write_text(json.dumps({"build": {"pr_owner": "x"}}))
+    assert wl.main(["pr-owner", "--repo", str(tmp_path)]) == 2
