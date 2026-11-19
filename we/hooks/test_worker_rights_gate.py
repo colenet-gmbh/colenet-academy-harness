@@ -39,6 +39,9 @@ if args[:2] == ["pr", "view"]:
     if pr is None:
         print("no pull requests found", file=sys.stderr); sys.exit(1)
     print(json.dumps(pr)); sys.exit(0)
+if args[:2] == ["pr", "checks"]:
+    print(open(os.environ["FAKE_GH_CHECKS"]).read() if os.environ.get("FAKE_GH_CHECKS") else "[]")
+    sys.exit(0)
 sys.exit(0)
 """
 
@@ -518,3 +521,176 @@ def test_settings_grant_exactly_the_repos_rights_and_deny_the_never_list(world):
     }
     plain = make_repo(world["tmp"], name="plain", rights=None)
     assert wr.settings(plain, KEY)["permissions"]["allow"] == []
+
+
+# ---------------------------------------------------------------- the PR owner rights (build.pr_owner)
+
+
+def _pr_owner(repo, value, publish=True):
+    """`build.pr_owner` in the repo's config, committed on the branch; published to origin/main
+    (where the gate reads it) unless `publish` is False."""
+    (repo / ".weside").mkdir(exist_ok=True)
+    (repo / ".weside" / "config.json").write_text(json.dumps({"build": {"pr_owner": value}}))
+    _git(repo, "add", ".weside/config.json")
+    _commit(repo, "config")
+    if publish:
+        _publish(repo)
+
+
+def _head(repo):
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+RESOLVE = (
+    "gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id})"
+    "{thread{isResolved}}}' -f id=PRRT_1"
+)
+PR_OWNER_COMMANDS = [
+    "git push -u origin feat/ABC-12-hook",
+    "git push",
+    "git push origin HEAD:wip/ABC-12-hook",
+    "gh pr create --title x --body-file b.md",
+    "gh pr edit 7 --add-label y --title z",
+    "gh pr comment 7 --body x",
+    "/plugin/scripts/arm_pr.sh 7 --method squash",
+    "gh pr merge 7 --disable-auto",
+    RESOLVE,
+]
+
+
+@pytest.mark.parametrize(
+    "command", [*PR_OWNER_COMMANDS[:3], "gh pr merge 7 --merge", "arm_pr.sh 7"]
+)
+def test_under_master_the_pr_owner_rights_stay_out_of_the_gate(world, command):
+    _pr_owner(world["repo"], "master")
+    assert hook(world, command) == (None, "")
+
+
+@pytest.mark.parametrize("command", PR_OWNER_COMMANDS)
+def test_under_worker_the_pr_owner_rights_are_allowed(world, command):
+    repo = make_repo(
+        world["tmp"], name="app2", rights=None
+    )  # no worker_rights: the switch opts in
+    prs = json.loads((world["tmp"] / "prs.json").read_text())
+    prs["7"]["headRepository"]["name"] = "app2"
+    (world["tmp"] / "prs.json").write_text(json.dumps(prs))
+    _pr_owner(repo, "worker")
+    decision, reason = hook(world, command, cwd=repo)
+    assert decision == "allow", reason
+
+
+def test_under_worker_the_ready_merge_line_on_the_own_head_is_allowed(world):
+    _pr_owner(world["repo"], "worker")
+    sha = _head(world["repo"])
+    decision, reason = hook(world, f"gh pr merge 7 --merge --match-head-commit {sha}")
+    assert decision == "allow", reason
+
+
+@pytest.mark.parametrize(
+    ("command", "why"),
+    [
+        ("gh pr merge 7 --merge", "without --match-head-commit"),
+        ("gh pr merge 7 --squash --match-head-commit 0000000", "not this checkout's HEAD"),
+        ("gh pr merge 7 --admin --match-head-commit {sha}", "gh pr merge --admin"),
+        ("gh pr merge 7 --auto --match-head-commit {sha}", "gh pr merge --auto"),
+        ("gh pr merge 7 --disable-auto --merge", "takes no other flag"),
+        ("gh pr merge 8 --disable-auto", "not this branch's PR"),
+        ("bash arm_pr.sh 8", "not this branch's PR"),
+        ("arm_pr.sh --repo other/app 7", "another repo"),
+        ("git push origin HEAD:feat/ABC-99-other", "pushes only branches carrying ABC-12"),
+        ("gh pr create --head feat/ABC-99-other", "its own branch"),
+        ("gh pr edit 8 --title x", "not this branch's PR"),
+        (
+            "gh api graphql -f query='mutation{a:mergePullRequest(input:{}){x} "
+            "b:resolveReviewThread(input:{}){y}}'",
+            "resolveReviewThread as the only mutation",
+        ),
+    ],
+)
+def test_under_worker_the_pr_owner_rights_are_denied_outside_their_conditions(world, command, why):
+    _pr_owner(world["repo"], "worker")
+    decision, reason = hook(world, command.replace("{sha}", _head(world["repo"])))
+    assert decision == "deny" and why in reason, reason
+
+
+@pytest.mark.parametrize(
+    ("command", "item"),
+    [
+        ("git push origin main", "main (git push to main)"),
+        ("gh pr merge 7 --delete-branch --match-head-commit abc1234", "delete (--delete-branch)"),
+        ("git push --no-verify", "guard bypass"),
+    ],
+)
+def test_under_worker_the_never_list_still_holds(world, command, item):
+    _pr_owner(world["repo"], "worker")
+    decision, reason = hook(world, command)
+    assert decision == "deny" and item in reason
+
+
+def test_the_worktrees_own_switch_grants_nothing(world):
+    _pr_owner(world["repo"], "worker", publish=False)
+    assert hook(world, "gh pr merge 7 --merge") == (None, "")
+    assert hook(world, "gh pr edit 7 --title x") == (None, "")
+
+
+def test_another_switch_value_opens_nothing(world):
+    _pr_owner(world["repo"], "everyone")
+    assert hook(world, "gh pr merge 7 --merge") == (None, "")
+
+
+def test_settings_add_the_pr_owner_rules_only_under_worker(world):
+    plain = make_repo(world["tmp"], name="plain", rights=None)
+    _pr_owner(plain, "master")
+    assert wr.settings(plain, KEY)["permissions"]["allow"] == []
+    _pr_owner(plain, "worker")
+    assert wr.settings(plain, KEY)["permissions"]["allow"] == list(wr.PR_OWNER_ALLOW)
+    allow = wr.settings(world["repo"], KEY)["permissions"]["allow"]
+    assert allow.count("Bash(gh pr comment*)") == 1
+
+
+def _hold_crew(repo):
+    body = {**CREW, "worker_rights": RIGHTS, "merge": {"hold_labels": ["hold"]}}
+    (repo / ".weside" / "crew.json").write_text(json.dumps(body))
+    _git(repo, "add", ".weside/crew.json")
+    _commit(repo, "hold")
+    _publish(repo)
+
+
+def test_under_worker_the_merge_line_is_denied_on_a_hold_label(world):
+    _hold_crew(world["repo"])
+    _pr_owner(world["repo"], "worker")
+    prs = json.loads((world["tmp"] / "prs.json").read_text())
+    prs["7"]["labels"] = [{"name": "hold"}]
+    (world["tmp"] / "prs.json").write_text(json.dumps(prs))
+    decision, reason = hook(
+        world, f"gh pr merge 7 --merge --match-head-commit {_head(world['repo'])}"
+    )
+    assert decision == "deny" and "label hold" in reason
+    decision, reason = hook(world, "gh pr edit 7 --remove-label hold")
+    assert decision == "deny" and "hold label" in reason
+    assert hook(world, "gh pr edit 7 --remove-label other")[0] == "allow"
+
+
+def test_under_worker_the_merge_line_is_denied_on_a_red_required_check(world):
+    _pr_owner(world["repo"], "worker")
+    checks = world["tmp"] / "checks.json"
+    checks.write_text(json.dumps([{"name": "Tests", "bucket": "fail"}]))
+    command = f"gh pr merge 7 --merge --match-head-commit {_head(world['repo'])}"
+    decision, reason = hook(world, command, FAKE_GH_CHECKS=str(checks))
+    assert decision == "deny" and "required checks not green (Tests)" in reason
+
+
+def test_under_worker_the_merge_line_is_denied_on_a_one_way_class(world):
+    repo = world["repo"]
+    (repo / ".weside" / "risk-paths").write_text("[brake-change]\npath src/brake.py\n")
+    _git(repo, "add", ".weside/risk-paths")
+    _commit(repo, "risk")
+    _pr_owner(repo, "worker")
+    (repo / "src").mkdir()
+    (repo / "src" / "brake.py").write_text("x = 1\n")
+    _git(repo, "add", "src/brake.py")
+    _commit(repo, "brake")
+    decision, reason = hook(world, f"gh pr merge 7 --merge --match-head-commit {_head(repo)}")
+    assert decision == "deny" and "T2 one-way brake-change" in reason
