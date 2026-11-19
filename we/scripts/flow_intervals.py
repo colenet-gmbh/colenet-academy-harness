@@ -27,7 +27,8 @@ probes or of its name (``naming.key``) is one of the project's keys (this board'
 and its lines' ``key``/``keys``/``epic``), which keeps a worker whose marker and starter are gone;
 or it is a worker whose starter (marker ``starter_session``/``starter``, else a ``blocked`` event's
 ``starter``) belongs. Its ``blocked`` events and the locks it holds go with it. A board log's wait
-(waits, questions) of a session that fails the same test (its rows' keys count) is dropped too: a
+(waits, questions) of a session that fails the same test is dropped too (the rows' keys count
+for a session the sampler and the events did not judge; a judged one keeps one verdict): a
 board that served several projects before each had its own keeps their old lines. A ``--from`` row
 with a ``project`` field of another project is dropped; one without the field is kept. Every drop
 is counted in a gap line (source ``project``) and on stderr, never silent.
