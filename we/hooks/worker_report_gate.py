@@ -148,6 +148,11 @@ def last_report(transcript: str, lead: str) -> str | None:
     return None
 
 
+def reported(transcript: str, lead: str) -> bool:
+    """True when the current turn sent a SendMessage to `lead` (the supervisor's idle-stop reads it)."""
+    return last_report(transcript, lead) is not None
+
+
 def decide(payload: dict) -> str | None:
     if payload.get("stop_hook_active") or payload.get("agent_id"):
         return None
