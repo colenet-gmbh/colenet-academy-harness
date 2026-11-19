@@ -1131,6 +1131,20 @@ class TestAccountAnswer:
             wl._checked_account(answer, account, need)
         assert exc.value.code == 2
 
+    @pytest.mark.parametrize(
+        "name, secret",
+        [
+            ("ANTHROPIC_API_KEY", True),
+            ("ANTHROPIC_AUTH_TOKEN", True),
+            ("DB_PASSWORD", True),
+            ("CLAUDE_CODE_MAX_OUTPUT_TOKENS", False),
+            ("CLAUDE_CODE_API_KEY_HELPER_TTL_MS", False),
+            ("ANTHROPIC_BASE_URL", False),
+        ],
+    )
+    def test_only_a_credential_name_counts_as_secret(self, name, secret):
+        assert bool(wl.SECRET_NAME_RE.search(name)) is secret
+
     def test_an_uncritical_need_takes_another_llm(self):
         chosen = wl._checked_account(
             {"name": "g", "kind": "other-llm", "env": {"X_URL": "u"}, "token_command": "h"},

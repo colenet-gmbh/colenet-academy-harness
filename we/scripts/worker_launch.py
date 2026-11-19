@@ -864,7 +864,10 @@ ACCOUNTS_TIMEOUT_S = 30
 ACCOUNT_LINE_RE = re.compile(r"^\s*Account:\s*uncritical\b", re.MULTILINE | re.IGNORECASE)
 # a settings file is no place for a credential: a secret reaches the worker only through
 # `token_command`, which becomes `apiKeyHelper` and runs inside the worker
-SECRET_NAME_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", re.IGNORECASE)
+# (a whole `_`-separated segment: `MAX_OUTPUT_TOKENS` or `API_KEY_HELPER_TTL_MS` are settings, not secrets)
+SECRET_NAME_RE = re.compile(
+    r"(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?)(?:_|$)(?!HELPER)", re.IGNORECASE
+)
 
 
 def brief_account_need(brief: str) -> str:
