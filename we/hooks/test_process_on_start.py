@@ -41,7 +41,15 @@ def run(tmp_path: Path, cwd: Path, env_extra: dict, **hook_input) -> subprocess.
     env = {
         k: v
         for k, v in os.environ.items()
-        if k not in ("WE_ROLE", "WESIDE_COMPANION", "CLAUDE_CODE_SESSION_ID")
+        if k
+        not in (
+            "WE_ROLE",
+            "WESIDE_COMPANION",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CONFIG_DIR",
+            "CLAUDE_PLUGIN_ROOT",
+            "WE_HANDOVER_FROM",
+        )
     }
     env.update({"HOME": str(tmp_path / "home"), **env_extra})
     data = {"session_id": "sid-1", "source": "startup", "cwd": str(cwd), **hook_input}
@@ -232,3 +240,71 @@ def test_a_held_log_lock_skips_the_line_instead_of_hanging(tmp_path):
     finally:
         os.close(fd)
     assert not log.exists()
+
+
+# --- the compact handover (plugin_install.handover) --------------------------------------------
+
+
+def plugin_root(base: Path, version: str, hook_text: str | None = None) -> Path:
+    root = base / version
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": version}))
+    if hook_text is not None:
+        (root / "hooks").mkdir()
+        out = {
+            "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": hook_text}
+        }
+        (root / "hooks" / "process_on_start.py").write_text(
+            "import json, os, sys\n"
+            "sys.stdin.read()\n"
+            f"out = {out!r}\n"
+            "out['hookSpecificOutput']['additionalContext'] += ' from ' + os.environ['CLAUDE_PLUGIN_ROOT']"
+            " + ' after ' + os.environ['WE_HANDOVER_FROM']\n"
+            "print(json.dumps(out))\n"
+        )
+    return root
+
+
+def installed(tmp_path: Path, root: Path) -> dict:
+    cfg = tmp_path / "cfg"
+    (cfg / "plugins").mkdir(parents=True)
+    entry = {"scope": "user", "version": root.name, "installPath": str(root)}
+    (cfg / "plugins" / "installed_plugins.json").write_text(
+        json.dumps({"version": 2, "plugins": {"we@pub": [entry]}})
+    )
+    return {"CLAUDE_CONFIG_DIR": str(cfg)}
+
+
+def test_compact_with_the_same_version_prints_the_own_l0_without_a_line(tmp_path):
+    root = repo(tmp_path)
+    own = plugin_root(tmp_path / "cache", "9.4.0", "NEWER L0")
+    env = {**installed(tmp_path, own), "CLAUDE_PLUGIN_ROOT": str(own), "WE_ROLE": "master"}
+    text = context(run(tmp_path, root, env, source="compact"))
+    assert text == render_process.render_l0(crewlib.load(root / ".weside" / "crew.json"))
+
+
+def test_compact_behind_prints_the_installed_l0_after_the_line(tmp_path):
+    root = repo(tmp_path)
+    own = plugin_root(tmp_path / "cache", "9.3.0")
+    new = plugin_root(tmp_path / "cache", "9.4.0", "NEWER L0")
+    env = {**installed(tmp_path, new), "CLAUDE_PLUGIN_ROOT": str(own), "WE_ROLE": "master"}
+    text = context(run(tmp_path, root, env, source="compact"))
+    assert text == (
+        "plugin 9.3.0 loaded, 9.4.0 installed: skills and hooks stay 9.3.0 until a fresh start; "
+        f"save your state and ask the coordinator for a restart\n\nNEWER L0 from {new} after 9.3.0"
+    )
+    # only a compaction hands over: a resume is a fresh process and loads the installed one itself
+    startup = context(run(tmp_path, root, env, source="startup"))
+    assert "NEWER L0" not in startup and "installed:" not in startup
+
+
+def test_compact_with_an_unreadable_newer_folder_falls_back_silently(tmp_path):
+    root = repo(tmp_path)
+    own = plugin_root(tmp_path / "cache", "9.3.0")
+    new = plugin_root(tmp_path / "cache", "9.4.0", "NEWER L0")
+    (new / "hooks" / "process_on_start.py").write_text("raise SystemExit(1)\n")
+    env = {**installed(tmp_path, new), "CLAUDE_PLUGIN_ROOT": str(own), "WE_ROLE": "master"}
+    done = run(tmp_path, root, env, source="compact")
+    assert context(done) == render_process.render_l0(crewlib.load(root / ".weside" / "crew.json"))
+    shutil.rmtree(new)
+    assert "installed:" not in context(run(tmp_path, root, env, source="compact"))

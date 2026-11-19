@@ -28,7 +28,10 @@ The whole stays within ``render_process.BUDGET`` (Claude Code previews a longer 
 hook output is cut first, then head lines, each with a line naming the full source. Card,
 addendum and notes over the budget → nothing printed, one stderr line naming the addendum, exit 1
 (the budget gate keeps a repo from shipping that). Parts 1 to 4 do not read ``source``, so they
-are byte-identical on every source; part 5 may differ by time and matcher.
+are byte-identical on every source; part 5 may differ by time and matcher. One exception: after a
+compaction in a session whose plugin is older than the one installed for its cwd, the installed
+version's own copy of this hook renders all of it (``plugin_install.handover``; a failing copy falls
+back to this version, silently).
 """
 
 from __future__ import annotations
@@ -41,12 +44,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import crew as crewlib
+import plugin_install
 import render_process
+
+HANDOVER_TIMEOUT_S = 45  # of this hook's 60 s in hooks.json: its own render still fits after
 
 
 def output(hook_input: dict, environ: dict | None = None) -> tuple[str | None, str | None]:
     """(additionalContext or None, stderr line or None)."""
     env = os.environ if environ is None else environ
+    handed = plugin_install.handover("role_on_start.py", hook_input, env, HANDOVER_TIMEOUT_S)
+    if handed:
+        return handed[0], None  # the stale line comes once, from process_on_start.py
     cwd = hook_input.get("cwd") or os.getcwd()
     try:
         crew_path, crew = crewlib.find_and_load(cwd)

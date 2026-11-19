@@ -24,7 +24,10 @@ flow is owned by `${CLAUDE_PLUGIN_ROOT}/references/companion-session.md` § Laun
    another human's machine). Then ask once: "Start the ones marked `start:` too? Default: no."
    - Only an explicit yes starts them: each `start:` command in its own tmux window
      (`tmux new-window -d -n <name> <command>`), never one marked `runs`; no answer, no start.
-4. Board: a session started by `wclaude --start` opened `/board` itself (`WE_START=1`, checked
+4. Refresh, in the coordinator's session only: run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/session_refresh.py list --due`
+   and relay each line. For each due session offer its `session_refresh.py plan <name>` once; on a
+   yes, carry the plan out step by step (`references/companion-session.md` § Refresh).
+5. Board: a session started by `wclaude --start` opened `/board` itself (`WE_START=1`, checked
    against `roles.coordinator`). Started otherwise, tell the user to type `/board`: a skill cannot
    run a pane command. In a crew with `humans`, the board's answers on this machine go out through
    the session `crew.py deliverer` names (the coordinator, else the first role this human runs);
@@ -34,4 +37,5 @@ Done when:
 - [ ] the four check lines are relayed, every FAIL with its fix
 - [ ] the restore was offered after a resume or crash, or the missing `launch.restore` named
 - [ ] the roster is relayed and the start of the rest asked once, default no, nothing started without a yes
+- [ ] in the coordinator's session, every due session is relayed and its refresh offered once
 - [ ] the board is open or the user was told to type `/board`
