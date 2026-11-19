@@ -236,6 +236,66 @@ def test_a_release_inside_a_command_chain_is_judged_on_the_branch(world):
     assert decision == "deny" and f"does not carry the key {KEY}" in reason
 
 
+@pytest.mark.parametrize(
+    ("command", "right"),
+    [
+        ("env gh pr ready 6999", "pr_ready behind env"),
+        ("command gh pr ready 6999", "pr_ready behind command"),
+        ("GH_X=1 gh pr ready 6999", "pr_ready behind an assignment"),
+        ("timeout 9 gh pr ready 6999", "pr_ready behind timeout"),
+        ("nohup gh pr ready 6999", "pr_ready behind nohup"),
+        ("exec gh pr ready 6999", "pr_ready behind exec"),
+        ("echo 6999 | xargs gh pr ready", "pr_ready behind xargs"),
+        ("env gh pr ready 7", "pr_ready behind env"),
+        ("env gh pr comment 6999 --body 'Codex #1 skipped: x'", "pr_comment behind env"),
+        ("env a release staging rc", "branch_rc behind env"),
+        ("bash -c 'a release staging rc'", "branch_rc in bash -c"),
+        ("bash -c 'gh pr ready 6999'", "pr_ready in bash -c"),
+        ("sh -c 'cd . && gh pr comment 6999 -b x'", "pr_comment in sh -c"),
+        ("env bash -lc 'gh pr ready 6999'", "pr_ready in bash -c"),
+        ('eval "gh pr ready 6999"', "pr_ready in eval"),
+        ("echo `gh pr ready 6999`", "pr_ready in a command substitution"),
+        ('echo "$(gh pr ready 6999)"', "pr_ready in a command substitution"),
+        ("x=$(gh pr ready 7)", "pr_ready in a command substitution"),
+        ("bash -c 'eval \"env gh pr ready 6999\"'", "pr_ready behind env in eval in bash -c"),
+    ],
+)
+def test_a_right_behind_a_wrapper_or_in_a_nested_shell_is_refused(world, command, right):
+    """Security card #276 a71e339 WARNING 2: a right holds only as a command of its own."""
+    decision, reason = hook(world, command)
+    assert decision == "deny", reason
+    assert f"not a worker right ({right}: a right only as a command of its own" in reason, reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "{ gh pr ready 8; }",
+        "if true; then gh pr ready 8; fi",
+        "while false; do gh pr ready 8; done",
+    ],
+)
+def test_a_right_after_a_shell_keyword_is_judged(world, command):
+    decision, reason = hook(world, command)
+    assert decision == "deny" and "not this branch's PR" in reason, reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "env FOO=1 pytest -q",
+        "bash -c 'pytest -q'",
+        "timeout 9 pytest -q",
+        "GIT_EDITOR=true git rebase --continue",
+        "if true; then gh pr ready 7; fi",
+        "gh pr create --body-file - <<'EOF'\nrefuses `env gh pr ready 8` and `bash -c`\nEOF",
+        "git commit -m 'refuse `gh pr ready` behind env'",
+    ],
+)
+def test_ordinary_wrapped_work_passes(world, command):
+    assert hook(world, command) == (None, "")
+
+
 # ---------------------------------------------------------------- AC 6: the rights' conditions
 
 
@@ -485,6 +545,42 @@ def test_a_push_to_main_in_any_refspec_spelling_is_denied(world, refspec):
 @pytest.mark.parametrize("refspec", ["+feat/ABC-12-main", '"feat/ABC-12-x"', "+HEAD:mainline"])
 def test_a_push_to_a_branch_merely_named_like_main_passes(world, refspec):
     assert hook(world, f"git push origin {refspec}")[0] != "deny"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'git push origin +m"ain"',
+        'git push origin "+ma"in',
+        'git push origin +HEAD:ma"in"',
+        "git push -f origin m'ain'",
+        "git push origin HEAD:refs/heads/ma'in'",
+        "git push origin ma\\in",
+        "git push origin HEAD:mai''n",
+        "git push origin m$'a'in",
+        "cd /x && git push origin +ma''in",
+        'eval "git push origin +ma""in"',
+    ],
+)
+def test_a_push_to_main_with_quotes_inside_the_name_is_denied(world, command):
+    """Security card #276 a71e339: the shell joins the quoted pieces, git receives `main`."""
+    decision, reason = hook(world, command)
+    assert decision == "deny" and "never for a worker (main (git push to main)" in reason, reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push -u origin fix/ABC-1-x",
+        "git push origin HEAD",
+        "git push origin main-fix",
+        "git push origin maintenance",
+        "git push origin 'main-fix'",
+        'git push origin HEAD:"maintenance"',
+    ],
+)
+def test_a_feature_push_passes_the_normalised_text(world, command):
+    assert hook(world, command) == (None, "")
 
 
 def test_a_bare_push_from_main_is_denied(world):
@@ -754,6 +850,20 @@ def test_under_worker_the_never_list_still_holds(world, command, item):
     _pr_owner(world["repo"], "worker")
     decision, reason = hook(world, command)
     assert decision == "deny" and item in reason
+
+
+@pytest.mark.parametrize(
+    ("command", "right"),
+    [
+        ("env gh pr merge 7 --match-head-commit {sha}", "merge behind env"),
+        ("bash -c 'gh pr merge 7 --match-head-commit {sha}'", "merge in bash -c"),
+        ("GIT_X=1 git push -u origin feat/ABC-12-hook", "push behind an assignment"),
+    ],
+)
+def test_under_worker_a_pr_owner_right_behind_a_wrapper_is_refused(world, command, right):
+    _pr_owner(world["repo"], "worker")
+    decision, reason = hook(world, command.replace("{sha}", _head(world["repo"])))
+    assert decision == "deny" and right in reason, reason
 
 
 def test_the_worktrees_own_switch_grants_nothing(world):

@@ -10,13 +10,18 @@ It acts only for a process worker: env `WE_ROLE=worker` (set by `we-worker`) or 
 `worker_launch.py` naming this session. A master, a companion and their subagents pass untouched.
 For a worker it
   1. denies a never-list item (`worker_rights.never`, a fixed list of patterns searched in the
-     command text, no shell parser): `never for a worker (<item>): ask …`;
-  2. on every simple command of the text (`worker_rights.segments`), denies a right (`gh pr ready`,
-     `gh pr comment`, the crew's `branch_rc`; under `build.pr_owner: worker` also the PR owner
-     rights, the merge line among them) whose conditions fail: `not a worker right (<reason>): ask …`,
-     all parts sharing one deadline; it allows a held right without a prompt only on a command of
-     its own (`worker_rights.simple_argv`). A held right inside a compound command only passes this
-     gate; a `gh pr merge` there is a never-list item.
+     command text as typed and with its quotes and backslashes removed, no shell parser):
+     `never for a worker (<item>): ask …`;
+  2. refuses a right (`gh pr ready`, `gh pr comment`, the crew's `branch_rc`; under
+     `build.pr_owner: worker` also the PR owner rights, the merge line among them) that does not
+     stand as a command of its own: behind a wrapper or an assignment, in `bash -c`, `eval`, `$( … )`
+     or backticks (`worker_rights.hidden_right`): `not a worker right (<right> behind env: a right
+     only as a command of its own, without env/eval/bash -c): ask …`;
+  3. on each part of a chain (`worker_rights.segments`: `&&`, `||`, `;`, `|`, `&`, parentheses,
+     newlines), denies a right whose conditions fail: `not a worker right (<reason>): ask …`, all
+     parts sharing one deadline; it allows a held right without a prompt only on a command of its
+     own (`worker_rights.simple_argv`). A held right in a chain only passes this gate; a
+     `gh pr merge` there is a never-list item.
 `ask …` names the marker's Lead (`ask your Lead <name>`), else `ask your starter`. Fail closed: an
 exception while judging a worker's command denies it. Every denial is one `deny` line in
 `<state dir>/brakes.jsonl` (`worker_rights.brake_log`), so the false alarms can be counted; a failed
@@ -56,7 +61,7 @@ def _marker(payload: dict) -> dict | None:
     return worker_marker(payload)
 
 
-def decide(payload: dict, env: dict) -> tuple[str, str] | None:
+def decide(payload: dict, env: dict) -> tuple[str, str] | None:  # noqa: PLR0911
     """(decision, reason) for a worker's Bash call, None to stay out."""
     import worker_rights as wr  # noqa: PLC0415
 
@@ -74,11 +79,20 @@ def decide(payload: dict, env: dict) -> tuple[str, str] | None:
     item = wr.never(command, cwd, rights, owner)
     if item:
         return "deny", f"never for a worker ({item}): {ask}"
+    hidden = wr.hidden_right(command, rights, owner)
+    if hidden:
+        return "deny", (
+            f"not a worker right ({hidden}: a right only as a command of its own, "
+            f"without env/eval/bash -c): {ask}"
+        )
     key = env.get("WE_STORY_KEY") or (marker or {}).get("key")
     deadline = time.monotonic() + wr.MERGE_LINE_BUDGET_S  # one budget across every part
     argv = wr.simple_argv(command)
     held = None
     for part in [argv] if argv else wr.segments(command):
+        part = wr.strip_keywords(part)  # noqa: PLW2901
+        if not part:
+            continue
         right = wr.right_of(part, rights, owner)
         if right is None:
             continue
