@@ -252,7 +252,15 @@ def _tags_pushed(text: str, cwd: str | None) -> str | None:
     return next((w for w in sorted(words) if w in tags), None)
 
 
-def never(  # noqa: PLR0911
+def _push_dirs(text: str, cwd: str | None) -> list[str]:
+    """The hook's cwd and every directory the text names by `cd <dir>`, `pushd <dir>` or
+    `git -C <dir>`: a push may run in any of them."""
+    base = cwd or "."
+    named = re.findall(r"(?:\b(?:cd|pushd)|\bgit\s+-C)\s+(['\"]?)([^\s'\";&|]+)\1", text)
+    return [base, *(os.path.join(base, os.path.expanduser(d)) for _q, d in named)]
+
+
+def never(  # noqa: PLR0911, PLR0912
     command: str, cwd: str | None, rights: dict | None = None, owner: str = "master"
 ) -> str | None:
     """The never-list item `command` hits for a worker in `cwd`, else None."""
@@ -264,9 +272,10 @@ def never(  # noqa: PLR0911
         if found:
             return item.format(*(found.groups() or ("",)))
     if re.search(_GIT_PUSH, text):
-        branch = current_branch(cwd)
-        if branch and branch in protected_branches(cwd):
-            return f"main (a git push from {branch})"
+        for where in _push_dirs(text, cwd):
+            branch = current_branch(where)
+            if branch and branch in protected_branches(where):
+                return f"main (a git push from {branch})"
         tag = _tags_pushed(text, cwd)
         if tag:
             return f"guard bypass (git push of the tag {tag})"

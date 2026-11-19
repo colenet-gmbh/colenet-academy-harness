@@ -31,8 +31,8 @@ Ready gate reads); this docstring only lists the story checks in their order:
    source missing turns its check off with one warning, and the check arms when it lands;
 9. seams named: at least one path in some phase's ``**Files:**`` list;
 9b. the ``## Verification`` block's ``**Oracle:**`` line, read by the PR hook's own parser
-   (``hooks/verification_gate.py``): a line that hook would refuse is one warning now, not a
-   refusal at ``gh pr create`` later (the AC classes ``receipt``/``ci``/``walk`` are no oracle
+   (``hooks/verification_gate.py``): a line that hook would flag is one warning now, not a
+   hint after ``gh pr create`` later (the AC classes ``receipt``/``ci``/``walk`` are no oracle
    there);
 9c. the short form (``form: short``): the sections ``SHORT_SECTIONS`` replace the full set, the
    paths come from ``## Files`` (at most ``plans.short_max_files`` of ``.weside/config.json``,

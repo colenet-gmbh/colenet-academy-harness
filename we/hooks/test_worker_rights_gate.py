@@ -366,6 +366,8 @@ NEVER = [
     ("git push --no-verif origin HEAD", "guard bypass (--no-verify)"),
     ("git config core.hookspath /dev/null", "guard bypass (core.hooksPath)"),
     ('echo "`gh secret list`"', "secrets (gh secret)"),
+    ("cd ../main-checkout && git push", None),
+    ("git -C ../main-checkout push", None),
     # a merge other than the line arm_pr.sh prints
     ("gh pr merge 7 --admin", "merge (gh pr merge --admin)"),
     ("gh pr merge 7 --auto --squash", "merge (gh pr merge --auto)"),
@@ -379,6 +381,10 @@ NEVER = [
 
 @pytest.mark.parametrize("command,item", NEVER, ids=[c for c, _ in NEVER])
 def test_the_never_list_is_denied_for_a_worker(world, command, item):
+    if item is None:  # the push runs in the tree a `cd` or `git -C` names, here on main
+        main = make_repo(world["tmp"], name="main-checkout", branch="main")
+        command = command.replace("../main-checkout", str(main))
+        item = "main (a git push from main)"
     decision, reason = hook(world, command)
     assert decision == "deny", reason
     assert reason.startswith(f"never for a worker ({item}") and reason.endswith("ask your starter")

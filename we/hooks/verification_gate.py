@@ -389,8 +389,8 @@ def _receipt_problem(full: str) -> str | None:
     return None
 
 
-# A denied call runs none of its chain; read as "the PR step failed", the commit and push before
-# it were assumed done and retried piecemeal (4 cases in the retro of 18.10.2026).
+# "the command ran": the hint follows a call that went through, so the session edits the body
+# instead of retrying the PR step.
 _HINT = (
     "Verification receipt missing: the command ran; add the block to the PR body now "
     "(`gh pr edit <PR> --body-file <file>`).\n\n"
