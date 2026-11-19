@@ -29,10 +29,13 @@ one directory, `{a,b}` expands (the grammar of `risk_paths.py`).
 
 Exit codes:
   0  landed
-  1  refused (main worktree, dirty tree, nothing to land, a path outside the globs, a secret
-     finding, no scanner); nothing was pushed
+  1  refused (main worktree, dirty tree, nothing to land, a path outside the globs); nothing was
+     pushed
   2  failed (a git error, a rebase conflict, retries used up); nothing was pushed
   3  the server rejected the push: this repo takes no direct push, land by PR
+  4  refused by the secret scan: a finding, or no scanner configured (or it did not run); nothing
+     was pushed, and this commit lands by no route, the PR way included. Its own code because a
+     caller falls back to a PR on 1, and that fallback would push the finding to the forge
 Pinned by `scripts/test_plan_push.py`.
 """
 
@@ -63,7 +66,7 @@ DEFAULT_SCAN = (
 )
 RETRIES = 3
 PLANNED = re.compile(r"^state:\s*planned\s*(#.*)?$", re.M)
-REFUSED, FAILED, REJECTED = 1, 2, 3
+REFUSED, FAILED, REJECTED, SCAN_REFUSED = 1, 2, 3, 4
 NO_PUSH_LINE = "this repo takes no direct push; land by PR"
 
 
@@ -187,7 +190,7 @@ def scan(base: str, setting: Any) -> None:
         template = DEFAULT_SCAN
     else:
         raise PushError(
-            REFUSED,
+            SCAN_REFUSED,
             "refused: no secret scanner; install gitleaks or set plans.secret_scan in "
             '.weside/config.json (a command with {range}, or "none")',
         )
@@ -200,14 +203,16 @@ def scan(base: str, setting: Any) -> None:
         try:
             run = subprocess.run(argv, capture_output=True, text=True, check=False)
         except OSError as exc:
-            raise PushError(REFUSED, f"refused: secret scan did not run: {exc.strerror}") from exc
+            raise PushError(
+                SCAN_REFUSED, f"refused: secret scan did not run: {exc.strerror}"
+            ) from exc
         if run.returncode == 0:
             return
         lines = _findings(report)
     detail = "\n".join(f"  {line}" for line in lines) or (
         f"  exit {run.returncode}, no report; run the scan yourself: {template}"
     )
-    raise PushError(REFUSED, f"refused: the secret scan found something:\n{detail}")
+    raise PushError(SCAN_REFUSED, f"refused: the secret scan found something:\n{detail}")
 
 
 def _findings(report: Path) -> list[str]:
