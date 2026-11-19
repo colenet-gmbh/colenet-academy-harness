@@ -8,7 +8,7 @@ another `gh` binary, `curl` with the token all pass every text check. The bounda
 (branch rules, the merge gate, the app rights of the token).
 
 Never (every process worker, whatever its key; `never` names the item) is a fixed list of patterns
-matched on the command text as typed (`NEVER`), not a shell parser: what a pattern finds anywhere in
+matched on the command text (`NEVER`), not a shell parser: what a pattern finds anywhere in
 the text is denied, inside `bash -c '…'`, `$( … )`, a heredoc or inline `python -c` code alike, and
 data that only names an item (a commit message quoting `git push --delete`) is denied too, as the
 `--settings` deny rules already deny it. The list: secrets (`gh secret`, `gh variable`, a `gh api`
@@ -43,10 +43,16 @@ running past it denies; `gh pr edit` never removes a hold label) and
 `gh api graphql` with `resolveReviewThread` as its only mutation (`resolve_thread`). The switch is the
 opt-in: `worker_rights.repos` is not needed for these. Under `master` (the default) none of them is
 judged here.
-A right is judged on every simple command of the text (`segments`): its conditions failing in any
-part, the whole call is denied with the reason. Held, it is allowed outright only on a command of its
-own (`simple_argv`: no operator, substitution or newline); inside a compound command a held right only
-passes this gate.
+A right holds only as a simple command of its own. Behind a wrapper or an assignment (`env`,
+`timeout 9`, `xargs`, `GH_X=1`), in a `bash|sh|… -c` string, in `eval` or in a `$( … )` or backtick
+body it is refused, not judged (`hidden_right`). Otherwise it is judged on each part of a chain of
+simple commands (`segments`, split on `&&`, `||`, `;`, `|`, `&`, parentheses and newlines; leading
+shell keywords stripped): its conditions failing in any part, the whole call is denied. Held, it is
+allowed outright only on a command of its own (`simple_argv`); in a chain a held right only passes
+this gate. A heredoc's lines are judged as parts; a right run from a script file or an alias
+is not seen.
+The never patterns run on the text as typed and on it `normalised` (quotes and backslashes removed),
+so `git push origin +m"ain"` is denied; a branch named in a variable, an alias or `-c` config is not.
 """
 
 from __future__ import annotations
@@ -101,7 +107,8 @@ _SEPARATORS = re.compile(r"&&|\|\||[;|&\n()]")
 def segments(command: str) -> list[list[str]]:
     """The argv of each simple command in `command`, split on `&&`, `||`, `;`, `|`, `&`, a
     parenthesis and newlines (outside quotes where the text tokenizes; on the raw text where it does
-    not, each raw part as `simple_argv` reads it). A right inside a chain is judged on its part."""
+    not, each raw part as `simple_argv` reads it). No descent: a `bash -c` string, an `eval`
+    argument or a backtick body stays one word of its part (`hidden_right` looks there)."""
     parts: list[list[str]] = []
     for line in command.replace("\\\n", " ").split("\n"):
         try:
@@ -118,6 +125,127 @@ def segments(command: str) -> list[list[str]]:
             else:
                 part.append(token)
     return parts
+
+
+# shell keywords in front of a simple command: stripped, the command after them is judged as usual
+KEYWORDS = {"if", "then", "do", "else", "elif", "while", "until", "!", "{", "}", "fi", "done"}
+# commands that run their arguments as a command: a right behind one is refused, not judged
+WRAPPERS = {
+    "env", "command", "builtin", "exec", "nohup", "timeout", "xargs", "nice", "ionice", "stdbuf",
+    "time", "sudo", "doas", "setsid", "flock", "chrt", "taskset", "unbuffer", "watch", "parallel",
+}  # fmt: skip
+ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
+MAX_DEPTH = 4
+# the body of a heredoc with a quoted delimiter is data: bash runs no substitution in it
+_QUOTED_HEREDOC = re.compile(
+    r"<<-?[ \t]*(['\"])(\w+)\1([^\n]*\n)(.*?)(^[ \t]*\2[ \t]*$)", re.S | re.M
+)
+
+
+def strip_keywords(argv: list[str]) -> list[str]:
+    """`argv` without the shell keywords in front (`then gh pr ready` reads `gh pr ready`)."""
+    i = 0
+    while i < len(argv) and argv[i] in KEYWORDS:
+        i += 1
+    return argv[i:]
+
+
+def _substitutions(text: str) -> list[str]:
+    """The bodies of `$( … )`, `<( … )`, `>( … )` and backticks in `text`, outermost first, as bash
+    sees them: nothing inside single quotes, no escaped backtick or `$`."""
+    out: list[str] = []
+    i, quote = 0, None
+    while i < len(text):
+        ch = text[i]
+        if quote == "'":
+            quote = None if ch == "'" else quote
+            i += 1
+            continue
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "'" and quote is None:
+            quote = "'"
+        elif ch == '"':
+            quote = None if quote == '"' else '"'
+        elif ch == "`":
+            j = i + 1
+            while j < len(text) and text[j] != "`":
+                j += 2 if text[j] == "\\" else 1
+            if j >= len(text):
+                break
+            out.append(text[i + 1 : j])
+            i = j + 1
+            continue
+        elif ch in "$<>" and text[i + 1 : i + 2] == "(" and text[i + 2 : i + 3] != "(":
+            depth, j = 1, i + 2
+            while j < len(text) and depth:
+                depth += {"(": 1, ")": -1}.get(text[j], 0)
+                j += 1
+            out.append(text[i + 2 : j - 1])
+            i = j
+            continue
+        i += 1
+    return out
+
+
+def _rights_inside(text: str, rights: dict, owner: str, depth: int) -> str | None:
+    """The first right anywhere in `text` (a command of its own or hidden), for a text that runs
+    nested: every right found there is refused."""
+    if depth > MAX_DEPTH:
+        return f"nested deeper than {MAX_DEPTH} levels"
+    for part in segments(text):
+        argv = strip_keywords(part)
+        right = argv and right_of(argv, rights, owner)
+        if right:
+            return right
+    return hidden_right(text, rights, owner, depth)
+
+
+def hidden_right(command: str, rights: dict, owner: str = "master", depth: int = 0) -> str | None:
+    """A right (`right_of`) that `command` runs other than as a simple command of its own, as
+    `<right> <how>`, else None: behind a wrapper (`WRAPPERS`) or an assignment (`env gh pr ready`,
+    `GH_X=1 gh pr ready`), in the string of `bash|sh|… -c`, in the arguments of `eval`, or in a
+    `$( … )` or backtick body. The gate refuses it instead of judging it: a right holds only as a
+    command of its own. A heredoc's lines are judged as chain parts; a script file, a variable or
+    an alias stay unseen."""
+    if depth > MAX_DEPTH:
+        return f"nested deeper than {MAX_DEPTH} levels"
+    text = _QUOTED_HEREDOC.sub(lambda m: f"<<{m[1]}{m[2]}{m[1]}{m[3]}{m[5]}", command)
+    for inner in _substitutions(text):
+        found = _rights_inside(inner, rights, owner, depth + 1)
+        if found:
+            return f"{found} in a command substitution"
+    for part in segments(text):
+        argv = strip_keywords(part)
+        if not argv:
+            continue
+        head = os.path.basename(argv[0])
+        wrapped = head in WRAPPERS or ASSIGNMENT.fullmatch(argv[0])
+        # behind a wrapper its flags and values come first (`timeout 9`, `xargs -I{}`): every
+        # later word may start the command it runs
+        for k in range(len(argv) if wrapped else 1):
+            right = k and right_of(argv[k:], rights, owner)
+            if right:
+                return f"{right} behind {'an assignment' if head not in WRAPPERS else head}"
+            found = _nested(argv[k:], rights, owner, depth)
+            if found:
+                return found
+    return None
+
+
+def _nested(argv: list[str], rights: dict, owner: str, depth: int) -> str | None:
+    """A right in the `-c` string of a shell or in the arguments of `eval` that `argv` runs."""
+    name = os.path.basename(argv[0])
+    if name in SHELLS:
+        for j in range(1, len(argv) - 1):
+            if re.fullmatch(r"-[a-zA-Z]*c[a-zA-Z]*", argv[j]):
+                found = _rights_inside(argv[j + 1], rights, owner, depth + 1)
+                return f"{found} in {name} -c" if found else None
+    elif name == "eval":
+        found = _rights_inside(" ".join(argv[1:]), rights, owner, depth + 1)
+        return f"{found} in eval" if found else None
+    return None
 
 
 # ---------------------------------------------------------------- the repo a command runs in
@@ -290,6 +418,13 @@ def _push_dirs(text: str, cwd: str | None) -> list[str]:
     return [base, *(os.path.join(base, os.path.expanduser(d)) for _q, d in named)]
 
 
+def normalised(text: str) -> str:
+    """`text` with its quotes, backslashes and the `$` of `$'…'` removed, as the shell joins a word:
+    `+m"ain"` reads `+main`, `ma\\in` and `mai''n` read `main`. The never patterns run on it as well as on the
+    text as typed, so splitting a name with quotes does not hide it."""
+    return re.sub(r"""\$(?=['"])|['"\\]""", "", text)
+
+
 def never(  # noqa: PLR0911, PLR0912
     command: str, cwd: str | None, rights: dict | None = None, owner: str = "master"
 ) -> str | None:
@@ -298,7 +433,8 @@ def never(  # noqa: PLR0911, PLR0912
     text = command.replace("\\\n", " ")
     main = "|".join(re.escape(b) for b in sorted(protected_branches(cwd)))
     for item, pattern in NEVER:
-        found = re.search(pattern.replace("{main}", main), text)
+        compiled = re.compile(pattern.replace("{main}", main))
+        found = compiled.search(text) or compiled.search(normalised(text))
         if found:
             return item.format(*(found.groups() or ("",)))
     if re.search(_GIT_PUSH, text):
