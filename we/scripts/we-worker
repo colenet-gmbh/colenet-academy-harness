@@ -184,7 +184,9 @@ _is_worker() { # <kind> <pid> <cwd> [<name>]: a background session, a worktree w
   # names this session, or a process started as a worker (WE_ROLE=worker, readable on Linux); never a
   # master or companion, not even one that sits in a worker's tree. A background session whose settings
   # file (<state dir>/<name>.settings.json) sets WE_ROLE=master is a crew member `start.py launch`
-  # started, no worker.
+  # started, no worker. Any session of the user can write that file, so this guards only against
+  # mix-ups, never a right: no cheaper signal exists, a background session's /proc environment is
+  # the `claude daemon`'s (whoever started the daemon), and its settings `env` applies inside it only.
   if [[ "$1" == background ]]; then
     python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if (d.get("env") or {}).get("WE_ROLE")=="master" else 1)' \
       "${WE_WORKER_STATE_DIR:-$HOME/.claude/we-state/workers}/${4:--}.settings.json" 2>/dev/null && return 1

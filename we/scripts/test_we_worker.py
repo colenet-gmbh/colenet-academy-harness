@@ -1047,7 +1047,7 @@ def test_under_tree_caller_a_start_in_the_main_checkout_stays_there_with_a_tip(t
     _tree_mode(project, "caller")
     proc = run(project, env, "AC-12-impl", "--bg", GO)
     assert proc.returncode == 0, proc.stderr
-    assert "tip: --tree/--here, or workers.tree: own" in proc.stderr
+    assert "works in the main checkout" in proc.stderr and "workers.tree: own" in proc.stderr
     assert [c["cwd"] for c in started(tmp_path)] == [str(project)]
     assert not (tmp_path / "project-AC-12-impl").exists()
     assert not Path(_git(project, "rev-parse", "--absolute-git-dir"), "we-worker.json").exists()

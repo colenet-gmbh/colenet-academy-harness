@@ -80,6 +80,7 @@ def box(tmp_path):
             projects=projects,
             stop=lambda row: stops.append(row["id"]) or True,
             limits=limits,
+            jobs=tmp_path / "jobs",
         )
 
     return {
@@ -89,6 +90,7 @@ def box(tmp_path):
         "items": items,
         "stops": stops,
         "run": run,
+        "jobs": tmp_path / "jobs",
     }
 
 
@@ -235,6 +237,21 @@ def test_a_done_worker_idle_30_min_is_stopped_once_and_its_starter_told(box):
 def test_never_stopped_while_blocked_working_or_without_its_report(box, rows):
     box["run"](LIVE, *rows, GONE, limits=ON)
     assert not box["stops"]
+
+
+def test_never_stopped_while_its_job_runs_a_background_task(box):
+    """Red: a worker that reported and waits on its CI watcher reads `done`; 30 of 844 `done` job
+    states still ran a background shell."""
+    job = box["jobs"] / "bg1"
+    job.mkdir(parents=True)
+    job.joinpath("state.json").write_text(
+        json.dumps({"state": "done", "inFlight": {"tasks": 1, "kinds": ["local_bash"]}})
+    )
+    box["run"](LIVE, *_minutes(60, state="done"), GONE, limits=ON)
+    assert not box["stops"]
+    job.joinpath("state.json").write_text(json.dumps({"state": "done", "inFlight": {"tasks": 0}}))
+    box["run"](LIVE, *_minutes(31, state="done"), GONE, limits=ON)
+    assert box["stops"] == ["bg1"]
 
 
 def test_never_stopped_with_a_queued_start_of_its_name_or_the_stop_turned_off(box):

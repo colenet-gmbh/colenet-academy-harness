@@ -28,6 +28,7 @@ import contextlib
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -74,11 +75,13 @@ def decide(payload: dict, env: dict) -> tuple[str, str] | None:
     key = env.get("WE_STORY_KEY") or (marker or {}).get("key")
     owner = wr.pr_owner_on_default(cwd)
     held = []
+    # one budget for the whole call, below the hook's timeout: a killed hook lets the call through
+    deadline = time.monotonic() + wr.MERGE_LINE_BUDGET_S
     for argv in parsed.commands:
         right = wr.right_of(argv, rights, owner)
         if right is None:
             continue
-        reason = wr.right_refusal(argv, right, rights, key, cwd, owner)
+        reason = wr.right_refusal(argv, right, rights, key, cwd, owner, deadline)
         if reason:
             return "deny", f"not a worker right ({reason}): {ask}"
         held.append(right)

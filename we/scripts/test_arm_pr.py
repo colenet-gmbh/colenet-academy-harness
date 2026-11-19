@@ -382,3 +382,59 @@ def test_check_refuses_a_checkout_that_is_not_the_pr_head(tmp_path):
         ["refused: one-way not classified (this checkout is not the PR head)"],
     )
     assert arm_calls(calls) == []
+
+
+def real_crew_checkout(tmp_path):
+    """A checkout whose origin/main holds a crew file the way a real repo carries one: a `merge`
+    block next to `files.*` paths that exist beside it. The base's crew is read at a revision
+    (`crew.py merge --rev`), so its paths have no working tree to be checked against."""
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "config", "user.email", "t@example.invalid")
+    _git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "goals.md").write_text("# Goals\n")
+    (tmp_path / "docs" / "dod.md").write_text("# Done\n")
+    (tmp_path / ".weside").mkdir()
+    crew = {
+        "version": 2,
+        "roles": {},
+        "members": {},
+        "files": {"goals": "docs/goals.md", "dod": "docs/dod.md"},
+        "merge": {"armer": "session", "hold_labels": ["hold-me"]},
+    }
+    (tmp_path / ".weside" / "crew.json").write_text(json.dumps(crew))
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    _git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+@pytest.mark.parametrize(
+    ("labels", "code", "line"),
+    [
+        (
+            [],
+            0,
+            "ready: all required checks green on {sha} — merge: gh pr merge 7 --merge --match-head-commit {sha}",
+        ),
+        (["hold-me"], 4, "refused: label hold-me — only the human merges it"),
+    ],
+    ids=["ready", "held-by-the-base-crew"],
+)
+def test_the_merge_tools_load_a_real_crew_file_at_a_revision(tmp_path, labels, code, line):
+    """CI dry run of the merge tools on a crew with `files.*`: red on a crew read at a revision
+    whose paths are checked against the temp dir it was written to (every arm then ended in
+    `crew: … files.goals … does not exist`)."""
+    sha = real_crew_checkout(tmp_path)
+    crew = [sys.executable, str(HERE / "crew.py"), "merge"]
+    for field, want in (("armer", "session"), ("hold_labels", "hold-me")):
+        got = subprocess.run(
+            [*crew, field, "--rev", sha], cwd=tmp_path, capture_output=True, text=True, check=False
+        )
+        assert (got.returncode, got.stdout.strip()) == (0, want), got.stderr
+    reads = [{"head": sha, "checks": GREEN, "labels": labels}]
+    got, out, calls = run(tmp_path, reads, ["ok"], extra=("--check", "--sha", sha))
+    assert (got, out) == (code, [line.replace("{sha}", sha)])
+    assert arm_calls(calls) == []

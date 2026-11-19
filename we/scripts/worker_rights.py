@@ -267,14 +267,14 @@ def _descend(out: Parsed, argv: list[str], heredoc: str | None, depth: int) -> N
 # ---------------------------------------------------------------- the repo a command runs in
 
 
-def _git(cwd: str | Path | None, *args: str) -> str | None:
+def _git(cwd: str | Path | None, *args: str, timeout: float = GIT_TIMEOUT_S) -> str | None:
     try:
         out = subprocess.run(
             ["git", "-C", str(cwd or "."), *args],
             capture_output=True,
             text=True,
             check=False,
-            timeout=GIT_TIMEOUT_S,
+            timeout=timeout,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -869,7 +869,9 @@ def _arm_argv(argv: list[str]) -> list[str]:
     return []
 
 
-def _arm_refusal(argv: list[str], slug: str | None, branch: str, cwd: str | None) -> str | None:
+def _arm_refusal(
+    argv: list[str], slug: str | None, branch: str, cwd: str | None, deadline: float | None = None
+) -> str | None:
     run = _arm_argv(argv)
     repo = _flag_value(run[1:], "--repo", "-R")
     if repo and slug_of(repo) != slug:
@@ -884,7 +886,7 @@ def _arm_refusal(argv: list[str], slug: str | None, branch: str, cwd: str | None
         k += 1
     if selector is None:
         return "arm_pr.sh without a PR"
-    return _own_pr_refusal(selector, slug, branch, cwd)
+    return _own_pr_refusal(selector, slug, branch, cwd, deadline)
 
 
 def _thread_refusal(args: list[str]) -> str | None:
@@ -914,9 +916,13 @@ def right_refusal(  # noqa: PLR0911, PLR0912
     key: str | None,
     cwd: str | None,
     owner: str = "master",
+    deadline: float | None = None,
 ) -> str | None:
-    """Why a worker may not use `right` with this command here, else None (it holds)."""
-    deadline = time.monotonic() + MERGE_LINE_BUDGET_S
+    """Why a worker may not use `right` with this command here, else None (it holds). `deadline`
+    (a `time.monotonic()` value) is the hook's one budget across every command of a call; alone,
+    the merge line gets its own."""
+    if deadline is None:
+        deadline = time.monotonic() + MERGE_LINE_BUDGET_S
     slug = origin_slug(cwd)
     if not (owner == "worker" and right in PR_OWNER_RIGHTS):
         if not opted_in(rights, slug):
@@ -935,7 +941,7 @@ def right_refusal(  # noqa: PLR0911, PLR0912
     if right == "push":
         return _push_refusal(argv, key, cwd)
     if right == "arm":
-        return _arm_refusal(argv, slug, branch, cwd)
+        return _arm_refusal(argv, slug, branch, cwd, deadline)
     args, global_repo = _gh_split(argv)
     named = global_repo or _repo_flag(args)
     if named and slug_of(named) != slug:
@@ -963,7 +969,7 @@ def right_refusal(  # noqa: PLR0911, PLR0912
         problem, pr = _own_pr(selector or branch, slug, branch, cwd, deadline)
         return problem or _merge_facts_refusal(pr.get("number"), slug, cwd, deadline)
     if selector is not None:
-        problem = _own_pr_refusal(selector, slug, branch, cwd)
+        problem = _own_pr_refusal(selector, slug, branch, cwd, deadline)
         if problem:
             return problem
     return None
@@ -998,10 +1004,10 @@ def _left(deadline: float) -> float:
 
 
 def _past(deadline: float, what: str) -> str:
-    return f"gh pr merge: {what} ran past the merge-line check's {MERGE_LINE_BUDGET_S} s deadline"
+    return f"{what} ran past the worker gate's {MERGE_LINE_BUDGET_S} s deadline"
 
 
-def _merge_facts_refusal(
+def _merge_facts_refusal(  # noqa: PLR0911
     number: Any, slug: str | None, cwd: str | None, deadline: float
 ) -> str | None:
     """`arm_pr.sh --check` on this checkout's HEAD, because a worker can type the merge line
@@ -1010,11 +1016,15 @@ def _merge_facts_refusal(
     state, the review decision), from the one script that owns them. Only `ready` on that HEAD
     passes; any other line, an unreadable PR, a failed call or the deadline refuses. The script
     runs in its own process group, so a timeout kills its `gh`, `git` and classifier children too."""
-    head = _git(cwd, "rev-parse", "HEAD") or ""
-    if not head or not isinstance(number, int):
+    if not isinstance(number, int):
         return "gh pr merge: the PR number could not be read (no number)"
     if _left(deadline) <= 0:
         return _past(deadline, "the own-PR read")
+    head = _git(cwd, "rev-parse", "HEAD", timeout=min(GIT_TIMEOUT_S, _left(deadline))) or ""
+    if not head:
+        return "gh pr merge: the checkout's HEAD could not be read"
+    if _left(deadline) <= 0:
+        return _past(deadline, "git rev-parse HEAD")
     argv = ["bash", str(ARM_PR), str(number), "--check", "--sha", head, "--repo", slug or ""]
     try:
         proc = subprocess.Popen(
@@ -1032,7 +1042,9 @@ def _merge_facts_refusal(
     except subprocess.TimeoutExpired:
         with contextlib.suppress(OSError):
             os.killpg(proc.pid, signal.SIGKILL)
-        proc.communicate()
+        # a descendant in a session of its own may still hold the pipe: drain briefly, refuse anyway
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.communicate(timeout=2)
         return _past(deadline, "arm_pr.sh --check")
     lines = stdout.strip().splitlines()
     line = lines[-1] if lines else f"no verdict (exit {proc.returncode})"
@@ -1067,9 +1079,11 @@ def _own_pr(
     return None, head
 
 
-def _own_pr_refusal(selector: str, slug: str | None, branch: str, cwd: str | None) -> str | None:
+def _own_pr_refusal(
+    selector: str, slug: str | None, branch: str, cwd: str | None, deadline: float | None = None
+) -> str | None:
     """Why PR `selector` is not the PR whose head is `branch` in `slug`, else None."""
-    return _own_pr(selector, slug, branch, cwd)[0]
+    return _own_pr(selector, slug, branch, cwd, deadline)[0]
 
 
 # ---------------------------------------------------------------- the brake log

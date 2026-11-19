@@ -586,12 +586,18 @@ def tree_mode(repo: Path) -> str:
 def auto_tree(repo: Path, name: str, branch: str | None = None) -> Path | None:
     """The tree a start without `--tree`/`--here` gets: under `workers.tree: own` a start from the
     main checkout gets a new one (`add_tree`); otherwise None, the start stays where it is. Under
-    `caller` a start from the main checkout prints one tip on stderr."""
-    if main_checkout(repo) is None:
+    `caller` a start from the main checkout prints one warning on stderr."""
+    main = main_checkout(repo)
+    if main is None:
         return None
     if tree_mode(repo) == "own":
         return add_tree(repo, name, branch)
-    print("we-worker: tip: --tree/--here, or workers.tree: own", file=sys.stderr)
+    print(
+        f"we-worker: warning: {name} works in the main checkout {main} (workers.tree: caller); "
+        "a building worker takes its own tree: --tree <worktree>, or workers.tree: own in "
+        ".weside/config.json; a reading worker says so with --here",
+        file=sys.stderr,
+    )
     return None
 
 
