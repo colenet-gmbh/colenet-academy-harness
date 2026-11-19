@@ -80,7 +80,8 @@ Written always, also when step 4 is declined. Only keys a verb reads:
   "verification": { "required": true,
                     "pre_merge_receipt": "<command with {KEY}: prints report:/skip:/not-run:, exit 0 green, 1 red>" },
   "review": { "available": ["claude"] },
-  "agents": { "visible_teammates": false, "worker_launch": "subagent" },
+  "agents": { "visible_teammates": false, "worker_launch": "subagent",
+              "accounts_command": "<command printing the chosen account as JSON, or null>" },
   "build": { "pr_owner": "master|worker" },
   "workers": { "max_busy_sessions": 10, "max_active_5h_percent": 80,
                "blocked_notify_minutes": 15, "idle_stop_minutes": 30,
@@ -137,6 +138,10 @@ their own, outside the red-head totals. Write it only when the repo has such a c
 (`${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md` § Worker launch backend), for a repo without a
 crew; `"subagent"` (shown above) is its default. A repo with a crew gets one in the crew's
 `launch.worker` instead, written in step 4a (L0 §Sessions: build only in workers).
+
+`agents.accounts_command` lets the project's own tool choose the account of a `we-worker --account`
+start (`${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md` § Worker rights). Write it only when the
+user names such a command; absent, workers start on the login they always did.
 
 A re-run re-detects `tools` and overwrites only that block. Print what was configured in a short
 block (stack, ticketing, goals, test discipline, verification, review gates, worker cap, plan landing, missing tools).

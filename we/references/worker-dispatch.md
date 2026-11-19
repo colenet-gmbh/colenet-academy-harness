@@ -125,6 +125,10 @@ as `permissions.allow`, the never-list as `permissions.deny`, the worker's varia
 launcher's, so a plain `claude --bg` template gets an env-only `--settings` too
 (`we-worker.settings.json` in the worktree's git dir). Every `claude` call of `worker_launch.py`
 drops `CLAUDE_CONFIG_DIR`, so a pinned master sees the global login's sessions.
+`we-worker --account auto|<name>` asks the project's `agents.accounts_command` for the account
+(`<cmd> --need critical|uncritical`, critical unless the brief has a line `Account: uncritical`) and
+puts its `env` and its `token_command` as `apiKeyHelper` into that settings file, never a secret on a
+command line; a critical worker on a non-Claude account refuses (`worker_launch.py choose_account`).
 The brake is the PreToolUse hook `hooks/worker_rights_gate.py`, which holds under `bypassPermissions`:
 in a repo the crew's `worker_rights.repos` names, a worker on its own keyed branch runs `gh pr ready`,
 `gh pr comment` on its own PR and the crew's `branch_rc` without asking; every worker is denied the
