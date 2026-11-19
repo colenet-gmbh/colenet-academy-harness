@@ -3,7 +3,8 @@
 # owner (`human.name` in the crew) merges it by hand, or approves it where the repo runs a one-way
 # gate as a required check. `[t2]` paths print `T2` and auto-merge after CI.
 # A file without any one-way section is valid: the brake is empty on purpose.
-# Grammar: `[section]` and `path <glob>` lines (`**`, `*`, `?`, `{a,b}`).
+# Grammar: `[section]`, `path <glob>` lines (`**`, `*`, `?`, `{a,b}`) and `json <file> <key>` lines
+# (the top-level key's value changed).
 # One-way sections: brake-change, money, destructive-migration, terraform-secrets.
 # Two-way `review: high` sections: trust-loosening and brake-review (a security card worker posts
 # its verdict on the PR for the human), money-path (no card).
@@ -11,6 +12,8 @@
 [brake-change]
 path .weside/crew.json
 path .weside/risk-paths
+# `build.pr_owner: worker` gives process workers the merge rights: switching it loosens trust.
+json .weside/config.json build
 # The review workflows (`claude-code-review.yml`, `codex-code-review.yml`); helpers such as a skip
 # gate are named per repo.
 path .github/workflows/*-code-review.yml

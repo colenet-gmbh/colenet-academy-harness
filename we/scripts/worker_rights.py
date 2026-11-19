@@ -20,8 +20,11 @@ branch conditions it may also run `git push` (`push`: every destination branch c
 `gh pr create` (`pr_create`: no argument, `--head` only its branch), `gh pr edit` and `gh pr comment`
 (`pr_edit`, `pr_comment`: its own PR), `arm_pr.sh` (`arm`: its own PR), `gh pr merge` (`merge`: its
 own PR, either `--disable-auto` alone or `--match-head-commit <its checkout's HEAD>`, the line
-`arm_pr.sh` prints as `ready`, never `--admin` or `--auto`, and only when the gate reads the same
-facts `ready` stands for: no one-way class, no hold label, every required check green; every other
+`arm_pr.sh` prints as `ready`, never `--admin` or `--auto`, and only when `arm_pr.sh --check` answers
+`ready` on that HEAD, the one owner of those facts (hold labels, one-way class, every required name
+green with absent as pending, merge state, review decision); the whole merge-line check (own-PR
+read, `arm_pr.sh --check` in its own process group) shares one deadline under the hook's 60 s, and
+running past it denies; every other
 `gh pr merge` is denied; `gh pr edit` never removes a hold label) and
 `gh api graphql` with `resolveReviewThread` as its only mutation (`resolve_thread`). The switch is the
 opt-in: `worker_rights.repos` is not needed for these. Under `master` (the default) none of them is
@@ -46,12 +49,15 @@ non-literal argument, a nesting deeper than `MAX_DEPTH` and an unparsable comman
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -64,6 +70,10 @@ FLAG_PREFIXES = {"sudo", "env", "timeout", "xargs", "nice", "stdbuf", "time", "c
 MAX_DEPTH = 4
 GIT_TIMEOUT_S = 10
 GH_TIMEOUT_S = 30
+# one deadline for the whole merge-line check (own-PR read, then `arm_pr.sh --check`), under the
+# hook's 60 s: a killed hook lets the call through, so the gate must answer first
+MERGE_LINE_BUDGET_S = 50
+ARM_PR = Path(__file__).with_name("arm_pr.sh")
 MAIN_NAMES = ("main", "master")
 GUARD_WORDS = ("ALLOW_PUSH_WITHOUT_MAIN", "--no-verify", "core.hooksPath")
 WRITE_FIELDS = ("-f", "-F", "--field", "--raw-field", "--input")
@@ -686,8 +696,9 @@ def _selector(args: list[str]) -> str | None:
     return None
 
 
-def _gh_pr_head(selector: str, slug: str, cwd: str | None) -> dict:
-    """`gh pr view <selector> --json headRefName,headRepository,headRepositoryOwner`; raises on failure."""
+def _gh_pr_head(selector: str, slug: str, cwd: str | None, timeout: float = GH_TIMEOUT_S) -> dict:
+    """`gh pr view <selector> --json number,headRefName,headRepository,headRepositoryOwner`; raises
+    on failure."""
     out = subprocess.run(
         [
             "gh",
@@ -697,12 +708,12 @@ def _gh_pr_head(selector: str, slug: str, cwd: str | None) -> dict:
             "--repo",
             slug,
             "--json",
-            "headRefName,headRepository,headRepositoryOwner",
+            "number,headRefName,headRepository,headRepositoryOwner",
         ],
         capture_output=True,
         text=True,
         check=False,
-        timeout=GH_TIMEOUT_S,
+        timeout=timeout,
         cwd=cwd or None,
     )
     if out.returncode != 0:
@@ -905,6 +916,7 @@ def right_refusal(  # noqa: PLR0911, PLR0912
     owner: str = "master",
 ) -> str | None:
     """Why a worker may not use `right` with this command here, else None (it holds)."""
+    deadline = time.monotonic() + MERGE_LINE_BUDGET_S
     slug = origin_slug(cwd)
     if not (owner == "worker" and right in PR_OWNER_RIGHTS):
         if not opted_in(rights, slug):
@@ -946,12 +958,14 @@ def right_refusal(  # noqa: PLR0911, PLR0912
         selector = _pr_selector(args, VALUE_FLAGS[right])
     else:
         selector = _selector(args)
+    if right == "merge" and "--disable-auto" not in args:
+        # the merge line: one own-PR read gives the number `arm_pr.sh --check` judges
+        problem, pr = _own_pr(selector or branch, slug, branch, cwd, deadline)
+        return problem or _merge_facts_refusal(pr.get("number"), slug, cwd, deadline)
     if selector is not None:
         problem = _own_pr_refusal(selector, slug, branch, cwd)
         if problem:
             return problem
-    if right == "merge" and "--disable-auto" not in args:
-        return _merge_facts_refusal(selector or branch, slug, cwd)
     return None
 
 
@@ -979,81 +993,83 @@ def _hold_removed(args: list[str], cwd: str | None) -> str | None:
     return next((x for v in values for x in v.split(",") if x.strip() in hold), None)
 
 
-def _gh_json(cwd: str | None, *args: str) -> tuple[Any, str]:
-    """(parsed stdout or None, stderr) of a `gh` call; never raises."""
+def _left(deadline: float) -> float:
+    return deadline - time.monotonic()
+
+
+def _past(deadline: float, what: str) -> str:
+    return f"gh pr merge: {what} ran past the merge-line check's {MERGE_LINE_BUDGET_S} s deadline"
+
+
+def _merge_facts_refusal(
+    number: Any, slug: str | None, cwd: str | None, deadline: float
+) -> str | None:
+    """`arm_pr.sh --check` on this checkout's HEAD, because a worker can type the merge line
+    without running the helper: the gate holds exactly the facts `ready` stands on (crew merge
+    block, hold labels, one-way class, every required name green with absent as pending, the merge
+    state, the review decision), from the one script that owns them. Only `ready` on that HEAD
+    passes; any other line, an unreadable PR, a failed call or the deadline refuses. The script
+    runs in its own process group, so a timeout kills its `gh`, `git` and classifier children too."""
+    head = _git(cwd, "rev-parse", "HEAD") or ""
+    if not head or not isinstance(number, int):
+        return "gh pr merge: the PR number could not be read (no number)"
+    if _left(deadline) <= 0:
+        return _past(deadline, "the own-PR read")
+    argv = ["bash", str(ARM_PR), str(number), "--check", "--sha", head, "--repo", slug or ""]
     try:
-        out = subprocess.run(
-            ["gh", *args],
-            capture_output=True,
+        proc = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            check=False,
-            timeout=GH_TIMEOUT_S,
             cwd=cwd or None,
+            start_new_session=True,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return None, str(exc)
+    except OSError as exc:
+        return f"gh pr merge: arm_pr.sh --check failed ({exc})"
     try:
-        return json.loads(out.stdout), out.stderr.strip()
-    except ValueError:
-        return None, out.stderr.strip() or f"gh exited {out.returncode}"
+        stdout, _ = proc.communicate(timeout=max(_left(deadline), 0.1))
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        return _past(deadline, "arm_pr.sh --check")
+    lines = stdout.strip().splitlines()
+    line = lines[-1] if lines else f"no verdict (exit {proc.returncode})"
+    if proc.returncode == 0 and line.startswith(f"ready: all required checks green on {head} "):
+        return None
+    return f"gh pr merge: arm_pr.sh --check: {line}"
 
 
-def _merge_facts_refusal(selector: str, slug: str | None, cwd: str | None) -> str | None:  # noqa: PLR0911
-    """The `ready` facts `arm_pr.sh` checks before it prints the merge line, checked again here,
-    because a worker can type that line without running the helper: no one-way class
-    (`risk_paths.py` on this checkout, which `_merge_refusal` tied to the PR head), no hold label,
-    every required check green. A fact that cannot be read refuses."""
-    base = default_branch(cwd)
-    if _git(cwd, "cat-file", "-e", f"origin/{base}:.weside/risk-paths") is not None:
-        try:
-            out = subprocess.run(
-                [sys.executable, str(Path(__file__).with_name("risk_paths.py")), f"origin/{base}"],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=GH_TIMEOUT_S,
-                cwd=cwd or None,
-            )
-            line = out.stdout.splitlines()[0] if out.stdout.strip() else ""
-        except (OSError, subprocess.TimeoutExpired, IndexError):
-            line = ""
-        if not line:
-            return (
-                "gh pr merge: the risk class could not be read; only arm_pr.sh's ready line merges"
-            )
-        if line.startswith("T2 one-way"):
-            return f"gh pr merge: {line}: only the human merges it"
-    view, err = _gh_json(cwd, "pr", "view", selector, "--repo", slug or "", "--json", "labels")
-    if not isinstance(view, dict):
-        return f"gh pr merge: the PR's labels could not be read ({err})"
-    names = {str((x or {}).get("name")) for x in view.get("labels") or []}
-    held = sorted(names & _hold_labels(cwd))
-    if held:
-        return f"gh pr merge: label {held[0]}: only the human merges it"
-    checks, err = _gh_json(
-        cwd, "pr", "checks", selector, "--repo", slug or "", "--required", "--json", "name,bucket"
-    )
-    if checks is None and "no required checks" not in err:
-        return f"gh pr merge: the required checks could not be read ({err})"
-    red = [c.get("name") for c in checks or [] if c.get("bucket") not in ("pass", "skipping")]
-    if red:
-        return f"gh pr merge: required checks not green ({', '.join(map(str, red))})"
-    return None
+def _own_pr(
+    selector: str, slug: str | None, branch: str, cwd: str | None, deadline: float | None = None
+) -> tuple[str | None, dict]:
+    """(why PR `selector` is not the PR whose head is `branch` in `slug`, else None; the PR read)."""
+    timeout = GH_TIMEOUT_S if deadline is None else min(GH_TIMEOUT_S, _left(deadline))
+    if timeout <= 0:
+        return _past(deadline or 0.0, "the own-PR read"), {}
+    try:
+        head = _gh_pr_head(selector, slug, cwd, timeout)
+    except Exception as exc:  # fail closed: an unresolved PR is no own PR
+        spent = isinstance(exc, subprocess.TimeoutExpired) and deadline is not None
+        if spent and _left(deadline) <= 0:
+            return _past(deadline, "the own-PR read"), {}
+        return f"PR {selector} could not be resolved ({exc})", {}
+    owner = ((head.get("headRepositoryOwner") or {}).get("login") or "").lower()
+    repo = ((head.get("headRepository") or {}).get("name") or "").lower()
+    if head.get("headRefName") != branch:
+        return (
+            f"PR {selector} is not this branch's PR (its head is {head.get('headRefName')})",
+            head,
+        )
+    if owner and repo and f"{owner}/{repo}" != slug:
+        return f"PR {selector} comes from {owner}/{repo}", head
+    return None, head
 
 
 def _own_pr_refusal(selector: str, slug: str | None, branch: str, cwd: str | None) -> str | None:
     """Why PR `selector` is not the PR whose head is `branch` in `slug`, else None."""
-    try:
-        head = _gh_pr_head(selector, slug, cwd)
-    except Exception as exc:  # fail closed: an unresolved PR is no own PR
-        return f"PR {selector} could not be resolved ({exc})"
-    owner = ((head.get("headRepositoryOwner") or {}).get("login") or "").lower()
-    repo = ((head.get("headRepository") or {}).get("name") or "").lower()
-    if head.get("headRefName") != branch:
-        return f"PR {selector} is not this branch's PR (its head is {head.get('headRefName')})"
-    if owner and repo and f"{owner}/{repo}" != slug:
-        return f"PR {selector} comes from {owner}/{repo}"
-    return None
+    return _own_pr(selector, slug, branch, cwd)[0]
 
 
 # ---------------------------------------------------------------- the brake log
@@ -1079,7 +1095,6 @@ def brake_log(cwd: str | Path | None, record: dict) -> Path | None:
     `WE_STATE_FORBIDDEN` (directories, `os.pathsep`-separated; the test run's `conftest.py` sets
     it to the live state directories) refuses a write there: the line goes to the file named by
     `WE_STATE_LEAKS` instead, and the test run turns red on it."""
-    import contextlib  # noqa: PLC0415
     import datetime as dt  # noqa: PLC0415
 
     import crew as crew_mod  # noqa: PLC0415

@@ -15,6 +15,7 @@ Grammar, a subset of the rules file the core classifier reads:
   # comment
   [<section>]
   path <glob>
+  json <file> <key>
 
 `<section>` is one of the one-way classes, in this fixed order of precedence: `brake-change`,
 `money`, `destructive-migration`, `terraform-secrets`; a `review: high` section (two-way):
@@ -22,7 +23,10 @@ Grammar, a subset of the rules file the core classifier reads:
 `brake-review` also call for a security card review (`references/worker-dispatch.md` § Card
 worker); or `t2` (two-way).
 A glob: `**/` matches zero or more whole directories, a bare `**` anything, `*` and `?` stay
-inside one directory, `{a,b}` expands. A `line` or `from` rule, an unknown keyword or section, a
+inside one directory, `{a,b}` expands. A `json` rule matches when `<file>` changed and the value
+of its top-level `<key>` differs between the merge base and HEAD (a missing file is `{}`; a file
+that does not parse on either side matches, failing closed), so a switch inside a shared config
+file is judged by value and the rest of the file is not. A `line` or `from` rule, an unknown keyword or section, a
 section without a rule, or a rule before the first section exits 2 naming it. A file without any
 section (empty or comments only) is valid and classifies every diff `T0`: a crew that wants no brake
 says so in a file; a missing file is not that.
@@ -34,7 +38,7 @@ Output (exit 0):
 
   line 1   `T0`, `T2` or `T2 one-way <class>` (the first class in the fixed order that matched)
   line 2   `review: high` for a one-way class or a card section hit, else `review: standard`
-  then     one `<file>\t<class>: path <glob>` line per hit
+  then     one `<file>\t<class>: path <glob>` (or `json <file> <key>`) line per hit
 
 Exit 2 on any failure (missing `origin/main`, missing or broken rules, a git error): a caller
 treats it as "class not computed" and fails closed. Pinned by `scripts/test_risk_paths.py`.
@@ -42,9 +46,11 @@ treats it as "class not computed" and fails closed. Pinned by `scripts/test_risk
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
+from typing import Callable
 
 RULES_FROM = "origin/main"
 RULES_FILE = ".weside/risk-paths"
@@ -105,7 +111,8 @@ def _glob_regex(glob: str) -> re.Pattern[str]:
 
 
 def parse_rules(text: str) -> dict[str, list[tuple[str, re.Pattern[str]]]]:
-    """Section → [(glob as written, compiled pattern)]; RiskError on anything outside the grammar."""
+    """Section → [(rule as written, compiled pattern)]; the rule is a glob, or `json <file> <key>`
+    with the file's exact pattern. RiskError on anything outside the grammar."""
     rules: dict[str, list[tuple[str, re.Pattern[str]]]] = {}
     section = None
     for n, raw in enumerate(text.splitlines(), 1):
@@ -126,6 +133,10 @@ def parse_rules(text: str) -> dict[str, list[tuple[str, re.Pattern[str]]]]:
             raise RiskError(
                 f"{RULES_FILE}:{n}: a `{keyword}` rule needs the repo's own risk.command"
             )
+        if keyword == "json" and len(rest.split()) == 2 and section is not None:
+            file, key = rest.split()
+            rules[section].append((f"json {file} {key}", re.compile(re.escape(file) + r"\Z")))
+            continue
         if keyword != "path" or not rest.strip():
             raise RiskError(f"{RULES_FILE}:{n}: not a rule: {line}")
         if section is None:
@@ -139,14 +150,20 @@ def parse_rules(text: str) -> dict[str, list[tuple[str, re.Pattern[str]]]]:
     return rules
 
 
-def classify(changed: list[str], rules: dict[str, list[tuple[str, re.Pattern[str]]]]) -> list[str]:
-    """The output lines for `changed` under `rules`."""
+def classify(
+    changed: list[str],
+    rules: dict[str, list[tuple[str, re.Pattern[str]]]],
+    value_changed: Callable[[str, str], bool] = lambda *_: True,
+) -> list[str]:
+    """The output lines for `changed` under `rules`; `value_changed(file, key)` judges a `json` rule."""
     hits: list[tuple[str, str, str]] = []
     for path in changed:
         for section in SECTIONS:
             seen = set()
             for glob, pattern in rules.get(section, []):
-                if glob not in seen and pattern.match(path):
+                if glob in seen or not pattern.match(path):
+                    continue
+                if not glob.startswith("json ") or value_changed(*glob.split()[1:]):
                     seen.add(glob)
                     hits.append((path, section, glob))
     found = {section for _, section, _ in hits}
@@ -159,7 +176,35 @@ def classify(changed: list[str], rules: dict[str, list[tuple[str, re.Pattern[str
         lines = ["T2", "review: standard"]
     else:
         lines = ["T0", "review: standard"]
-    return lines + [f"{path}\t{section}: path {glob}" for path, section, glob in hits]
+    return lines + [
+        f"{path}\t{section}: {glob if glob.startswith('json ') else 'path ' + glob}"
+        for path, section, glob in hits
+    ]
+
+
+def _json_value_changed(base: str) -> Callable[[str, str], bool]:
+    """`value_changed` for `classify`: the top-level key at the merge base of `base` and HEAD
+    against HEAD; a missing file is `{}`, a file that does not parse matches."""
+    merge_base = _git("merge-base", base, "HEAD").strip()
+
+    def load(rev: str, file: str) -> object:
+        try:
+            text = _git("show", f"{rev}:{file}")
+        except RiskError:
+            return {}
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            raise ValueError(file)
+        return data
+
+    def changed(file: str, key: str) -> bool:
+        try:
+            old, new = load(merge_base, file), load("HEAD", file)
+        except ValueError:
+            return True
+        return old.get(key) != new.get(key)  # type: ignore[union-attr]
+
+    return changed
 
 
 def run(argv: list[str]) -> list[str]:
@@ -173,7 +218,9 @@ def run(argv: list[str]) -> list[str]:
         raise RiskError(f"base {base} is not an ancestor of {RULES_FROM}") from exc
     rules = parse_rules(_git("show", f"{RULES_FROM}:{RULES_FILE}"))
     diff = _git("diff", "--name-only", "--no-renames", f"{base}...HEAD")
-    return classify([line for line in diff.splitlines() if line.strip()], rules)
+    return classify(
+        [line for line in diff.splitlines() if line.strip()], rules, _json_value_changed(base)
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
