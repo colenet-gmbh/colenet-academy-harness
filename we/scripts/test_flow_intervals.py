@@ -800,6 +800,7 @@ def two_projects(t):
     if t <= at(1, 6, 0, 4):
         out += [s("ABC-1-build", "busy", key="ABC-1"), s("XYZ-1-build", "busy", key="XYZ-1")]
         out.append(s("ABC-7-late", "busy", key="ABC-7"))  # no marker, no starter: its key
+        out.append({"name": "nosid-1", "status": "busy"})  # an old probe without session_id
     return out
 
 
@@ -894,38 +895,36 @@ def test_one_project_per_page_and_table(tmp_path, monkeypatch, capsys):
     assert not any(r["kind"].startswith("holding:") for r in data["intervals"])
     att = data["attribution"]
     # 145 probes: alpha-7 every probe, ABC-1-build to 06:00; other-1, stray-9, XYZ-1-build dropped
-    assert (att["kept_sessions"], att["dropped_sessions"]) == (3, 3)
-    assert (att["kept_rows"], att["dropped_rows"]) == (145 + 73 + 73, 145 + 145 + 73)
+    assert (att["kept_sessions"], att["dropped_sessions"]) == (3, 4)
+    assert (att["kept_rows"], att["dropped_rows"]) == (145 + 73 + 73, 145 + 145 + 73 + 73)
     assert (att["dropped_events"], att["dropped_locks"]) == (1, 13)
     assert (att["dropped_log_rows"], att["dropped_foreign"]) == (1, 1)
     assert any(r["who"] == "alpha-7" and r["source"] == "waits" for r in data["intervals"])
     reasons = [g["reason"] for g in data["gaps"]]
     dropped = (
-        f"not attributed to {PROJECT}: 363 sampler rows of 3 sessions, "
+        f"not attributed to {PROJECT}: 436 sampler rows of 4 sessions, "
         "1 blocked events, 13 lock probes, 1 board log waits dropped"
     )
     assert dropped in reasons and "other project: 1 rows of rows.jsonl dropped" in reasons
-    assert f"project {PROJECT}: 291 sampler rows of 3 sessions kept, 363 rows" in err
+    assert f"project {PROJECT}: 291 sampler rows of 3 sessions kept, 436 rows" in err
     md = fr.render_md(md_report(root, board, str(foreign)))
     assert f"n/a ({dropped})" in md and "n/a (other project: 1 rows of rows.jsonl dropped)" in md
     assert "Flow project" in md and f"{PROJECT}: 291 sampler rows" in md
-    for name in ("other-1", "stray-9", "XYZ-1-build", "zed-old", "ext-theirs"):
+    for name in ("other-1", "stray-9", "XYZ-1-build", "zed-old", "nosid-1", "ext-theirs"):
         assert f"efficiency: {name} " not in md, name
     assert "Master efficiency: alpha-7" in md and "Worker efficiency: ABC-1-build" in md
 
 
 def test_project_name_arrives_as_text(tmp_path, monkeypatch, capsys):
     root, board, _f = two_project_state(tmp_path, monkeypatch, stamp=False)
-    evil = '</title><script>alert(1)</script>"&'
+    evil = '</title><script>alert(1)</script>"&/*JS*/'
     page = tmp_path / "e.html"
     window = ["--since", "2026-04-01", "--until", "2026-04-02T00:00", "--board", str(board)]
     code, _o, _e = run_cli(root, capsys, *window, "--project", evil, "--html", str(page))
     assert code == 0
     text = page.read_text(encoding="utf-8")
-    assert (
-        "<title>Crew flow · &lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;&quot;&amp;</title>"
-        in text
-    )
+    title = "&lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;&quot;&amp;/*JS*/"
+    assert f"<title>Crew flow · {title}</title>" in text
     assert text.count("<script>") == 1 and closes_once(text)
     assert page_json(text)["project"] == evil
     # a board stamped for one project refuses another name

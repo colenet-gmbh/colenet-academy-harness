@@ -906,7 +906,7 @@ def _filter_samples(samples, keep) -> tuple:
             if not (isinstance(e, dict) and isinstance(e.get("name"), str) and e["name"]):
                 continue
             sampled.add(e["name"])
-            if keep(e["name"], e.get("session_id")):
+            if keep(e["name"]):  # `see` recorded its session_id and keys
                 sessions.append(e)
                 kept_rows += 1
             else:
@@ -1282,13 +1282,14 @@ def embed_json(data: dict, escape: bool = True) -> str:
 
 
 def render_page(data: dict, escape: bool = True) -> str:
-    title = html.escape(f"Crew flow · {data.get('project') or NO_PROJECT}")
-    return (
-        PAGE.replace("/*TITLE*/", title)
-        .replace("/*CSS*/", CSS)
-        .replace("/*DATA*/", embed_json(data, escape))
-        .replace("/*JS*/", JS)
-    )
+    parts = {
+        "TITLE": html.escape(f"Crew flow · {data.get('project') or NO_PROJECT}"),
+        "CSS": CSS,
+        "DATA": embed_json(data, escape),
+        "JS": JS,
+    }
+    # one pass: a placeholder inside a filled-in value (a project name, a key) stays text
+    return re.sub(r"/\*(TITLE|CSS|DATA|JS)\*/", lambda m: parts[m.group(1)], PAGE)
 
 
 PAGE = """<!doctype html>
