@@ -376,7 +376,10 @@ it checks the marker, the sha against the PR's current head and the file's mtime
 worker's start, then posts the file unchanged with `gh pr comment <N> --body-file <file>`. The worker judged, the starter only passes the verdict on, so this does not go
 around `worker_rights_gate.py`; never start a second worker only to post (owner decision, 13.11.2026).
 
-The card is input, not a gate (security owner, 18.11.2026). Right after the post the starter:
+The merge question on a one-way PR goes onto the board only once the card verdict for its head is
+in; until then the starter's board line reads `waiting: card` (`board.py set now=…`), because a PR
+merged before its card needed a follow-up PR. The card is input, not a gate (security owner,
+18.11.2026). Right after the post the starter:
 
 - logs the verdict: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/worker_rights.py brake card --pr <N> --file <file>`
   (one `card` line in `brakes.jsonl` with `verdict` and `pr`);
@@ -425,7 +428,9 @@ arrives or the worker is stopped, `TaskStop` its watchdog by task id in the same
 An `exited:` line naming `auth` restarts the worker at once with the resume command it names (after
 `usage-limit`: at the reset), one line to the coordinator; a worker that died stays a row in
 `claude agents`, so only its living pid counts as alive. `we-worker status` lists window workers too.
-A commit becomes one status line to the human (phase done). A stall gets evidence (`git log -3`,
+A commit becomes one status line to the human (phase done). A count you pass on (jobs done of N) is
+read from `gh run view <id> --json jobs` when you send it, not summed from workers' partial reports:
+those sums were wrong three times in one day. A stall gets evidence (`git log -3`,
 `git status`, the agent's state) before any word about it. Three runs with it had 0 idle nudges
 by the human (#4308, #4326, #4328); without it a worker sat idle 7 h 47 min (#4299).
 
