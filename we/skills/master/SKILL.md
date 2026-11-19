@@ -160,12 +160,13 @@ Run Skill("we:develop") for <KEY> [--phases N]. Plan: docs/plans/<KEY>-story.md.
 Branch: <type>/<KEY>-<slug> (-p<N> for a parallel chunk); rename `worktree-…` to it before the first commit.
 [Base: first `git merge <PR branch>` — the chunk builds on it.]
 Finish: [you are the last writer: run the finish sequence | not yours]. Verification: [<journeys> | none].
-[PR owner: worker]   (when `worker_launch.py pr-owner` prints `worker`: the single build worker or the finisher; worker-dispatch.md § PR-carrying worker)
+[PR owner: worker — open the PR with /we:pr]   (naming /we:pr keeps the ticketing tools; when `worker_launch.py pr-owner` prints `worker`: the single build worker or the finisher; worker-dispatch.md § PR-carrying worker)
   (Order verification whenever `.weside/config.json` has `verification.required: true`.)
 Report: worker-dispatch.md § Report, as your final message or to your `Lead:`; a skill's output is never it.
 ## Tools and sources
 Bootstrap: <commands from .weside/orchestrate.md>.
 Contract: ${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md § Dev-only worker contract.
+[Needs: ticketing]   (only when the ticket has comments newer than the plan's approval: without it the worker starts without the ticketing tools)
 Traps: ${CLAUDE_PLUGIN_ROOT}/references/session-traps.md (stash, HEAD after commit, watcher exit 0, gate lock).
 Tests: <test_discipline from .weside/config.json, spelled out; absent → tests after the code, same change>.
 Gates: <affected suites>; [critical chunk: run <integration suite> against <database>].

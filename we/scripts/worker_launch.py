@@ -62,12 +62,15 @@ Usage:
   worker_launch.py needs --all [--repo <dir>]      one line per plugin skill whose need
                                                    `workers.context` turns off, exit 2; else 0
   worker_launch.py settings --repo <dir> --key <K> --out <file> [--session-start <command>] [--name <n>]
+                           [--brief-stdin < brief]
                                                    writes the worker's `--settings` file: the
                                                    granted rights of that repo as permissions.allow,
                                                    the never-list as permissions.deny
                                                    (`worker_rights.py`), the command as its
                                                    SessionStart hook, the lean context of
-                                                   `workers.context` (`apply_context`)
+                                                   `workers.context` (`apply_context`); with the
+                                                   brief, the ticketing plugin off when its
+                                                   skills need no ticket (`ticketing_unneeded`)
   worker_launch.py tree --repo <dir> --name <n> [--branch <b>] [--auto | --main-checkout]
                                                    creates the worker's own worktree beside the
                                                    main checkout (`add_tree`) and prints its path;
@@ -796,7 +799,9 @@ def check_needs(brief: str, repo: Path) -> None:
     if not plugins and not servers:
         return
     for need in needs:
-        found = _hit(need, plugins, servers)
+        found = next(
+            (f for n in resolve_need(need, repo) if (f := _hit(n, plugins, servers))), None
+        )
         if found is not None:
             key, hit = found
             raise LaunchError(
@@ -827,6 +832,65 @@ def skill_conflict(skill: str, repo: Path, plugins: list[str], servers: list[str
     return None
 
 
+POINTER_RE = re.compile(r"^\s*Read (\S+) and follow it\.?\s*$", re.MULTILINE)
+
+
+def brief_text(brief: str) -> str:
+    """The brief with the files its `Read <path> and follow it.` lines point at appended: most
+    briefs are such a pointer, and the skills stand in the file."""
+    parts = [brief]
+    for path in POINTER_RE.findall(brief):
+        with contextlib.suppress(OSError, UnicodeDecodeError):
+            parts.append(Path(path).expanduser().read_text())
+    return "\n".join(parts)
+
+
+def ticketing_unneeded(brief: str, repo: Path) -> list[str]:
+    """The project's ticketing plugins or servers a worker starts without: the brief names
+    `/we:<skill>`s and neither one of them (frontmatter `needs:`) nor a `Needs:` line asks for
+    ticketing. A brief without a skill keeps every tool, since nothing says what it does."""
+    brief = brief_text(brief)
+    skills = brief_skills(brief)
+    names = resolve_need(TICKETING, repo) if skills else []
+    if not names:
+        return []
+    wanted = {
+        n.split("@", 1)[0]
+        for need in brief_needs(brief) + [n for s in skills for n in skill_needs(s)]
+        for n in resolve_need(need, repo)
+    }
+    return [] if wanted & {n.split("@", 1)[0] for n in names} else names
+
+
+def installed_plugin_ids(env: dict | None = None) -> list[str]:
+    """The plugin ids (`<plugin>@<marketplace>`) of Claude Code's `installed_plugins.json`."""
+    import claude_home  # noqa: PLC0415
+
+    try:
+        path = claude_home.config_dir(env) / "plugins" / "installed_plugins.json"
+        data = json.loads(path.read_text())
+        return [k for k in data.get("plugins") or {} if isinstance(k, str)]
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
+def turn_off(doc: dict, names: list[str], installed: list[str] | None = None) -> dict:
+    """Turn `names` off in a settings document: an installed plugin (by id or bare name) through
+    `enabledPlugins` false, which drops its MCP servers and its skills; any other name through
+    `deniedMcpServers`. A plugin's server is `plugin:<plugin>:<server>` to Claude Code, so a deny
+    by the bare plugin name would not hold (measured with `claude -p` 2026-11-19)."""
+    installed = installed_plugin_ids() if installed is None else installed
+    for name in names:
+        ids = [i for i in installed if name in (i, i.split("@", 1)[0])]
+        if ids:
+            doc.setdefault("enabledPlugins", {}).update(dict.fromkeys(ids, False))
+        else:
+            denied = doc.setdefault("deniedMcpServers", [])
+            if {"serverName": name} not in denied:
+                denied.append({"serverName": name})
+    return doc
+
+
 def check_all_skills(repo: Path) -> list[str]:
     """One line per plugin skill whose need `workers.context` turns off (`/we:setup` warns)."""
     ctx = workers_block(repo).get("context")
@@ -847,12 +911,16 @@ def write_settings(
     out: Path,
     session_start: str | None = None,
     name: str | None = None,
+    brief: str | None = None,
 ) -> dict:
-    """The worker's `--settings` file (`worker_rights.settings`), with the timer's hook and the
-    lean context of `workers.context` (`apply_context`)."""
+    """The worker's `--settings` file (`worker_rights.settings`), with the timer's hook, the
+    lean context of `workers.context` (`apply_context`) and, for a brief whose skills need no
+    ticket, the ticketing plugin turned off (`ticketing_unneeded`)."""
     import worker_rights  # noqa: PLC0415
 
     doc = apply_context(worker_rights.settings(repo, key), repo, name, out.parent)
+    if brief:
+        turn_off(doc, ticketing_unneeded(brief, repo))
     if session_start:
         doc["hooks"] = {
             "SessionStart": [{"hooks": [{"type": "command", "command": session_start}]}]
@@ -904,9 +972,11 @@ def launch(worktree: Path, name: str, brief_file: Path, agent: str | None = None
         import worker_rights  # noqa: PLC0415
 
         settings_path = gd / SETTINGS
-        settings_path.write_text(
-            json.dumps({"env": worker_rights.worker_env(key)}, indent=2) + "\n"
+        off = ticketing_unneeded(brief, worktree)  # read on the worker's login, as `claude_env`
+        doc = turn_off(
+            {"env": worker_rights.worker_env(key)}, off, installed_plugin_ids(claude_env())
         )
+        settings_path.write_text(json.dumps(doc, indent=2) + "\n")
         argv[1:1] = ["--settings", str(settings_path)]
     try:
         out = subprocess.run(
@@ -1138,8 +1208,9 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", type=Path, required=True)
     p.add_argument("--key", required=True)
     p.add_argument("--out", type=Path, required=True)
-    p.add_argument("--session-start")
-    p.add_argument("--name")
+    for flag in ("--session-start", "--name"):
+        p.add_argument(flag)
+    p.add_argument("--brief-stdin", action="store_true")
     p = sub.add_parser("tree")
     p.add_argument("--repo", type=Path, default=Path.cwd())
     p.add_argument("--name", required=True)
@@ -1260,7 +1331,10 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "pr-owner":
             print(pr_owner(args.repo))
         elif args.cmd == "settings":
-            write_settings(args.repo.resolve(), args.key, args.out, args.session_start, args.name)
+            brief = sys.stdin.read() if args.brief_stdin else None
+            write_settings(
+                args.repo.resolve(), args.key, args.out, args.session_start, args.name, brief
+            )
             print(args.out)
         elif args.cmd in ("tree", "marker"):
             code = _tree_verbs(args)
