@@ -17,9 +17,9 @@
 # head, GitHub calls the PR mergeable (CLEAN, UNSTABLE, HAS_HOOKS) and no required review is
 # missing. The caller then merges as a separate, explicit command with `--match-head-commit <sha>`.
 #
-# Before the arm, only in a checkout whose HEAD is the PR head, the risk classifier (`risk_paths.py`
-# over `origin/<base>:.weside/risk-paths`) runs; a one-way class is refused: only the human merges
-# it. Anywhere else a stderr note says it was not classified: the caller's class (`/we:master`
+# Before the arm, only in a checkout whose HEAD is the PR head, the crew's risk classifier runs
+# (`risk_runner.py here`: the crew's `risk.command`, else `risk_paths.py` over `.weside/risk-paths`,
+# both from origin/main); a one-way class is refused: only the human merges it. Anywhere else a stderr note says it was not classified: the caller's class (`/we:master`
 # § Close the run) stays the one-way gate.
 #
 # One verdict line and its exit code:
@@ -157,16 +157,17 @@ one_way() {  # refuses a one-way class when this checkout is the PR head; a stde
     [ -z "$CHECK" ] || { echo "refused: one-way not classified (this checkout is not the PR head)"; exit 6; }
     echo "$skip" >&2; return 0
   fi
-  git cat-file -e "origin/$BASE:.weside/risk-paths" 2>/dev/null || return 0
-  # fail closed: a non-zero exit (exit 3 is an uncommitted risk path) or an unknown line 1 is no class
+  # The crew's classifier (risk_runner.py: `risk.command`, else risk_paths.py, else no rules = T0),
+  # run in this checkout. Fail closed: a non-zero exit (risk_paths.py's exit 3 is an uncommitted
+  # risk path) or an unknown line 1 is no class.
   local out rc=0
-  out=$(python3 "$HERE/risk_paths.py" "origin/$BASE" 2>/dev/null) || rc=$?
+  out=$(python3 "$HERE/risk_runner.py" here "origin/$BASE" 2>/dev/null) || rc=$?
   line=$(head -n 1 <<<"$out")
-  if [ "$rc" -ne 0 ]; then echo "refused: one-way not classified (risk_paths.py exit $rc${line:+: $line})"; exit 6; fi
+  if [ "$rc" -ne 0 ]; then echo "refused: one-way not classified (${line:-risk_runner.py exit $rc})"; exit 6; fi
   case "$line" in
     "T2 one-way "*) echo "refused: one-way ${line#T2 one-way } — only the human merges it"; exit 6 ;;
-    T0 | T1 | T2) ;;
-    *) echo "refused: one-way not classified (risk_paths.py line 1: ${line:-empty})"; exit 6 ;;
+    T0 | T2) ;;
+    *) echo "refused: one-way not classified (line 1: ${line:-empty})"; exit 6 ;;
   esac
 }
 

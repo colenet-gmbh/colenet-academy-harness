@@ -248,10 +248,9 @@ A worker briefed `PR owner: worker` runs steps 2–3 and its fix rounds; you act
 
 ## Close the run
 
-- **Who merges what** (the one table; `/we:pr`, the master card and the epic template point here, L0 states the one-way class in brief). Line 1 of the
-  crew's `risk.command` on the diff gives the class; without one, run
-  `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/risk_paths.py origin/<default>` in the PR branch's worktree
-  before the arm. Every PR that is not one-way you arm right after `gh pr create`: a review that must
+- **Who merges what** (the one table; `/we:pr`, the master card and the epic template point here, L0 states the one-way class in brief). Line 1 of
+  `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/risk_runner.py here origin/<default>` in the PR branch's
+  worktree gives the class (the crew's `risk.command`, else `risk_paths.py`); `arm_pr.sh` runs the same. Every PR that is not one-way you arm right after `gh pr create`: a review that must
   block the merge is a required check of the repo, and GitHub waits for it. Under the crew's
   `merge.armer: workflow` the repo's own workflow arms every ready PR: your step is `gh pr ready`,
   and `arm_pr.sh` refuses. A PR with a label of `merge.hold_labels` is the human's merge in either mode. No hook checks the arm;

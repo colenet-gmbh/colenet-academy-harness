@@ -444,6 +444,7 @@ def real_crew_checkout(tmp_path):
         "merge": {"armer": "session", "hold_labels": ["hold-me"]},
     }
     (tmp_path / ".weside" / "crew.json").write_text(json.dumps(crew))
+    (tmp_path / ".weside" / "risk-paths").write_text("# no one-way section: every diff is T0\n")
     _git(tmp_path, "add", "-A")
     _git(tmp_path, "commit", "-q", "-m", "base")
     _git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
@@ -509,3 +510,118 @@ def test_an_uncommitted_risk_path_is_refused_not_armed(tmp_path, extra):
         "refused: one-way not classified (risk_paths.py exit 3: T? uncommitted changes under we/process/zz-untracked.md: commit first)"
     ]
     assert arm_calls(calls) == []
+
+
+# A core-like crew: `risk.command` names the repo's own classifier, and `.weside/risk-paths` uses
+# grammar only that classifier reads (`rules removed …`, `line …`), which risk_paths.py rejects.
+CORE_RULES = """[brake-change]
+path scripts/dev/risk-class.sh
+rules removed brake-change,money,destructive-migration,terraform-secrets
+line any .weside/risk-paths (^|\\n)[[:space:]]*\\[
+"""
+
+
+def command_crew(tmp_path, classifier, crew_risk=None):
+    """A checkout whose origin/main (= HEAD) carries a crew naming `scripts/classify.sh` (body
+    `classifier`) as `risk.command`, beside core-grammar risk rules."""
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "config", "user.email", "t@example.invalid")
+    _git(tmp_path, "config", "user.name", "t")
+    (tmp_path / ".weside").mkdir()
+    risk = {"command": "scripts/classify.sh"} if crew_risk is None else crew_risk
+    crew = {"version": 2, "roles": {}, "members": {}, "risk": risk}
+    (tmp_path / ".weside" / "crew.json").write_text(json.dumps(crew))
+    (tmp_path / ".weside" / "risk-paths").write_text(CORE_RULES)
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "classify.sh").write_text("#!/usr/bin/env bash\n" + classifier)
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    _git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def test_the_plugin_classifier_rejects_core_grammar(tmp_path):
+    """The reason the arm reads `risk.command`: risk_paths.py is a subset and exits 2 on core's rules."""
+    command_crew(tmp_path, "echo T0\n")
+    got = subprocess.run(
+        [sys.executable, str(HERE / "risk_paths.py"), "origin/main"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert got.returncode == 2 and "not a rule: rules removed" in got.stderr
+
+
+@pytest.mark.parametrize("extra", [(), ("--check",)], ids=["arm", "check"])
+@pytest.mark.parametrize(
+    ("classifier", "code", "line"),
+    [
+        ('[ "$1" = origin/main ] || exit 2\nprintf "T0\\nreview: standard\\n"\n', None, None),
+        ('printf "T2\\nreview: high\\n"\n', None, None),
+        (
+            'printf "T2 one-way brake-change\\nreview: high\\n"\n',
+            6,
+            "refused: one-way brake-change — only the human merges it",
+        ),
+        (
+            'echo "risk-class: rules parse error" >&2; exit 2\n',
+            6,
+            "refused: one-way not classified (scripts/classify.sh exit 2: risk-class: rules parse error)",
+        ),
+        (
+            "echo banana\n",
+            6,
+            "refused: one-way not classified (scripts/classify.sh line 1: banana)",
+        ),
+        (
+            "exit 0\n",
+            6,
+            "refused: one-way not classified (scripts/classify.sh line 1: empty)",
+        ),
+    ],
+    ids=["T0", "T2", "one-way", "exit-2", "garbage", "silent"],
+)
+def test_the_arm_runs_the_crews_risk_command(tmp_path, extra, classifier, code, line):
+    sha = command_crew(tmp_path, classifier)
+    got, out, calls = run(tmp_path, [{"head": sha, "checks": PENDING}], ["ok"], extra=extra)
+    if code is None:  # classified two-way: the arm goes on to the checks
+        if extra:
+            assert (got, out) == (8, [f"pending: Claude Review on {sha} — not ready"])
+        else:
+            assert (got, out[0]) == (0, f"armed: auto-merge on {sha} (merge)")
+        return
+    assert (got, out) == (code, [line])
+    assert arm_calls(calls) == []
+
+
+def test_a_base_without_any_risk_rules_is_not_classified(tmp_path):
+    """No `.weside/risk-paths` and no `risk.command` on the base: T0, as before the crew's command
+    was read (a repo whose default branch is not main has no origin/main either)."""
+    command_crew(tmp_path, "echo T0\n", crew_risk={})
+    _git(tmp_path, "rm", "-q", ".weside/risk-paths")
+    _git(tmp_path, "commit", "-q", "-m", "no rules")
+    _git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    got, out, _calls = run(
+        tmp_path, [{"head": sha, "checks": PENDING}], ["ok"], extra=("--check",)
+    )
+    assert (got, out) == (8, [f"pending: Claude Review on {sha} — not ready"])
+
+
+def test_a_missing_base_ref_is_no_class(tmp_path):
+    """`origin/<base>` absent: the classifier cannot tell whether the base sets rules, so it
+    refuses (exit 2) instead of printing T0."""
+    command_crew(tmp_path, "echo T0\n")
+    got = subprocess.run(
+        [sys.executable, str(HERE / "risk_runner.py"), "here", "origin/gone"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (got.returncode, got.stdout.strip()) == (2, "no origin/gone here (fetch it)")
