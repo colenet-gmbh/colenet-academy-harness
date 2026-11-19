@@ -15,6 +15,16 @@
   to a file), else as a board news item, and `<name>.resume.json` keeps the session id for
   `we-worker <name> --resume <name>` (`keep_resume`; `we-worker stop` writes it too). A worker
   stopped with `we-worker stop` (its settings file is already gone) ends without a line;
+- a worker whose `state` stays `blocked` for `workers.blocked_notify_minutes` (default 15) gets one
+  line to its starter, once per block: `<name> blocked since <HH:MM> UTC: <its last text line>`,
+  over the same inbox socket, else as a board news item; 312 of 485 measured worker hours were
+  `blocked`, and the starter did not know;
+- a worker whose report is in (`state` `done`, or a window worker idle after its turn sent the
+  report to its marker's starter, `hooks/worker_report_gate.py`'s test) and idle for
+  `workers.idle_stop_minutes` (default 30) is stopped with `we-worker stop`, its tree stays (close
+  owns the teardown) and the starter gets one line; 161 workers sat idle after their end, median
+  0.84 h. Never a worker that is `blocked` or `working`, has a queued start of its name, or whose
+  launcher marker carries `parked` (work parked for a checkpoint). `0` or `null` turns a key off;
 - then it removes the worker's settings file and timer file, unless a living session of the same
   name holds them again, or the worker ended on a usage limit or an auth error: a resumable worker
   keeps both (the timer file names its starter, limit and deadline), `gc` ages them out after 7 days. A worker never seen within 5 minutes keeps its files (a start
@@ -317,6 +327,133 @@ def _watch_prompt(row, name, tree, sid, projects, now, first_seen, reported, boa
     )
 
 
+IDLE_DEFAULTS = {"blocked_notify_minutes": 15, "idle_stop_minutes": 30}
+
+
+def idle_limits(tree: str) -> dict[str, float | None]:
+    """`workers.blocked_notify_minutes` and `workers.idle_stop_minutes` in seconds, None when off
+    (`0` or `null`); a missing or unreadable value keeps its default: a typo must not silence it."""
+    try:
+        block = wl.workers_block(Path(tree))
+    except wl.LaunchError:
+        block = {}
+    out: dict[str, float | None] = {}
+    for key, default in IDLE_DEFAULTS.items():
+        value = block.get(key, default)
+        if value is None or value == 0:
+            out[key] = None
+        elif isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            out[key] = default * 60.0
+        else:
+            out[key] = float(value) * 60.0
+    return out
+
+
+def last_line(projects: Path, session_id: str | None) -> str:
+    """The last non-blank line of the transcript's last assistant text, cut to 200 characters."""
+    text = _text(last_assistant(projects, session_id) or {})
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return lines[-1][:200] if lines else ""
+
+
+def report_in(row: dict, marker: dict | None, projects: Path, sid: str | None) -> bool:
+    """A background worker's `done`, or a window worker idle after its turn sent the report."""
+    if row.get("state") == "done":
+        return True
+    if row.get("state") or row.get("status") != "idle":
+        return False
+    lead = (marker or {}).get("starter")
+    files = glob.glob(str(projects / "*" / f"{sid}.jsonl")) if sid and lead else []
+    if not files:
+        return False
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
+    try:
+        from worker_report_gate import reported  # noqa: PLC0415 (a window worker alone needs it)
+    finally:
+        sys.path.pop(0)
+    try:
+        return reported(files[0], str(lead))
+    except OSError:
+        return False
+
+
+def stop_by_launcher(row: dict) -> bool:
+    """`we-worker stop <id>`: the launcher's stop (settings file, resume file, left processes)."""
+    script = Path(__file__).resolve().with_name("we-worker")
+    ident = wl._ident(row)
+    if not ident:
+        return False
+    try:
+        out = subprocess.run(
+            ["bash", str(script), "stop", ident],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+            env=wl.claude_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return out.returncode == 0
+
+
+class Idle:
+    """The blocked notice and the idle stop of one supervised worker, one `poll` per sample."""
+
+    def __init__(self, name, tree, sid, limits, projects, state, send, board, stop, log):
+        self.name, self.tree, self.sid, self.limits = name, tree, sid, limits
+        self.projects, self.state = projects, state
+        self.send, self.board, self.stop, self.log = send, board, stop, log
+        self.blocked_since: float | None = None
+        self.blocked_said = False
+        self.idle_since: float | None = None
+        self.stop_tried = False
+
+    def poll(self, row: dict, now: float) -> None:
+        self._blocked(row, now)
+        self._idle(row, now)
+
+    def _blocked(self, row: dict, now: float) -> None:
+        limit = self.limits.get("blocked_notify_minutes")
+        if row.get("state") != "blocked":
+            self.blocked_since, self.blocked_said = None, False
+            return
+        if self.blocked_since is None:
+            self.blocked_since = now
+        if limit is None or self.blocked_said or now - self.blocked_since < limit:
+            return
+        self.blocked_said = True
+        hhmm = dt.datetime.fromtimestamp(self.blocked_since, dt.timezone.utc).strftime("%H:%M")
+        why = last_line(self.projects, self.sid) or str(row.get("waitingFor") or "no status line")
+        line = f"{self.name} blocked since {hhmm} UTC: {why}"
+        if not self.send(f"we-worker: {line}"):
+            self.board(self.tree, f"W-{self.name}-blocked-{int(self.blocked_since)}", line)
+
+    def _idle(self, row: dict, now: float) -> None:
+        limit = self.limits.get("idle_stop_minutes")
+        marker = wl.read_marker(self.tree) if limit is not None else None
+        if limit is None or not report_in(row, marker, self.projects, self.sid):
+            self.idle_since = None
+            return
+        if self.idle_since is None:
+            self.idle_since = now
+        if self.stop_tried or now - self.idle_since < limit:
+            return
+        if (marker or {}).get("parked") or any(
+            q.get("name") == self.name for q in queued(self.state)
+        ):
+            return
+        self.stop_tried = True  # one try: a refused stop is logged, never repeated every poll
+        minutes = int((now - self.idle_since) // 60)
+        if self.stop(row):
+            self.send(
+                f"we-worker: {self.name} stopped after {minutes} min idle with its report in; "
+                f"its tree stays: {self.tree}"
+            )
+        else:
+            self.log(f"{self.name}: idle {minutes} min, we-worker stop failed")
+
+
 def supervise(
     name: str,
     tree: str,
@@ -329,10 +466,13 @@ def supervise(
     state: Path | None = None,
     projects: Path | None = None,
     log: Callable[[str], None] = lambda _line: None,
+    stop: Callable[[dict], bool] = stop_by_launcher,
+    limits: dict | None = None,
 ) -> str:
     """Watch the worker `name` until its process ends; returns what happened as one word."""
     state = state or state_dir()
     projects = projects or projects_dir()
+    limits = idle_limits(tree) if limits is None else limits
     give_up = clock() + APPEAR_S
     row = None
     while row is None:
@@ -348,6 +488,7 @@ def supervise(
     pid, sid = row.get("pid"), row.get("sessionId")
     first_seen: dict[str, float] = {}
     reported: set[str] = set()
+    idle = Idle(name, tree, sid, limits, projects, state, send, board, stop, log)
     while True:
         try:
             mine = [r for r in _named(sessions(), name) if r.get("pid") == pid]
@@ -357,6 +498,7 @@ def supervise(
             break
         row = mine[-1]
         _watch_prompt(row, name, tree, sid, projects, clock(), first_seen, reported, board)
+        idle.poll(row, clock())
         sleep(POLL_S)
     stopped = not (state / f"{name}.settings.json").exists()
     reason = None if stopped else end_reason(projects, state, name, sid, clock())
