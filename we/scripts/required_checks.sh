@@ -16,13 +16,16 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$REPO" ] || { echo "gh failed: usage: required_checks.sh --repo <owner/repo> [<branch>]"; exit 2; }
+# stdout only is the value: gh prints notices (upgrade, preview commands) on stderr, even on success.
+GH_ERR=$(mktemp) && trap 'rm -f "$GH_ERR"' EXIT
+gh_failed() { echo "gh failed: $(sed '/^[[:space:]]*$/d' "$GH_ERR" | tail -n 1)"; exit 2; }
 if [ -z "$BRANCH" ]; then
-  BRANCH=$(gh api "repos/$REPO" --jq .default_branch 2>&1) || { echo "gh failed: $(tail -n 1 <<<"$BRANCH")"; exit 2; }
+  BRANCH=$(gh api "repos/$REPO" --jq .default_branch 2>"$GH_ERR") || gh_failed
 fi
 rules=$(gh api "repos/$REPO/rules/branches/$BRANCH" \
-  --jq '.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context' 2>&1) \
-  || { echo "gh failed: $(tail -n 1 <<<"$rules")"; exit 2; }
+  --jq '.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context' 2>"$GH_ERR") \
+  || gh_failed
 prot=$(gh api "repos/$REPO/branches/$BRANCH" \
-  --jq '(.protection.required_status_checks.contexts // [])[]' 2>&1) \
-  || { echo "gh failed: $(tail -n 1 <<<"$prot")"; exit 2; }
+  --jq '(.protection.required_status_checks.contexts // [])[]' 2>"$GH_ERR") \
+  || gh_failed
 printf '%s\n%s\n' "$rules" "$prot" | sed '/^$/d' | sort -u
