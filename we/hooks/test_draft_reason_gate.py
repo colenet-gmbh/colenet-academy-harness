@@ -38,14 +38,14 @@ def run(tmp: Path, command: str, view_body: str | None = None) -> str | None:
     if not res.stdout.strip():
         return None
     out = json.loads(res.stdout)["hookSpecificOutput"]
-    assert out["permissionDecision"] == "deny"
-    return out["permissionDecisionReason"]
+    assert "permissionDecision" not in out  # a hint: the command runs
+    return out["additionalContext"]
 
 
-def test_draft_create_without_reason_is_denied(tmp_path):
+def test_draft_create_without_reason_gets_the_hint(tmp_path):
     (tmp_path / "b.md").write_text(PLAIN)
     reason = run(tmp_path, "gh pr create --draft --title t --body-file b.md")
-    assert reason.startswith("`gh pr create --draft` needs a reason")
+    assert reason.startswith("`gh pr create --draft` ran without a reason")
     assert (
         "the `--body-file` with that line first" in reason
         and "A fix round does not draft" in reason
@@ -64,20 +64,20 @@ def test_heredoc_body_written_in_the_same_command(tmp_path):
     assert run(tmp_path, cmd.format(PLAIN)) is not None
 
 
-def test_placeholder_or_missing_body_is_denied(tmp_path):
+def test_placeholder_or_missing_body_gets_the_hint(tmp_path):
     body = "**Draft:** <reason> — ready when <condition>\n"
     assert run(tmp_path, f"gh pr create --draft -b '{body}'") is not None
     assert run(tmp_path, "gh pr create --draft --fill") is not None
 
 
-def test_line_below_the_top_is_denied(tmp_path):
+def test_line_below_the_top_gets_the_hint(tmp_path):
     (tmp_path / "b.md").write_text("## Summary\nx\n\n" + REASONED)
     assert run(tmp_path, "gh pr create --draft --body-file b.md") is not None
     (tmp_path / "b.md").write_text("\n\n" + REASONED)
     assert run(tmp_path, "gh pr create --draft --body-file b.md") is None
 
 
-def test_placeholder_in_the_condition_is_denied(tmp_path):
+def test_placeholder_in_the_condition_gets_the_hint(tmp_path):
     (tmp_path / "b.md").write_text("**Draft:** waits for the schema PR — ready when <condition>\n")
     assert run(tmp_path, "gh pr create --draft --body-file b.md") is not None
 
@@ -91,7 +91,7 @@ def test_ready_create_and_unreadable_body_pass(tmp_path):
 
 def test_ready_undo_reads_the_pr_body(tmp_path):
     reason = run(tmp_path, "gh pr ready 7 --undo", view_body=PLAIN)
-    assert reason.startswith("`gh pr ready --undo` needs a reason")
+    assert reason.startswith("`gh pr ready --undo` ran without a reason")
     assert "gh pr edit 7 --body-file" in reason
     assert run(tmp_path, "gh pr ready 7 --undo", view_body=REASONED) is None
     assert run(tmp_path, "gh pr merge 7 --disable-auto && gh pr ready 7 --undo", PLAIN) is not None
@@ -169,13 +169,15 @@ def run_ready(tmp: Path, command: str, *states: str) -> str | None:
     assert res.returncode == 0, res.stderr
     if not res.stdout.strip():
         return None
-    return json.loads(res.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+    out = json.loads(res.stdout)["hookSpecificOutput"]
+    assert "permissionDecision" not in out  # a hint: the command runs
+    return out["additionalContext"]
 
 
-def test_ready_on_a_conflicting_pr_is_denied(tmp_path):
+def test_ready_on_a_conflicting_pr_gets_the_hint(tmp_path):
     """A crew readied a conflicting PR: GitHub ran no workflow, the PR stayed green and unarmed."""
     reason = run_ready(tmp_path, "gh pr ready 7 -R o/r", "CONFLICTING")
-    assert reason.startswith("`gh pr ready 7` refused: the PR conflicts with `main`")
+    assert reason.startswith("`gh pr ready 7` ran on a PR that conflicts with `main`")
     assert "Merge `origin/main`" in reason
     assert (tmp_path / "calls.log").read_text().split() == [
         "pr",

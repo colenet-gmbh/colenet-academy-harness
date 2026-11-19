@@ -36,8 +36,8 @@ we/                               plugin root
     SessionStart                  materialize_on_start, process_on_start (L0), role_on_start (role card),
                                   optimization_reminder, compact_on_start (matcher compact)
     UserPromptSubmit              news_on_prompt (wake counter), sampler_on_prompt (dead sampler, blocked worker)
-    PreToolUse                    worker_rights_gate (a process worker's rights and never-list), verification_gate,
-                                  draft_reason_gate (draft reason, no ready on a conflict), teammate_gate
+    PreToolUse                    worker_rights_gate (a process worker's rights and never-list), verification_gate (hint: PR body without a receipt),
+                                  draft_reason_gate (hint: draft reason, ready on a conflict), teammate_gate
     Stop                          store_conversation_hook, conflict_gate (own DIRTY PRs, green PRs that lost their
                                   arm), reply_language_gate, question_gate, worker_report_gate (process workers)
     PreCompact                    epic_age_precompact (stale Updates Log)

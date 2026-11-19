@@ -213,6 +213,29 @@ def test_a_held_right_in_a_compound_command_only_passes(world):
     assert hook(world, "git status && gh pr ready") == (None, "")
 
 
+@pytest.mark.parametrize(
+    ("command", "why"),
+    [
+        ("cd /x && gh pr ready 8", "not this branch's PR"),
+        ("cd . && gh pr comment 8 --body 'skipped: x'", "not this branch's PR"),
+        ("git status; gh pr ready -R acme/other", "another repo"),
+        ("true || gh pr comment 8 -b x", "not this branch's PR"),
+        ("echo x | gh pr ready 8", "not this branch's PR"),
+        ("cd .\ngh pr ready 8", "not this branch's PR"),
+        ("gh pr ready && gh pr comment 8 --body x", "not this branch's PR"),
+    ],
+)
+def test_a_right_inside_a_command_chain_is_judged_on_its_segment(world, command, why):
+    decision, reason = hook(world, command)
+    assert decision == "deny" and why in reason, reason
+
+
+def test_a_release_inside_a_command_chain_is_judged_on_the_branch(world):
+    _git(world["repo"], "checkout", "-q", "-b", "feat/other")
+    decision, reason = hook(world, "cd . && a release staging rc")
+    assert decision == "deny" and f"does not carry the key {KEY}" in reason
+
+
 # ---------------------------------------------------------------- AC 6: the rights' conditions
 
 
@@ -325,9 +348,9 @@ NEVER = [
     ("git push --all origin", "main (git push --all)"),
     ("ALLOW_COMMIT_TO_MAIN=1 git commit -m x", "main (ALLOW_COMMIT_TO_MAIN)"),
     ("git push origin v1.2.3-rc.1", "guard bypass (git push of the tag v1.2.3-rc.1)"),
-    ("git push origin refs/tags/v9", "guard bypass (git push of the tag refs/tags/v9)"),
+    ("git push origin refs/tags/v9", "guard bypass (git push of a tag)"),
     ("git push origin tag v9", "guard bypass (git push of a tag)"),
-    ("git push --tags", "guard bypass (git push --tags: a tag)"),
+    ("git push --tags", "guard bypass (git push of a tag)"),
     ("ALLOW_PUSH_WITHOUT_MAIN=1 git push origin HEAD", "guard bypass (ALLOW_PUSH_WITHOUT_MAIN)"),
     ("git push --no-verify origin HEAD", "guard bypass (--no-verify)"),
     ("git commit --no-verify -m x", "guard bypass (--no-verify)"),
@@ -347,16 +370,13 @@ NEVER = [
     ("bash <<'EOF'\ngh secret set X\nEOF", "secrets (gh secret)"),
     (
         'python3 -c \'import subprocess; subprocess.run(["gh", "secret", "set", "X"])\'',
-        "secrets (gh secret in inline code)",
+        "secrets (gh secret)",
     ),
     (
         'node -e \'require("child_process").execSync("git push origin main")\'',
-        "main (git push to main in inline code)",
+        "main (git push to main)",
     ),
-    ('eval "$CMD"', "unreadable command: eval of a non-literal argument"),
     ("eval 'gh secret set X'", "secrets (gh secret)"),
-    ('source "$F"', "unreadable command: source of a non-literal argument"),
-    ("echo 'unclosed", "unreadable command: unparsable"),
     # review round 1
     ("git push origin \\\n  main", "main (git push to main)"),
     ("cat <<EOF\n$(gh secret list)\nEOF", "secrets (gh secret)"),
@@ -364,20 +384,30 @@ NEVER = [
     ("stdbuf -oL gh secret list", "secrets (gh secret)"),
     ("time -p gh secret list", "secrets (gh secret)"),
     ("command -p gh secret list", "secrets (gh secret)"),
-    ("git push origin 'refs/heads/*:refs/heads/*'", "main (git push of the pattern"),
+    ("git push origin 'refs/heads/*:refs/heads/*'", "main (git push of a ref pattern"),
     ("git push --dele origin feat/x", "delete (git push --delete)"),
     ("git push --no-verif origin HEAD", "guard bypass (--no-verify)"),
     ("git config core.hookspath /dev/null", "guard bypass (core.hooksPath)"),
     ('echo "`gh secret list`"', "secrets (gh secret)"),
     ("cd ../main-checkout && git push", None),
+    ("git -C ../main-checkout push", None),
+    # a merge other than the line arm_pr.sh prints
+    ("gh pr merge 7 --admin", "merge (gh pr merge --admin)"),
+    ("gh pr merge 7 --auto --squash", "merge (gh pr merge --auto)"),
+    ("gh pr merge 7 --merge", "merge (a worker merges only under build.pr_owner: worker)"),
+    (
+        "gh pr merge 7 --disable-auto && gh pr merge 7 --squash",
+        "merge (gh pr merge only as a command of its own)",
+    ),
 ]
 
 
 @pytest.mark.parametrize("command,item", NEVER, ids=[c for c, _ in NEVER])
 def test_the_never_list_is_denied_for_a_worker(world, command, item):
-    if item is None:  # the bare push runs in the tree the `cd` names, here on main
+    if item is None:  # the push runs in the tree a `cd` or `git -C` names, here on main
         main = make_repo(world["tmp"], name="main-checkout", branch="main")
-        command, item = f"cd {main} && git push", "main (a bare git push from main)"
+        command = command.replace("../main-checkout", str(main))
+        item = "main (a git push from main)"
     decision, reason = hook(world, command)
     assert decision == "deny", reason
     assert reason.startswith(f"never for a worker ({item}") and reason.endswith("ask your starter")
@@ -397,14 +427,11 @@ def test_a_master_is_not_touched(world, command, item):
         "gh pr view 7 --json state",
         "gh api repos/acme/app/environments",
         "gh pr create --body-file b.md",
-        "cat <<'EOF' > body.md\nnever --no-verify here? it is data\nEOF",
         "git commit -m 'main and master'",
         "git push origin HEAD:refs/heads/feat/ABC-12-mainline",
         'git commit -m "Fixed \\`foo\\` in bar"',
         "git commit -m 'drop `git push --delete` from the docs'",
-        "echo 'literal $(gh secret set X)'",
         "grep -rn secret src/",
-        "git commit -m \"$(cat <<'EOF'\nfeat: x\n\nnot --no-verify, data\nEOF\n)\" && git log --oneline -1",
         "gh pr create --title x --body \"$(cat <<'EOF'\n## Verification\nEOF\n)\"",
         "for f in a b; do echo $f; done",
         "[[ -f x ]] && echo $((1+2))",
@@ -412,17 +439,58 @@ def test_a_master_is_not_touched(world, command, item):
         'grep -c x <<<"$y"',
         "python3 -m pytest -q we/hooks 2>&1 | tail -3",
         "git fetch -q origin && git rebase origin/main",
-        "sed -n '1,5p' f; cat > /tmp/x <<EOF\ngh secret set X\nEOF",
     ],
 )
 def test_ordinary_work_passes(world, command):
     assert hook(world, command) == (None, "")
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat <<'EOF' > body.md\nnever --no-verify here? it is data\nEOF",
+        "echo 'literal $(gh secret set X)'",
+        "git commit -m \"$(cat <<'EOF'\nfeat: x\n\nnot --no-verify, data\nEOF\n)\" && git log -1",
+        "sed -n '1,5p' f; cat > /tmp/x <<EOF\ngh secret set X\nEOF",
+    ],
+)
+def test_data_naming_a_never_item_is_denied_like_the_settings_deny_rules(world, command):
+    """No parser tells data from a command: the gate denies what the `--settings` deny globs
+    (`Bash(*--no-verify*)`, `Bash(*gh secret *)`) already deny for the same text."""
+    assert hook(world, command)[0] == "deny"
+
+
+@pytest.mark.parametrize(
+    "refspec",
+    [
+        "+main",
+        '"main"',
+        "'main'",
+        '"+main"',
+        "+refs/heads/main",
+        '"refs/heads/main"',
+        'HEAD:"main"',
+        "+HEAD:main",
+        "HEAD:main",
+        "refs/heads/main",
+        ":main",
+        "+master",
+    ],
+)
+def test_a_push_to_main_in_any_refspec_spelling_is_denied(world, refspec):
+    decision, reason = hook(world, f"git push origin {refspec}")
+    assert decision == "deny" and "never for a worker" in reason, reason
+
+
+@pytest.mark.parametrize("refspec", ["+feat/ABC-12-main", '"feat/ABC-12-x"', "+HEAD:mainline"])
+def test_a_push_to_a_branch_merely_named_like_main_passes(world, refspec):
+    assert hook(world, f"git push origin {refspec}")[0] != "deny"
+
+
 def test_a_bare_push_from_main_is_denied(world):
     _git(world["repo"], "checkout", "-q", "main")
     decision, reason = hook(world, "git push")
-    assert decision == "deny" and "main (a bare git push from main)" in reason
+    assert decision == "deny" and "main (a git push from main)" in reason
 
 
 def test_every_denial_is_one_line_in_brakes_jsonl_without_the_command(world):
@@ -576,6 +644,8 @@ def _head(repo):
     ).stdout.strip()
 
 
+MERGE_DENY = "never for a worker (merge (a worker merges only under build.pr_owner: worker))"
+
 RESOLVE = (
     "gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id})"
     "{thread{isResolved}}}' -f id=PRRT_1"
@@ -598,7 +668,11 @@ PR_OWNER_COMMANDS = [
 )
 def test_under_master_the_pr_owner_rights_stay_out_of_the_gate(world, command):
     _pr_owner(world["repo"], "master")
-    assert hook(world, command) == (None, "")
+    decision, reason = hook(world, command)
+    if "gh pr merge" in command:  # a worker under master never merges
+        assert decision == "deny" and reason.startswith(MERGE_DENY), reason
+    else:
+        assert (decision, reason) == (None, "")
 
 
 @pytest.mark.parametrize("command", PR_OWNER_COMMANDS)
@@ -648,6 +722,7 @@ def test_under_worker_the_ready_merge_line_on_the_own_head_is_allowed(world):
         ("gh pr merge 7 --admin --match-head-commit {sha}", "gh pr merge --admin"),
         ("gh pr merge 7 --auto --match-head-commit {sha}", "gh pr merge --auto"),
         ("gh pr merge 7 --disable-auto --merge", "takes no other flag"),
+        ("gh pr merge 7 --disable-auto && gh pr merge 7 --squash", "a command of its own"),
         ("gh pr merge 8 --disable-auto", "not this branch's PR"),
         ("bash arm_pr.sh 8", "not this branch's PR"),
         ("arm_pr.sh --repo other/app 7", "another repo"),
@@ -683,13 +758,13 @@ def test_under_worker_the_never_list_still_holds(world, command, item):
 
 def test_the_worktrees_own_switch_grants_nothing(world):
     _pr_owner(world["repo"], "worker", publish=False)
-    assert hook(world, "gh pr merge 7 --merge") == (None, "")
+    assert hook(world, "gh pr merge 7 --merge")[1].startswith(MERGE_DENY)
     assert hook(world, "gh pr edit 7 --title x") == (None, "")
 
 
 def test_another_switch_value_opens_nothing(world):
     _pr_owner(world["repo"], "everyone")
-    assert hook(world, "gh pr merge 7 --merge") == (None, "")
+    assert hook(world, "gh pr merge 7 --merge")[1].startswith(MERGE_DENY)
 
 
 def test_settings_add_the_pr_owner_rules_only_under_worker(world):

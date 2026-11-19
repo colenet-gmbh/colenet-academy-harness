@@ -16,7 +16,9 @@ prints the merge state once, and a worker or peer session idles while its PR con
     ready, CLEAN (mergeable, required checks green) and without auto-merge blocks once, until the
     sweep sees it armed again. A crew's board showed such PRs green and unarmed after a conflict
     merge, a retargeted stacked PR and fix pushes, until someone happened to look. A PR never seen
-    armed is left alone. Not in a worker (`WE_ROLE=worker`): it does not
+    armed is left alone. Still needed beside `arm_pr.sh` and the watcher's `--until-merged`: the
+    watcher names a lost arm only while it runs (6 h cap, gone with a restart or compact), this
+    sweep at every stop (it fired twice by 19.11.2026, both PRs merged on the named head). Not in a worker (`WE_ROLE=worker`): it does not
     arm (worker card); its starter's own sweep names the PR. The crew's `merge` block (`crew.py`)
     narrows it: a PR carrying a label of `merge.hold_labels` is the human's merge, and under
     `merge.armer: workflow` the repo's own workflow arms a ready PR (`arm_pr.sh` refuses there);
