@@ -262,6 +262,7 @@ A worker briefed `PR owner: worker` runs steps 2–3 and its fix rounds; you act
   | `T0`, `T2` | you: `${CLAUDE_PLUGIN_ROOT}/scripts/arm_pr.sh <PR>`, right after `gh pr create` | the repo's required checks (GitHub waits) |
   | `T2` with a card hit (`trust-loosening:`, `brake-review:` hit line) | you, the same arm | as `T2`; the security card verdict is a PR comment for the human and the security owner |
   | `T2 one-way <class>` | only the human; you never arm it, in any repo | their approve on the head, then their merge, from a board item |
+  | `T? uncommitted changes under <path>` (exit 3), any other line or exit | nobody yet: the class is not known | commit or remove the file, classify again; `arm_pr.sh` refuses it (exit 6) |
 
   - `--method squash|rebase` when `.weside/orchestrate.md` names it. The helper never merges; act on
     its final line: `armed` → the watch `--until-merged`; `ready` → run the merge line it printed;

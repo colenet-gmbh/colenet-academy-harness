@@ -35,6 +35,7 @@
 #   refused: armed by workflow — the step is gh pr ready                         exit 4
 #   refused: head moved <old> -> <new>                                           exit 5
 #   refused: one-way <class> — only the human merges it                          exit 6
+#   refused: one-way not classified (<why>) — the classifier failed or printed no class   exit 6
 #   red: <names> on <sha> — not armed                                            exit 7
 #   no checks on <sha> after <n>s — not armed, run again                         exit 8
 #   not armed on <sha> after <n>s (<mergeStateStatus>, review <decision>) — run again   exit 8
@@ -157,9 +158,16 @@ one_way() {  # refuses a one-way class when this checkout is the PR head; a stde
     echo "$skip" >&2; return 0
   fi
   git cat-file -e "origin/$BASE:.weside/risk-paths" 2>/dev/null || return 0
-  line=$(python3 "$HERE/risk_paths.py" "origin/$BASE" 2>/dev/null | head -n 1)
-  if [ -n "$CHECK" ] && [ -z "$line" ]; then echo "refused: one-way not classified (risk_paths.py printed nothing)"; exit 6; fi
-  case "$line" in "T2 one-way "*) echo "refused: one-way ${line#T2 one-way } — only the human merges it"; exit 6 ;; esac
+  # fail closed: a non-zero exit (exit 3 is an uncommitted risk path) or an unknown line 1 is no class
+  local out rc=0
+  out=$(python3 "$HERE/risk_paths.py" "origin/$BASE" 2>/dev/null) || rc=$?
+  line=$(head -n 1 <<<"$out")
+  if [ "$rc" -ne 0 ]; then echo "refused: one-way not classified (risk_paths.py exit $rc${line:+: $line})"; exit 6; fi
+  case "$line" in
+    "T2 one-way "*) echo "refused: one-way ${line#T2 one-way } — only the human merges it"; exit 6 ;;
+    T0 | T1 | T2) ;;
+    *) echo "refused: one-way not classified (risk_paths.py line 1: ${line:-empty})"; exit 6 ;;
+  esac
 }
 
 REQUIRED=""

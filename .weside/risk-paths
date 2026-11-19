@@ -9,6 +9,8 @@ path .weside/crew.json
 path .weside/risk-paths
 # `build.pr_owner: worker` gives process workers the merge rights: switching it loosens trust.
 json .weside/config.json build
+# `plans` (`land`, `push_paths`, `secret_scan`) decides what lands on main without PR or gates.
+json .weside/config.json plans
 path we/hooks/hooks.json
 path we/hooks/verification_gate.py
 path we/scripts/ready_gate.py
