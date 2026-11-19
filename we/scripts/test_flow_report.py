@@ -296,6 +296,12 @@ def test_questions_brakes_and_ready_rounds(tmp_path):
     assert (r["n"], r["median"], r["value"]) == (1, 2.0, "1 unanswered")
     r = rows["Brakes per day"]
     assert (r["n"], r["value"]) == (2, "deny worker_rights_gate 0.1/d · brief 0.1/d")
+    r = rows["Brake outcomes"]
+    assert (r["n"], r["value"]) == (
+        1,
+        "brief: 0 danger · 0 false alarm · 1 unjudged; card: 0 danger · 1 false alarm · 0 unjudged; "
+        "deny: 0 danger · 0 false alarm · 1 unjudged",
+    )
     r = rows["Ready rounds"]
     assert (r["n"], r["median"], r["p90"]) == (2, 2.0, 3)
     assert r["value"].startswith("red on WARNING only: 1 of 2 red lens verdicts (50 %)")
@@ -311,6 +317,7 @@ def test_no_crew_no_board_prints_github_rows_and_na(tmp_path, capsys, monkeypatc
         "Escapes after Done by risk class",
         "Questions to the human per day",
         "Brakes per day",
+        "Brake outcomes",
     ):
         assert rows[name]["value"].startswith("n/a ("), name
         assert rows[name]["n"] is None
