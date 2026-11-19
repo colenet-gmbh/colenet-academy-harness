@@ -227,6 +227,8 @@ def here(
 ) -> tuple[int, str]:
     """(0, the classifier's stdout) or (2, one line why): the crew's classifier on `base` in the
     checkout `root` itself, so a risk path with uncommitted changes is seen (`arm_pr.sh`)."""
+    if git(root, "rev-parse", "--verify", "-q", f"{base}^{{commit}}") is None:
+        return 2, f"no {base} here (fetch it)"  # an absent base cannot say it sets no rules
     if not _has_rules(root, git, base):
         return 0, "T0"  # the PR's base sets no rules: nothing to classify, as without a crew
     fetch_rules(root, RULES_FROM, git)  # best-effort: offline, the ref at hand decides

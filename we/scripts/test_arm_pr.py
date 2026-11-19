@@ -611,3 +611,17 @@ def test_a_base_without_any_risk_rules_is_not_classified(tmp_path):
         tmp_path, [{"head": sha, "checks": PENDING}], ["ok"], extra=("--check",)
     )
     assert (got, out) == (8, [f"pending: Claude Review on {sha} — not ready"])
+
+
+def test_a_missing_base_ref_is_no_class(tmp_path):
+    """`origin/<base>` absent: the classifier cannot tell whether the base sets rules, so it
+    refuses (exit 2) instead of printing T0."""
+    command_crew(tmp_path, "echo T0\n")
+    got = subprocess.run(
+        [sys.executable, str(HERE / "risk_runner.py"), "here", "origin/gone"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (got.returncode, got.stdout.strip()) == (2, "no origin/gone here (fetch it)")
