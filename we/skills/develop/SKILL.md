@@ -26,8 +26,9 @@ Contract, finish sequence and report fields:
   and stop on a failure line.
 - An unanswered `## Open Fork` stops you. When the brief or the plan already carries the answer,
   build on it and name it in the report.
-- With a brief line `Needs: ticketing`, read the ticket with its comments (`${CLAUDE_PLUGIN_ROOT}/references/ticketing.md`);
-  without it the ticketing tools are not loaded and the plan on main is the source.
+- With the ticketing tools loaded (your own session, or a worker brief with `Needs: ticketing`), read
+  the ticket with its comments (`${CLAUDE_PLUGIN_ROOT}/references/ticketing.md`); a worker started
+  without them builds from the plan on main.
   A clarifying comment: build the newest statement and name the conflict. A comment that changes
   scope after the plan was approved: stop and hand it back as a question.
 

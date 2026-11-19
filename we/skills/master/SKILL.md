@@ -166,6 +166,7 @@ Report: worker-dispatch.md § Report, as your final message or to your `Lead:`; 
 ## Tools and sources
 Bootstrap: <commands from .weside/orchestrate.md>.
 Contract: ${CLAUDE_PLUGIN_ROOT}/references/worker-dispatch.md § Dev-only worker contract.
+[Needs: ticketing]   (only when the ticket has comments newer than the plan's approval: without it the worker starts without the ticketing tools)
 Traps: ${CLAUDE_PLUGIN_ROOT}/references/session-traps.md (stash, HEAD after commit, watcher exit 0, gate lock).
 Tests: <test_discipline from .weside/config.json, spelled out; absent → tests after the code, same change>.
 Gates: <affected suites>; [critical chunk: run <integration suite> against <database>].

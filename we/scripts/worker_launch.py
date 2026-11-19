@@ -972,7 +972,10 @@ def launch(worktree: Path, name: str, brief_file: Path, agent: str | None = None
         import worker_rights  # noqa: PLC0415
 
         settings_path = gd / SETTINGS
-        doc = turn_off({"env": worker_rights.worker_env(key)}, ticketing_unneeded(brief, worktree))
+        off = ticketing_unneeded(brief, worktree)  # read on the worker's login, as `claude_env`
+        doc = turn_off(
+            {"env": worker_rights.worker_env(key)}, off, installed_plugin_ids(claude_env())
+        )
         settings_path.write_text(json.dumps(doc, indent=2) + "\n")
         argv[1:1] = ["--settings", str(settings_path)]
     try:
