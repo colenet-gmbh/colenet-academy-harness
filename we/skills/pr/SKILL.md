@@ -41,5 +41,5 @@ For a branch built outside `/we:master`; master § Push, PR, CI does the same in
    is armed with `${CLAUDE_PLUGIN_ROOT}/scripts/arm_pr.sh <PR>` right after create, unless it carries a `plan: waits for …` line; the repo's required checks hold the merge).
 6. Arm the watcher as a background command: `${CLAUDE_PLUGIN_ROOT}/scripts/watch-pr-checks.sh <PR> --sha <head>
    --until-merged`. The watch follows L0 §Sessions (a worker until green, its starter until the merge).
-   Without auto-merge it ends at green with `auto-merge off`; whoever arms auto-merge later (e.g. `/we:ci-review`) re-arms it
-   with `--until-merged`.
+   Without auto-merge it prints `waiting … auto-merge off` once at green and watches on to the merge, a push
+   included: arming later needs no second watcher.
