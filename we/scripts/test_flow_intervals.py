@@ -793,12 +793,13 @@ def test_ended_worker_without_marker_and_span_in_the_window(tmp_path, monkeypatc
 def two_projects(t):
     """One host sampler: this project's master and its worker beside another project's sessions."""
     out = [
-        s("alpha-7", "busy", role="master"),
+        s("alpha-7", "busy" if t <= at(1, 6, 0, 4) else "idle", role="master"),
         s("other-1", "busy", role="master"),
         s("stray-9", "idle"),
     ]
     if t <= at(1, 6, 0, 4):
         out += [s("ABC-1-build", "busy", key="ABC-1"), s("XYZ-1-build", "busy", key="XYZ-1")]
+        out.append(s("ABC-7-late", "busy", key="ABC-7"))  # no marker, no starter: its key
     return out
 
 
@@ -823,6 +824,17 @@ def two_project_state(tmp_path, monkeypatch, stamp=True):
                 "since": zt(at(1, 2, 0, 4)),
             }
         ],
+        waits=[
+            {"session": "alpha-7", "waiting_on": "human", "since": mt(at(1, 7, 0, 4))},
+            # an old line of the other project in this board's log
+            {
+                "session": "zed-old",
+                "key": "XYZ-9",
+                "waiting_on": "human",
+                "since": mt(at(1, 7, 0, 4)),
+            },
+        ],
+        transitions=[{"key": "ABC-7", "to": "selected", "ts": zt(at(1, 1, 0, 4))}],
         markers={
             "ABC-1-build": {"starter": "alpha-7", "starter_session": "sid-alpha-7"},
             "XYZ-1-build": {"starter": "other-1", "starter_session": "sid-other-1"},
@@ -877,25 +889,27 @@ def test_one_project_per_page_and_table(tmp_path, monkeypatch, capsys):
     data = page_json(text)
     assert data["project"] == PROJECT
     lanes = {lane["name"] for lane in data["lanes"]}
-    assert lanes == {"alpha-7", "ABC-1-build", "ext-mine", "ext-plain"}
+    assert lanes == {"alpha-7", "ABC-1-build", "ABC-7-late", "ext-mine", "ext-plain"}
     assert {r["who"] for r in data["intervals"]} == lanes
     assert not any(r["kind"].startswith("holding:") for r in data["intervals"])
     att = data["attribution"]
     # 145 probes: alpha-7 every probe, ABC-1-build to 06:00; other-1, stray-9, XYZ-1-build dropped
-    assert (att["kept_sessions"], att["dropped_sessions"]) == (2, 3)
-    assert (att["kept_rows"], att["dropped_rows"]) == (145 + 73, 145 + 145 + 73)
-    assert (att["dropped_events"], att["dropped_locks"], att["dropped_foreign"]) == (1, 13, 1)
+    assert (att["kept_sessions"], att["dropped_sessions"]) == (3, 3)
+    assert (att["kept_rows"], att["dropped_rows"]) == (145 + 73 + 73, 145 + 145 + 73)
+    assert (att["dropped_events"], att["dropped_locks"]) == (1, 13)
+    assert (att["dropped_log_rows"], att["dropped_foreign"]) == (1, 1)
+    assert any(r["who"] == "alpha-7" and r["source"] == "waits" for r in data["intervals"])
     reasons = [g["reason"] for g in data["gaps"]]
     dropped = (
         f"not attributed to {PROJECT}: 363 sampler rows of 3 sessions, "
-        "1 blocked events, 13 lock probes dropped"
+        "1 blocked events, 13 lock probes, 1 board log waits dropped"
     )
     assert dropped in reasons and "other project: 1 rows of rows.jsonl dropped" in reasons
-    assert f"project {PROJECT}: 218 sampler rows of 2 sessions kept, 363 rows" in err
+    assert f"project {PROJECT}: 291 sampler rows of 3 sessions kept, 363 rows" in err
     md = fr.render_md(md_report(root, board, str(foreign)))
     assert f"n/a ({dropped})" in md and "n/a (other project: 1 rows of rows.jsonl dropped)" in md
-    assert "Flow project" in md and f"{PROJECT}: 218 sampler rows" in md
-    for name in ("other-1", "stray-9", "XYZ-1-build", "ext-theirs"):
+    assert "Flow project" in md and f"{PROJECT}: 291 sampler rows" in md
+    for name in ("other-1", "stray-9", "XYZ-1-build", "zed-old", "ext-theirs"):
         assert f"efficiency: {name} " not in md, name
     assert "Master efficiency: alpha-7" in md and "Worker efficiency: ABC-1-build" in md
 
