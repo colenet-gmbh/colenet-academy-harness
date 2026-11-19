@@ -406,6 +406,64 @@ MEDIA_LINE = (
 )
 
 
+def test_the_fence_is_read_on_the_ref_not_in_a_stale_checkout(tmp_path):
+    """A checkout one commit behind a fence extension on `risk.rules_from` printed a false scope
+    change: the epic plan came from the working tree, not from the ref the gate checks against."""
+    root = repo(tmp_path)
+    shutil.rmtree(root / ".git")
+    epic = root / PLANS / "PROJ-1-epic.md"
+
+    def g(*argv: str) -> None:
+        subprocess.run(["git", "-C", str(root), *argv], check=True, capture_output=True)
+
+    who = ["-c", "user.name=t", "-c", "user.email=t@example.com"]
+    g("init", "-q")
+    g("add", "-A")
+    g(*who, "commit", "-qm", "base")
+    old = epic.read_text()
+    epic.write_text(old.replace("fence: [src/**,", "fence: [src/**, infra/**,", 1))
+    g(*who, "commit", "-qam", "extend the fence")
+    g("update-ref", "refs/remotes/origin/main", "HEAD")
+    g("checkout", "-q", "HEAD~1")
+    assert "infra/**" not in epic.read_text()
+    path = add_file(root, "green", "  - `infra/main.tf`", phase="### Phase 1")
+    out = gate(root, "story", path)
+    assert "scope change" not in out.stdout, out.stdout
+
+
+def test_a_new_epic_not_yet_on_the_ref_is_read_from_the_tree(tmp_path):
+    """No epic plan on the ref (it lands with the stories): the tree's copy still arms the fence."""
+    root = repo(tmp_path)
+    shutil.rmtree(root / ".git")
+    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(root), "update-ref", "refs/remotes/origin/main", "HEAD"],
+        check=True,
+        capture_output=True,
+    )
+    path = add_file(root, "green", "  - `infra/main.tf`", phase="### Phase 1")
+    out = gate(root, "story", path)
+    assert "scope change: infra/main.tf" in out.stdout, out.stdout
+
+
 def test_a_media_type_is_no_path_unless_its_name_is_on_the_base_tree(tmp_path):
     """`application/pdf` (nothing there) and `image/png` (`image/` there, no `png`) are skipped;
     `image/logo` (a directory) and `model/user.py` (an extension) stay paths outside the fence."""

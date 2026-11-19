@@ -12,8 +12,10 @@ missing>``; the line is the one to fix, left out where nothing in the plan marks
 as a missing section), 2 usage or an unreadable plan. Warnings go to stderr, each prefixed
 ``warning:``, and never change the exit. There is no option: no caller can switch a check off.
 
-The gate reads the plan file it is given, the epic plan beside it and the crew of its checkout,
-not the plan from ``origin/main``: it runs on a refiner's branch before the plan lands. Only the
+The gate reads the plan file it is given and the crew of its checkout, not the plan from
+``origin/main``: it runs on a refiner's branch before the plan lands. The epic plan comes from
+``risk.rules_from`` when it is there (a checkout behind a fence extension saw a scope change
+the ref no longer has), else from beside the plan. Only the
 tier (check 10) needs the plan on ``risk.rules_from`` and defers there with one warning; the short
 form's limits (check 9c) are read there too.
 
@@ -822,7 +824,7 @@ class Gate:
                 "to the story plan to arm the checks"
             )
             return None
-        hits = find_epic_plan(self.plan.parent, key)
+        hits = self._epic_plans_on_ref(key) or find_epic_plan(self.plan.parent, key)
         if not hits:
             self.warnings.append(
                 f"warning: {self.plan}: fence and goal checks off: no *-epic.md next to the plan "
@@ -838,6 +840,33 @@ class Gate:
             )
             return None
         return hits[0]
+
+    def _epic_plans_on_ref(self, key: str) -> list[tuple[Path, str]]:
+        """The epic plans naming ``key`` as committed on ``risk.rules_from``, at their tree paths;
+        [] when the ref is unreadable or holds none (a new epic lands with its stories). A
+        checkout behind a fence extension otherwise reports a scope change the ref no longer
+        has; the story plan itself stays the tree's, since the refiner gates it before it lands."""
+        try:
+            rel = self.plan.parent.resolve().relative_to(self.root.resolve()).as_posix()
+            done = subprocess.run(
+                ["git", "-C", str(self.root), "ls-tree", "--name-only", f"{self._ref()}:{rel}"],
+                capture_output=True,
+                text=True,
+                timeout=RECEIPT_TIMEOUT,
+                check=False,
+            )
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return []
+        if done.returncode != 0:
+            return []
+        hits = []
+        for name in sorted(n for n in done.stdout.splitlines() if n.endswith("-epic.md")):
+            text = self._on_ref(f"{rel}/{name}")
+            if text is not None:
+                text = text.replace("\r\n", "\n")
+                if names_epic(frontmatter(text), key):
+                    hits.append((self.plan.parent / name, text))
+        return hits
 
     def _phase_repos(self, found: list[Phase]) -> None:
         for phase in found:
