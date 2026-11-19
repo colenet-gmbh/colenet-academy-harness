@@ -8,7 +8,7 @@ becomes public: `gh pr create`.
 A hint, not a block: the command runs and the session gets the missing receipt as additional
 context. A PR body is edited in one call (`gh pr edit --body-file`), so a PR opened without the
 block is no irreversible action, and a brake belongs only before one (owner's principle
-"throughput before ceremony", WA-3104). Blocking cost a whole compound command (commits and pushes
+"throughput before ceremony", 12.11.2026). Blocking cost a whole compound command (commits and pushes
 included) for a text that can follow a minute later.
 
 Deliberately narrow:

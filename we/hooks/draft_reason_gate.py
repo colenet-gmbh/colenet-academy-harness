@@ -6,7 +6,7 @@ A hint, not a block: the command runs and the session gets what is missing as ad
 Neither case is irreversible: the body is edited in one call, and a conflicting PR cannot merge, so
 the merge of its base and the one push the hint asks for start the CI the ready event did not. A
 brake belongs only before an irreversible action (owner's principle "throughput before ceremony",
-WA-3104); a green PR that lost its arm is `conflict_gate.py`'s Stop finding.
+12.11.2026); a green PR that lost its arm is `conflict_gate.py`'s Stop finding.
 
 A draft is for a PR that must not merge even when green; a fix round needs none, because a red
 required check already blocks the merge and the Codex review skips drafts. Observed before the
