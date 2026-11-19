@@ -9,12 +9,14 @@ server-side (branch rules, the merge gate, the token's app rights, the secret st
 It acts only for a process worker: env `WE_ROLE=worker` (set by `we-worker`) or the marker of
 `worker_launch.py` naming this session. A master, a companion and their subagents pass untouched.
 For a worker it
-  1. denies a never-list item (`worker_rights.never`): `never for a worker (<item>): ask …`;
-  2. denies a right (`gh pr ready`, `gh pr comment`, the crew's `branch_rc`; under
-     `build.pr_owner: worker` also the PR owner rights, every `gh pr merge` among them) whose
-     conditions fail: `not a worker right (<reason>): ask …`;
-  3. allows a held right that is the whole command, without a prompt; a held right inside a
-     compound command only passes this gate.
+  1. denies a never-list item (`worker_rights.never`, a fixed list of patterns searched in the
+     command text, no shell parser): `never for a worker (<item>): ask …`;
+  2. on every simple command of the text (`worker_rights.segments`), denies a right (`gh pr ready`,
+     `gh pr comment`, the crew's `branch_rc`; under `build.pr_owner: worker` also the PR owner
+     rights, the merge line among them) whose conditions fail: `not a worker right (<reason>): ask …`,
+     all parts sharing one deadline; it allows a held right without a prompt only on a command of
+     its own (`worker_rights.simple_argv`). A held right inside a compound command only passes this
+     gate; a `gh pr merge` there is a never-list item.
 `ask …` names the marker's Lead (`ask your Lead <name>`), else `ask your starter`. Fail closed: an
 exception while judging a worker's command denies it. Every denial is one `deny` line in
 `<state dir>/brakes.jsonl` (`worker_rights.brake_log`), so the false alarms can be counted; a failed
@@ -68,26 +70,25 @@ def decide(payload: dict, env: dict) -> tuple[str, str] | None:
     lead = (marker or {}).get("lead")
     ask = f"ask your Lead {lead}" if lead else "ask your starter"
     rights = wr.crew_rights(cwd)
-    parsed = wr.parse(command)
-    item = wr.never(command, cwd, rights, parsed)
+    owner = wr.pr_owner_on_default(cwd)
+    item = wr.never(command, cwd, rights, owner)
     if item:
         return "deny", f"never for a worker ({item}): {ask}"
     key = env.get("WE_STORY_KEY") or (marker or {}).get("key")
-    owner = wr.pr_owner_on_default(cwd)
-    held = []
-    # one budget for the whole call, below the hook's timeout: a killed hook lets the call through
-    deadline = time.monotonic() + wr.MERGE_LINE_BUDGET_S
-    for argv in parsed.commands:
-        right = wr.right_of(argv, rights, owner)
+    deadline = time.monotonic() + wr.MERGE_LINE_BUDGET_S  # one budget across every part
+    argv = wr.simple_argv(command)
+    held = None
+    for part in [argv] if argv else wr.segments(command):
+        right = wr.right_of(part, rights, owner)
         if right is None:
             continue
-        reason = wr.right_refusal(argv, right, rights, key, cwd, owner, deadline)
+        reason = wr.right_refusal(part, right, rights, key, cwd, owner, deadline)
         if reason:
             return "deny", f"not a worker right ({reason}): {ask}"
-        held.append(right)
-    if held and not parsed.compound and len(parsed.commands) == 1:
-        return "allow", f"worker right {held[0]} (worker_rights_gate)"
-    return None
+        held = right
+    if held is None or argv is None:
+        return None
+    return "allow", f"worker right {held} (worker_rights_gate)"
 
 
 def record(payload: dict, env: dict, reason: str) -> None:

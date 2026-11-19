@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: a PR becomes a draft only with a `**Draft:**` line in its body, and leaves
-draft only when it does not conflict with its base.
+"""PreToolUse hook: a hint when a PR becomes a draft without a `**Draft:**` line in its body, or
+leaves draft while it conflicts with its base.
+
+A hint, not a block: the command runs and the session gets what is missing as additional context.
+Neither case is irreversible: the body is edited in one call, and a conflicting PR cannot merge, so
+the merge of its base and the one push the hint asks for start the CI the ready event did not. A
+brake belongs only before an irreversible action (owner's principle "throughput before ceremony",
+12.11.2026); a green PR that lost its arm is `conflict_gate.py`'s Stop finding.
 
 A draft is for a PR that must not merge even when green; a fix round needs none, because a red
 required check already blocks the merge and the Codex review skips drafts. Observed before the
@@ -10,7 +16,7 @@ reason in the body. Contract: `skills/pr/SKILL.md` step 4.
   * Fires on `gh pr create` with `--draft`/`-d` and on `gh pr ready --undo`, in command position
     (heredoc bodies lifted out first, as in `verification_gate.py`).
   * `create`: the body comes from `--body`/`-b` or `--body-file`/`-F` (a heredoc written in the
-    same command counts). No body flag at all is a body without the line: denied.
+    same command counts). No body flag at all is a body without the line: the hint.
   * `ready --undo`: the body comes from `gh pr view <selector> --json body`, unless the same
     command runs `gh pr edit <selector> --body-file`/`--body` before it: that body is the one the
     PR will carry (the edit has not run when the hook reads).
@@ -18,7 +24,7 @@ reason in the body. Contract: `skills/pr/SKILL.md` step 4.
     that line holds no `<placeholder>` (neither in the reason nor in the condition).
   * Fail-open when the body cannot be read (a substitution, `-`, `--web`, a missing file, a `gh`
     error) and on every other error.
-  * `ready` (without `--undo`): denied while `gh pr view <selector> --json mergeable` says
+  * `ready` (without `--undo`): the hint while `gh pr view <selector> --json mergeable` says
     CONFLICTING. GitHub starts no `pull_request` workflow for a PR whose merge ref cannot be built,
     so a ready event on a conflicting PR starts no CI and no arming workflow, and a crew's board
     showed such a PR green and unarmed after the conflict was gone. UNKNOWN is read again up to
@@ -123,18 +129,17 @@ def _ready_refusal(selector: str | None, repo: str | None, cwd: str | None) -> s
     base = data.get("baseRefName") or "<base>"
     verb = f"gh pr ready {selector}" if selector else "gh pr ready"
     return (
-        f"`{verb}` refused: the PR conflicts with `{base}`. GitHub starts no workflow for a conflicting "
-        "PR, so this ready event would start no CI and no auto-merge arming, and nothing re-arms "
-        f"it later. Merge `origin/{base}` in the PR's worktree, run the after-merge check, push "
-        "once, then run `gh pr ready` again."
+        f"`{verb}` ran on a PR that conflicts with `{base}`. GitHub starts no workflow for a "
+        "conflicting PR, so this ready event starts no CI and no auto-merge arming. Merge "
+        f"`origin/{base}` in the PR's worktree, run the after-merge check and push once: the push "
+        "starts them."
     )
 
 
 def _denial(what: str, fix: str) -> str:
     return (
-        f"{what} needs a reason: put one line `**Draft:** <reason> — ready when <condition>` at the "
-        f"top of the PR body ({fix}), "
-        "then retry. A draft is only for a PR that must not merge even when green (open product "
+        f"{what} ran without a reason: put one line `**Draft:** <reason> — ready when <condition>` "
+        f"at the top of the PR body now ({fix}). A draft is only for a PR that must not merge even when green (open product "
         "decision, unmerged dependency, a follow-up still landing on the branch, money path "
         "awaiting the owner). A fix round does not draft: a red required check already blocks "
         "the merge; disable auto-merge instead."
@@ -237,8 +242,7 @@ def main() -> None:
             {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": reason,
+                    "additionalContext": reason,
                 }
             }
         )

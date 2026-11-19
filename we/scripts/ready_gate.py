@@ -31,8 +31,8 @@ Ready gate reads); this docstring only lists the story checks in their order:
    source missing turns its check off with one warning, and the check arms when it lands;
 9. seams named: at least one path in some phase's ``**Files:**`` list;
 9b. the ``## Verification`` block's ``**Oracle:**`` line, read by the PR hook's own parser
-   (``hooks/verification_gate.py``): a line that hook would refuse is one warning now, not a
-   refusal at ``gh pr create`` later (the AC classes ``receipt``/``ci``/``walk`` are no oracle
+   (``hooks/verification_gate.py``): a line that hook would flag is one warning now, not a
+   hint after ``gh pr create`` later (the AC classes ``receipt``/``ci``/``walk`` are no oracle
    there);
 9c. the short form (``form: short``): the sections ``SHORT_SECTIONS`` replace the full set, the
    paths come from ``## Files`` (at most ``plans.short_max_files`` of ``.weside/config.json``,
@@ -627,11 +627,11 @@ class Gate:
             ]
 
     def _oracle_line(self, text: str) -> None:
-        """Check 9b: warn now what the PR hook refuses at `gh pr create`."""
+        """Check 9b: warn now what the PR hook flags at `gh pr create`."""
         problem = verification_gate._receipt_problem(text)
         if problem is not None:
             self.warnings.append(
-                f"warning: {self.plan}: ## Verification: the PR hook will refuse this plan's "
+                f"warning: {self.plan}: ## Verification: the PR hook will flag this plan's "
                 f"block: {problem} The AC classes receipt, ci and walk belong in the AC markers; "
                 f"the `**Oracle:**` line names how the build was observed "
                 f"({verification_gate._MENU}); see references/story-plan.md § Two vocabularies "

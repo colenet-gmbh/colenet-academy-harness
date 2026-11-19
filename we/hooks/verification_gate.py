@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: a PR may not be opened without a verification receipt.
+"""PreToolUse hook: a hint when a PR is opened without a verification receipt.
 
 Green tests share the blind spots of whoever wrote the code. The receipt says how
-the behaviour was observed, or that it was not — so it gates the moment the claim
+the behaviour was observed, or that it was not — so the hook speaks at the moment the claim
 becomes public: `gh pr create`.
+
+A hint, not a block: the command runs and the session gets the missing receipt as additional
+context. A PR body is edited in one call (`gh pr edit --body-file`), so a PR opened without the
+block is no irreversible action, and a brake belongs only before one (owner's principle
+"throughput before ceremony", 12.11.2026). Blocking cost a whole compound command (commits and pushes
+included) for a text that can follow a minute later.
 
 Deliberately narrow:
   * Fires only on a `gh pr create` / `gh pr edit` in **command position**, after
@@ -11,11 +17,10 @@ Deliberately narrow:
     command is not a PR — that false positive is what made this hook expensive.
   * Only when the repo opted in — `.weside/config.json` → verification.required.
   * A body it cannot resolve (a command substitution with no heredoc behind it,
-    an unreadable `--body-file`) it lets through: a hook that guesses wrong is
+    an unreadable `--body-file`) gets no hint: a hook that guesses wrong is
     worse than no hook. A `create` carrying **no** body flag at all (`--fill`)
-    is not unresolvable — it is a claim with no receipt, and it blocks.
-  * Fail open on its own error: an exception while judging lets the command through with
-    one stderr line (`main`), for the reason above.
+    is not unresolvable — it is a claim with no receipt, and it gets the hint.
+  * On its own error it stays silent but for one stderr line (`main`), for the reason above.
   * One transport. A PR opened through an MCP tool never reaches this code, and
     `--web` types its body in a browser we cannot read — the gate is armed against
     one spelling of the action.
@@ -384,16 +389,16 @@ def _receipt_problem(full: str) -> str | None:
     return None
 
 
-# A denied call runs none of its chain; read as "the PR step failed", the commit and push before
-# it were assumed done and retried piecemeal (4 cases in the retro of 18.10.2026).
-_BLOCKED = (
-    "Blocked before anything ran: no part of this Bash command executed (commits and pushes "
-    "included). Re-run it whole, or run `gh pr create` alone.\n\n"
+# "the command ran": the hint follows a call that went through, so the session edits the body
+# instead of retrying the PR step.
+_HINT = (
+    "Verification receipt missing: the command ran; add the block to the PR body now "
+    "(`gh pr edit <PR> --body-file <file>`).\n\n"
 )
 
 
 def _refusal(payload: dict) -> str | None:
-    """The denial reason, or None when this call may proceed."""
+    """The hint for this call, or None when its PR body carries a receipt."""
     if payload.get("tool_name") != "Bash":
         return None
     command = (payload.get("tool_input") or {}).get("command", "")
@@ -418,7 +423,7 @@ def _refusal(payload: dict) -> str | None:
         )
     else:
         problem = _receipt_problem(body)
-    return _BLOCKED + problem + "\n\n" + _WHERE if problem else None
+    return _HINT + problem + "\n\n" + _WHERE if problem else None
 
 
 def main() -> None:
@@ -429,7 +434,7 @@ def main() -> None:
 
     try:
         reason = _refusal(payload)
-    except Exception as exc:  # fail open: a gate that guesses wrong is worse than none (above)
+    except Exception as exc:  # silent: a hook that guesses wrong is worse than none (above)
         print(f"verification_gate: skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
         return
     if reason is None:
@@ -440,8 +445,7 @@ def main() -> None:
             {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": reason,
+                    "additionalContext": reason,
                 }
             }
         )
