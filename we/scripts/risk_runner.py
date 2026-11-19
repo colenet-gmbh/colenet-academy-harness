@@ -10,6 +10,12 @@ T0. `run(root, git, found, head, base, timeout)` writes the classifier to a temp
 with `base` in a no-checkout worktree of `head`; line 1 must match `CLASS_LINE`. The worktree and
 the temp dir go whatever happens.
 
+`risk_runner.py here <base>` runs the same classifier in the current checkout (its uncommitted
+check included), for `arm_pr.sh`: stdout is the classifier's output and exit 0 when line 1 matches
+`CLASS_LINE`; otherwise one line `<classifier> exit <rc>: <why>` or `<classifier> line 1: <line>`
+(or the runner's reason) and exit 2. A repo without any rules prints `T0`. It fetches `RULES_FROM`
+best-effort and reads the rules from the ref it has.
+
 `git(root, *args, timeout=...)` is the caller's git: stdout, or None on any failure. Python 3.9, stdlib only.
 """
 
@@ -76,13 +82,16 @@ def fetch_rules(root: str, ref: str, git: Git) -> bool:
     return git(root, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}") is not None
 
 
-def rules(root: str, git: Git) -> Found | None | str:
+def rules(root: str, git: Git, fetch: bool = True) -> Found | None | str:
     """(argv prefix with a {file} slot, blob spec to write there or None, rules ref);
-    None when the repo uses no rules (class T0); a str is the reason it cannot be computed."""
-    if not fetch_rules(root, RULES_FROM, git):
+    None when the repo uses no rules (class T0); a str is the reason it cannot be computed.
+    `fetch=False`: the caller fetched; `RULES_FROM` only has to exist."""
+    if fetch and not fetch_rules(root, RULES_FROM, git):
         return (
             f"`git fetch origin {RULES_FROM.split('/', 1)[1]}` failed; the rules must be current"
         )
+    if not fetch and git(root, "rev-parse", "--verify", "-q", f"{RULES_FROM}^{{commit}}") is None:
+        return f"no {RULES_FROM} here (fetch it)"
     crew_doc = crew_on(root, git)
     risk = crew_doc.get("risk") or {}
     rules_from = risk.get("rules_from") if isinstance(risk.get("rules_from"), str) else RULES_FROM
@@ -121,40 +130,57 @@ def exec_in_tree(
     tmp = tempfile.mkdtemp(prefix="we-merge-class.")
     tree = os.path.join(tmp, "head")
     try:
-        script = os.path.join(tmp, "classifier")
-        if blob is None:
-            shutil.copyfile(RISK_PATHS, script)
-        else:
-            body = git(root, "show", blob)
-            if body is None:
-                return None, f"`{blob}` is missing"
-            Path(script).write_text(body, encoding="utf-8")
-        os.chmod(script, 0o700)
+        script, why = _write_script(root, git, blob, tmp)
+        if script is None:
+            return None, why
         added = git(
             root, "worktree", "add", "--no-checkout", "--detach", tree, tree_ref, timeout=60
         )
         if added is None:
             return None, f"`git worktree add` of {tree_ref[:9]} failed"
-        argv = [script if a == "{file}" else a for a in args]
-        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-        try:
-            out = subprocess.run(
-                argv,
-                cwd=tree,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-                env=env,
-            )
-        except subprocess.TimeoutExpired:
-            return None, f"the classifier ran past {timeout:.0f} s"
-        except OSError as exc:
-            return None, f"the classifier is not runnable: {exc.strerror}"
-        return out, None
+        return _exec(script, args, tree, timeout)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         git(root, "worktree", "prune")
+
+
+def _write_script(
+    root: str, git: Git, blob: str | None, tmp: str
+) -> tuple[str | None, str | None]:
+    """(path, None) of the classifier written into `tmp`, or (None, why)."""
+    script = os.path.join(tmp, "classifier")
+    if blob is None:
+        shutil.copyfile(RISK_PATHS, script)
+    else:
+        body = git(root, "show", blob)
+        if body is None:
+            return None, f"`{blob}` is missing"
+        Path(script).write_text(body, encoding="utf-8")
+    os.chmod(script, 0o700)
+    return script, None
+
+
+def _exec(
+    script: str, args: list[str], cwd: str, timeout: float
+) -> tuple[subprocess.CompletedProcess | None, str | None]:
+    """The classifier run as `<args>` with every `{file}` its path, in `cwd`."""
+    argv = [script if a == "{file}" else a for a in args]
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    try:
+        out = subprocess.run(
+            argv,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return None, f"the classifier ran past {timeout:.0f} s"
+    except OSError as exc:
+        return None, f"the classifier is not runnable: {exc.strerror}"
+    return out, None
 
 
 def run(
@@ -177,3 +203,60 @@ def run(
         last = (out.stderr.strip().splitlines() or [line or "no output"])[-1]
         return None, f"the classifier exited {out.returncode}: {last}"
     return [line, *lines[1:]], None
+
+
+def classifier_name(found: Found) -> str:
+    """`risk_paths.py` for the plugin's classifier, else the crew command's script path."""
+    _prefix, blob, _rules_from = found
+    if blob is None or blob.endswith(":we/scripts/risk_paths.py"):
+        return "risk_paths.py"
+    return blob.split(":", 1)[1]
+
+
+def here(
+    root: str, base: str, git: Git = plain_git, timeout: float = CLASSIFY_TIMEOUT
+) -> tuple[int, str]:
+    """(0, the classifier's stdout) or (2, one line why): the crew's classifier on `base` in the
+    checkout `root` itself, so a risk path with uncommitted changes is seen (`arm_pr.sh`)."""
+    fetch_rules(root, RULES_FROM, git)  # best-effort: offline, the ref at hand decides
+    found = rules(root, git, fetch=False)
+    if found is None:
+        return 0, "T0"
+    if isinstance(found, str):
+        return 2, found
+    prefix, blob, _rules_from = found
+    name = classifier_name(found)
+    tmp = tempfile.mkdtemp(prefix="we-arm-class.")
+    try:
+        script, why = _write_script(root, git, blob, tmp)
+        out = None
+        if script is not None:
+            out, why = _exec(script, [*prefix, base], root, timeout)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    if out is None:
+        return 2, f"{name}: {why}"
+    line = (out.stdout.splitlines() or [""])[0].strip()
+    if out.returncode != 0:
+        last = line or (out.stderr.strip().splitlines() or ["no output"])[-1]
+        return 2, f"{name} exit {out.returncode}: {last}"
+    if not CLASS_LINE.match(line):
+        return 2, f"{name} line 1: {line or 'empty'}"
+    return 0, out.stdout.rstrip("\n")
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2 or argv[0] != "here" or argv[1].startswith("-"):
+        print("usage: risk_runner.py here <base>", file=sys.stderr)
+        return 2
+    root = plain_git(os.getcwd(), "rev-parse", "--show-toplevel")
+    if root is None:
+        print("not a git checkout")
+        return 2
+    code, text = here(root.strip(), argv[1])
+    print(text)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
