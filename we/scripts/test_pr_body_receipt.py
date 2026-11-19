@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -263,6 +265,48 @@ def test_a_timeout_is_red(repo: Path, monkeypatch) -> None:
     assert mod.run_receipt(command, "KEY-1", repo) == [
         "receipt red (not run: timeout after 0.5 s)"
     ]
+
+
+# A receipt command that starts a dev server (a devbox) in the background: the stand-in writes
+# its pid, keeps no pipe of ours open, and the command then ends or hangs.
+DEVBOX = """import os, subprocess, sys, time
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+open("devbox.pid", "w").write(str(child.pid))
+if sys.argv[1] == "hang":
+    time.sleep(60)
+print("report: /tmp/r.html")
+"""
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    stat = Path(f"/proc/{pid}/stat")
+    return not (stat.exists() and stat.read_text().split(") ")[-1].startswith("Z"))
+
+
+@pytest.mark.parametrize("mode", ["end", "hang"])
+def test_a_devbox_the_receipt_started_is_stopped(repo: Path, monkeypatch, mode: str) -> None:
+    """A devbox the receipt command left running kept running after the PR body was written."""
+    spec = importlib.util.spec_from_file_location("pr_body_receipt", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(mod, "RECEIPT_TIMEOUT_S", 3)
+    (repo / "devbox.py").write_text(DEVBOX)
+    mod.run_receipt(f"{shlex.quote(sys.executable)} devbox.py {mode}", "KEY-1", repo)
+    pid = int((repo / "devbox.pid").read_text())
+    deadline = time.monotonic() + 5
+    while _alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    try:
+        assert not _alive(pid), "the devbox outlived the receipt run"
+    finally:
+        if _alive(pid):
+            os.kill(pid, 9)
 
 
 @pytest.mark.parametrize(

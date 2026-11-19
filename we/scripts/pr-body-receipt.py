@@ -28,6 +28,9 @@ stdout contract and exit code map as follows:
   * any other exit, a timeout, a command not found
                                         → `receipt red (not run: <reason>)`
 
+The command runs in a process group of its own, and whatever it leaves in that group (a devbox
+started in the background) is stopped when the run ends or times out.
+
 The path sits in a code span; the line is for the human who reads the PR. A red receipt is a result, not a script error: the
 exit code stays the splice's. Without the key, the body is the splice alone.
 """
@@ -39,8 +42,10 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 _GATE = Path(__file__).resolve().parent.parent / "hooks" / "verification_gate.py"
@@ -74,24 +79,51 @@ def _code_span(text: str) -> str:
     return f"{fence}{pad}{text}{pad}{fence}"
 
 
+def _stop_group(pgid: int) -> None:
+    """End every process left in the receipt command's group: TERM, then KILL after 2 s."""
+    for sig, wait_s in ((signal.SIGTERM, 2.0), (signal.SIGKILL, 0.0)):
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, PermissionError):
+            return
+        deadline = time.monotonic() + wait_s
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(pgid, 0)
+            except (ProcessLookupError, PermissionError):
+                return
+            time.sleep(0.05)
+
+
 def run_receipt(command: str, key: str, root: Path) -> list[str]:
     """The `receipt …` lines for this run of `command`; [] when the story has no receipt."""
     argv = [tok.replace("{KEY}", key) for tok in shlex.split(command)]
+    # Its own process group, stopped in `finally`: a devbox the command starts in the background
+    # otherwise outlives the run (it kept running), and `subprocess.run` kills only the command.
     try:
-        done = subprocess.run(
+        proc = subprocess.Popen(
             argv,
             cwd=root,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=RECEIPT_TIMEOUT_S,
-            check=False,
+            start_new_session=True,
         )
-    except subprocess.TimeoutExpired:
-        return [f"receipt red (not run: timeout after {RECEIPT_TIMEOUT_S} s)"]
     except FileNotFoundError:
         return [f"receipt red (not run: {argv[0] if argv else command} not found)"]
-    if done.stderr:
-        sys.stderr.write(done.stderr)
+    timed_out = False
+    try:
+        stdout, stderr = proc.communicate(timeout=RECEIPT_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+    finally:
+        _stop_group(proc.pid)
+    if timed_out:
+        proc.communicate()
+        return [f"receipt red (not run: timeout after {RECEIPT_TIMEOUT_S} s)"]
+    if stderr:
+        sys.stderr.write(stderr)
+    done = subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
     lines = done.stdout.splitlines()
 
     def values(prefix: str) -> list[str]:
