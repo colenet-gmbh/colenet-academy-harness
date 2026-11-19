@@ -58,7 +58,7 @@ inbox as it is.
 - **Pre-sort** (optional, the decider asks for it, or the inbox holds more than ten entries after
   consolidation): one read-only worker (`we:explore-medium`) gets the inbox and ledger paths and
   returns the ten entries it would decide first, each with one line why. Check each line at its
-  entry; the batch in step 5 is these ten, the rest stays in `inbox/` for the next run.
+  entry; step 5 decides these ten, the rest stays in `inbox/` for the next run.
 - **A rejected key again.** An entry whose key has a `rejected` ledger row goes on only when its new
   evidence answers that row's reason (the count adds the row's evidence: a second occurrence answers
   "seen once"). Otherwise delete the file in the store commit; the rejection stands.

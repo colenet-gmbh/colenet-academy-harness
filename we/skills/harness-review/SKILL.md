@@ -29,7 +29,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/flow_intervals.py" --since 14d --html "${
 Read from the report: `Flow efficiency` and `Waiting by kind` (who waits on whom, in hours), the
 heads and rounds per code PR, `Required checks: red heads` (`rerun green` is a false alarm),
 `Brakes per day` and `Brake outcomes`. A brake line no `outcome` judged counts as a false alarm:
-a brake that does not count its stops cannot show it pays (product owner, 12.11.2026).
+a brake that does not count its stops cannot show it pays (`product`, 12.11.2026).
 
 - [ ] the report file under `reports/` exists, or the run printed why not
 - [ ] every `n/a` row is named with its missing source, never read as zero
@@ -65,7 +65,7 @@ reason a reader needs. Otherwise it is a candidate:
 - a rule with neither → cut, or one line at the place the case occurs that says why
   (`${CLAUDE_PLUGIN_ROOT}/AUTHORING.md` § Guideline before rule);
 - a gate or brake that in the window stopped more without the danger than with it, or that has
-  no finding that would have stopped a merge → cut, not rebuilt (product owner, 12.11.2026);
+  no finding that would have stopped a merge → cut, not rebuilt (`product`, 12.11.2026);
 - a gate a session can write green itself, or one that is neither leak protection, damage
   limitation nor a brake before an irreversible action → input for a human, off the merge path.
 
@@ -82,8 +82,8 @@ its number and source; a finding without a number ranks last as `unmeasured`. Ho
 1 (waiting hours, runner and agent hours, rounds per PR, wait to merge) or a step-2 estimate,
 marked as such.
 
-Then one fresh `we:council-member` (lens: adversary) gets only the plan's path and the sources it
-cites, never your conclusions: "Attack this plan. Which finding is wrong, which cut breaks
+Then one fresh `we:explore-medium` gets only the plan's path and the sources it cites, never
+your conclusions: "Attack this plan. Which finding is wrong, which cut breaks
 something, which large cost is missing? Each claim with file:line or a number." Check every claim
 at its line. A confirmed claim changes the plan; an unconfirmed one is dropped and counted in the
 plan's last line.
