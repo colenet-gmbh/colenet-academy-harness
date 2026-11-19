@@ -483,10 +483,13 @@ def _is_process_worker(hook_input: dict | None) -> bool:
     return not recorded or not current or recorded == current
 
 
-def load(path: Path, notes: list[str] | None = None, *, strict: bool = False) -> dict[str, Any]:
+def load(
+    path: Path, notes: list[str] | None = None, *, strict: bool = False, paths: bool = True
+) -> dict[str, Any]:
     """The crew at ``path``, validated and merged over ``DEFAULTS``; ``notes`` collects the
     transition keys found (``show`` prints them). An unknown key prints one stderr line and lands
-    in ``unknown_keys``; ``strict`` raises ``CrewError`` naming every one instead."""
+    in ``unknown_keys``; ``strict`` raises ``CrewError`` naming every one instead. ``paths`` checks
+    that every ``files.*`` and lens path exists next to ``path``."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -501,7 +504,7 @@ def load(path: Path, notes: list[str] | None = None, *, strict: bool = False) ->
     _drop_retired(path, data)
     unknown = [".".join(key) for key in _unknown_keys(data)]
     data = _without(data, _unknown_keys(data))
-    _validate(path, data)
+    _validate(path, data, paths=paths)
     if unknown and strict:
         raise _fail(path, f"unknown key {', '.join(unknown)}")
     for dotted in unknown:
@@ -700,7 +703,7 @@ def _check_signals(path: Path, value: Any) -> None:
             raise _fail(path, f"{dotted}.jql_window must be a number with m, h or d, like 35m")
 
 
-def _validate(path: Path, data: dict[str, Any]) -> None:
+def _validate(path: Path, data: dict[str, Any], *, paths: bool) -> None:
     """The hard checks, on ``data`` without its unknown keys."""
     for key in ("roles", "members"):
         if not isinstance(data.get(key), dict):
@@ -744,7 +747,8 @@ def _validate(path: Path, data: dict[str, Any]) -> None:
                 path,
                 f"labels.{key} must be one non-empty line of at most {LABEL_CHARS} characters",
             )
-    _validate_paths(path, data)
+    if paths:
+        _validate_paths(path, data)
 
 
 def _validate_choices(path: Path, data: dict[str, Any]) -> None:
@@ -1707,12 +1711,14 @@ def _launch_cli(argv: list[str]) -> int:
 
 
 def _load_text(label: str, text: str) -> dict[str, Any]:
-    """``load`` over a crew file's text that has no working-tree path (``find_at_rev``)."""
+    """``load`` over a crew file's text that has no working-tree path (``find_at_rev``). It skips
+    the path check: a file read at a revision has no working tree to check paths against, and the
+    readers that open those paths load the working-tree crew."""
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "crew.json"
         path.write_text(text, encoding="utf-8")
         try:
-            return load(path)
+            return load(path, paths=False)
         except CrewError as exc:
             raise CrewError(str(exc).replace(str(path), label)) from None
 
