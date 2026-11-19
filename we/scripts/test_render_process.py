@@ -71,7 +71,8 @@ def test_every_role_renders_within_the_budget_with_crew_values():
         in full
     )
     assert "`ASK · <KEY> <title> · <question without context> · Advice: …`" in full
-    assert "`done-for-now` before parking" in full
+    # `board.py set` refuses the ready label as a state: the L0 names the state it takes
+    assert "`done-for-now` to " in full and "then `state=parked`" in full
     # a session guessed the ask call from the skill text; the L0 names both board calls
     assert "`board.py ask --key K --key-title T --ask Q --recommendation R --cause C`" in full
     assert "`board.py set state=… now=…`" in full
