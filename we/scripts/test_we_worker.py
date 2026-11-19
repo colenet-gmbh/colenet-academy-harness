@@ -1084,3 +1084,100 @@ def test_a_crew_member_started_in_the_background_is_no_worker(tmp_path):
     assert run(project, env, "is-worker", "m1").returncode == 1
     (state / "Ada.settings.json").write_text(json.dumps({"env": {"WE_ROLE": "worker"}}))
     assert run(project, env, "is-worker", "m1").returncode == 0
+
+
+ACCOUNTS_STUB = r"""#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+need = args[args.index("--need") + 1]
+name = args[args.index("--account") + 1] if "--account" in args else None
+with open(os.environ["STUB_LOG"], "a") as fh:
+    fh.write(json.dumps({"argv": [], "accounts": args}) + "\n")
+if os.environ.get("STUB_ACCOUNT_KIND"):
+    kind = os.environ["STUB_ACCOUNT_KIND"]
+else:
+    kind = "claude" if need == "critical" else "other-llm"
+print(json.dumps({"name": name or f"{need}-pick", "kind": kind,
+                  "env": {"ANTHROPIC_BASE_URL": f"https://{need}.example"},
+                  "token_command": "vault-helper read pick", "quota": {"5h": 12}}))
+"""
+
+
+def accounts_setup(tmp_path, command=True):
+    project, env = setup(tmp_path)
+    stub = tmp_path / "bin" / "accounts"
+    stub.write_text(ACCOUNTS_STUB)
+    stub.chmod(0o755)
+    (project / ".weside").mkdir(exist_ok=True)
+    config = {"agents": {"accounts_command": f"{stub} --from-test"}} if command else {}
+    (project / ".weside" / "config.json").write_text(json.dumps(config))
+    return project, env
+
+
+def settings_of(tmp_path):
+    (call,) = started(tmp_path)
+    return json.loads(Path(call["argv"][call["argv"].index("--settings") + 1]).read_text())
+
+
+def test_account_auto_puts_the_critical_claude_account_into_the_settings(tmp_path):
+    project, env = accounts_setup(tmp_path)
+    proc = run(project, env, "AC-12-impl", "--bg", "--account", "auto", GO)
+    assert proc.returncode == 0, proc.stderr
+    assert "runs on account critical-pick (claude, critical" in proc.stdout
+    (asked,) = [c["accounts"] for c in calls(tmp_path) if "accounts" in c]
+    assert asked == ["--from-test", "--need", "critical"]
+    doc = settings_of(tmp_path)
+    assert doc["env"]["ANTHROPIC_BASE_URL"] == "https://critical.example"
+    assert doc["env"]["WE_ROLE"] == "worker"
+    assert doc["apiKeyHelper"] == "vault-helper read pick"
+    # the helper command and the env stay in the file, off the command line
+    (call,) = started(tmp_path)
+    assert not any("vault-helper" in a or "example" in a for a in call["argv"])
+    assert not list(
+        (tmp_path / "home" / ".claude" / "we-state" / "workers").glob("*.account.json")
+    )
+
+
+def test_an_uncritical_brief_may_land_on_another_llm(tmp_path):
+    project, env = accounts_setup(tmp_path)
+    brief = GO + "\nAccount: uncritical\n"
+    proc = run(project, env, "AC-12-impl", "--bg", "--account=auto", brief)
+    assert proc.returncode == 0, proc.stderr
+    (asked,) = [c["accounts"] for c in calls(tmp_path) if "accounts" in c]
+    assert asked[-2:] == ["--need", "uncritical"]
+    assert settings_of(tmp_path)["env"]["ANTHROPIC_BASE_URL"] == "https://uncritical.example"
+
+
+def test_a_named_account_passes_through_to_the_command(tmp_path):
+    project, env = accounts_setup(tmp_path)
+    proc = run(project, env, "AC-12-impl", "--bg", "--account", "backup", GO)
+    assert proc.returncode == 0, proc.stderr
+    (asked,) = [c["accounts"] for c in calls(tmp_path) if "accounts" in c]
+    assert asked == ["--from-test", "--need", "critical", "--account", "backup"]
+
+
+def test_a_critical_worker_on_a_non_claude_account_refuses(tmp_path):
+    project, env = accounts_setup(tmp_path)
+    env["STUB_ACCOUNT_KIND"] = "other-llm"
+    proc = run(project, env, "AC-12-impl", "--bg", "--account", "auto", GO)
+    assert proc.returncode == 2
+    assert "critical worker runs only on a claude account" in proc.stderr
+    assert "no worker started" in proc.stderr
+    assert started(tmp_path) == []
+
+
+def test_account_without_the_option_refuses(tmp_path):
+    project, env = accounts_setup(tmp_path, command=False)
+    proc = run(project, env, "AC-12-impl", "--bg", "--account", "auto", GO)
+    assert proc.returncode == 2
+    assert "agents.accounts_command is not set" in proc.stderr
+    assert started(tmp_path) == []
+
+
+def test_without_account_the_command_is_never_asked(tmp_path):
+    project, env = accounts_setup(tmp_path)
+    proc = run(project, env, "AC-12-impl", "--bg", GO)
+    assert proc.returncode == 0, proc.stderr
+    assert not [c for c in calls(tmp_path) if "accounts" in c]
+    doc = settings_of(tmp_path)
+    assert "apiKeyHelper" not in doc and "ANTHROPIC_BASE_URL" not in doc["env"]

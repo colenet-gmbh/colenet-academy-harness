@@ -67,7 +67,16 @@ Usage:
                                                    the never-list as permissions.deny
                                                    (`worker_rights.py`), the command as its
                                                    SessionStart hook, the lean context of
-                                                   `workers.context` (`apply_context`)
+                                                   `workers.context` (`apply_context`);
+                                                   --account-file adds the chosen account
+                                                   (`apply_account`)
+  worker_launch.py account --account auto|<name> [--need critical|uncritical] --out <file> [--repo <dir>]
+                                                   asks `agents.accounts_command` (`choose_account`),
+                                                   writes its checked answer to <file>, prints one
+                                                   line naming it; 2 = refused (no option, failed
+                                                   command, a critical worker on a non-Claude account)
+  worker_launch.py account-need < brief            prints `uncritical` for a brief line
+                                                   `Account: uncritical`, else `critical`
   worker_launch.py tree --repo <dir> --name <n> [--branch <b>] [--auto | --main-checkout]
                                                    creates the worker's own worktree beside the
                                                    main checkout (`add_tree`) and prints its path;
@@ -841,18 +850,138 @@ def check_all_skills(repo: Path) -> list[str]:
     return lines
 
 
+# ---------------------------------------------------------------- accounts
+# `.weside/config.json` `agents.accounts_command`: the project's own tool chooses the account a
+# worker runs on. The plugin runs it as `<cmd> --need critical|uncritical [--account <name>]`
+# (no shell, cwd = the repo) and reads one JSON object from stdout:
+# `{name, kind, env, token_command?, quota?}`. The policy (`off|backup|uncritical|free`) lives in
+# that tool, never here; the plugin only refuses what breaks its own rule below.
+ACCOUNTS_KEY = "agents.accounts_command"
+ACCOUNT_NEEDS = ("critical", "uncritical")
+ACCOUNT_AUTO = "auto"
+CLAUDE_KIND = "claude"
+ACCOUNTS_TIMEOUT_S = 30
+ACCOUNT_LINE_RE = re.compile(r"^\s*Account:\s*uncritical\b", re.MULTILINE | re.IGNORECASE)
+# a settings file is no place for a credential: a secret reaches the worker only through
+# `token_command`, which becomes `apiKeyHelper` and runs inside the worker
+SECRET_NAME_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", re.IGNORECASE)
+
+
+def brief_account_need(brief: str) -> str:
+    """`uncritical` when the brief has a line `Account: uncritical`, else `critical`: a worker
+    is critical unless its brief says otherwise."""
+    return "uncritical" if ACCOUNT_LINE_RE.search(brief) else "critical"
+
+
+def choose_account(repo: Path, account: str, need: str) -> dict:
+    """The account the project's `agents.accounts_command` returns for `need` (`auto`) or by
+    `account` name; refuses (exit 2) without the option, on a failed command or a malformed
+    answer, and when a critical worker would land on a non-Claude account."""
+    if need not in ACCOUNT_NEEDS:
+        raise LaunchError(f"--need {need!r}: one of {', '.join(ACCOUNT_NEEDS)}", 2)
+    agents = _config(repo).get("agents")
+    command = agents.get("accounts_command") if isinstance(agents, dict) else None
+    if not command or not isinstance(command, str):
+        raise LaunchError(
+            f"--account {account}: {ACCOUNTS_KEY} is not set in .weside/config.json; "
+            "start without --account",
+            2,
+        )
+    argv = [*shlex.split(command), "--need", need]
+    if account != ACCOUNT_AUTO:
+        argv += ["--account", account]
+    try:
+        out = subprocess.run(
+            argv,
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=ACCOUNTS_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise LaunchError(f"{ACCOUNTS_KEY} failed to run ({type(exc).__name__})", 2) from exc
+    if out.returncode != 0:
+        # its stderr is not echoed: a tool that handles credentials may print one there
+        raise LaunchError(
+            f"{ACCOUNTS_KEY} exited {out.returncode} for --need {need}; no account", 2
+        )
+    try:
+        chosen = json.loads(out.stdout)
+    except json.JSONDecodeError as exc:
+        raise LaunchError(f"{ACCOUNTS_KEY} printed no JSON object", 2) from exc
+    return _checked_account(chosen, account, need)
+
+
+def _checked_account(chosen: object, account: str, need: str) -> dict:
+    if not isinstance(chosen, dict):
+        raise LaunchError(f"{ACCOUNTS_KEY} printed no JSON object", 2)
+    name, kind, env = chosen.get("name"), chosen.get("kind"), chosen.get("env", {})
+    helper = chosen.get("token_command")
+    if not isinstance(name, str) or not name or not isinstance(kind, str) or not kind:
+        raise LaunchError(f"{ACCOUNTS_KEY}: the answer needs a `name` and a `kind`", 2)
+    if account not in (ACCOUNT_AUTO, name):
+        raise LaunchError(f"{ACCOUNTS_KEY} answered {name} for --account {account}", 2)
+    if not isinstance(env, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in env.items()
+    ):
+        raise LaunchError(f"{ACCOUNTS_KEY}: `env` of {name} is no object of strings", 2)
+    secret = sorted(k for k in env if SECRET_NAME_RE.search(k))
+    if secret:
+        raise LaunchError(
+            f"{ACCOUNTS_KEY}: `env` of {name} names {', '.join(secret)}; a credential goes "
+            "through `token_command`, never into the settings file",
+            2,
+        )
+    if helper is not None and (not isinstance(helper, str) or not helper.strip()):
+        raise LaunchError(f"{ACCOUNTS_KEY}: `token_command` of {name} is no command", 2)
+    # The owner's decision: work that matters runs on Claude. Another LLM (or a raw API key
+    # outside the Claude login) may only take a worker its brief marks uncritical.
+    if need == "critical" and kind != CLAUDE_KIND:
+        raise LaunchError(
+            f"{ACCOUNTS_KEY} chose {name} (kind {kind}) for a critical worker; a critical "
+            f"worker runs only on a {CLAUDE_KIND} account (mark the brief `Account: uncritical` "
+            "or name a claude account)",
+            2,
+        )
+    doc = {"name": name, "kind": kind, "env": dict(env), "need": need}
+    if helper:
+        doc["token_command"] = helper
+    if "quota" in chosen:
+        doc["quota"] = chosen["quota"]
+    return doc
+
+
+def apply_account(doc: dict, chosen: dict) -> dict:
+    """The chosen account in a worker's settings: its `env` under the worker's own variables
+    (those win), its `token_command` as `apiKeyHelper`."""
+    doc["env"] = {**chosen.get("env", {}), **doc.get("env", {})}
+    if chosen.get("token_command"):
+        doc["apiKeyHelper"] = chosen["token_command"]
+    return doc
+
+
+def account_line(chosen: dict) -> str:
+    """One line naming the account, never a value of its `env` nor its helper's output."""
+    quota = f", quota {json.dumps(chosen['quota'])}" if "quota" in chosen else ""
+    return f"account {chosen['name']} ({chosen['kind']}, {chosen['need']}{quota})"
+
+
 def write_settings(
     repo: Path,
     key: str,
     out: Path,
     session_start: str | None = None,
     name: str | None = None,
+    account: dict | None = None,
 ) -> dict:
-    """The worker's `--settings` file (`worker_rights.settings`), with the timer's hook and the
-    lean context of `workers.context` (`apply_context`)."""
+    """The worker's `--settings` file (`worker_rights.settings`), with the timer's hook, the
+    lean context of `workers.context` (`apply_context`) and the chosen account (`apply_account`)."""
     import worker_rights  # noqa: PLC0415
 
     doc = apply_context(worker_rights.settings(repo, key), repo, name, out.parent)
+    if account:
+        apply_account(doc, account)
     if session_start:
         doc["hooks"] = {
             "SessionStart": [{"hooks": [{"type": "command", "command": session_start}]}]
@@ -1134,12 +1263,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", type=Path, default=Path.cwd())
     p.add_argument("--all", action="store_true")
     p.add_argument("--prefix", default="worker_launch")
-    p = sub.add_parser("settings")
-    p.add_argument("--repo", type=Path, required=True)
-    p.add_argument("--key", required=True)
-    p.add_argument("--out", type=Path, required=True)
-    p.add_argument("--session-start")
-    p.add_argument("--name")
+    _settings_parsers(sub)
     p = sub.add_parser("tree")
     p.add_argument("--repo", type=Path, default=Path.cwd())
     p.add_argument("--name", required=True)
@@ -1166,6 +1290,44 @@ def _parser() -> argparse.ArgumentParser:
     p = sub.add_parser("checkpoint")
     p.add_argument("--name", required=True)
     return parser
+
+
+def _settings_parsers(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser("settings")
+    p.add_argument("--repo", type=Path, required=True)
+    p.add_argument("--key", required=True)
+    p.add_argument("--out", type=Path, required=True)
+    p.add_argument("--session-start")
+    p.add_argument("--name")
+    p.add_argument("--account-file", type=Path)
+    p = sub.add_parser("account")
+    p.add_argument("--repo", type=Path, default=Path.cwd())
+    p.add_argument("--account", required=True)
+    p.add_argument("--need", default="critical")
+    p.add_argument("--out", type=Path, required=True)
+    sub.add_parser("account-need")
+
+
+def _settings_verbs(args: argparse.Namespace) -> None:
+    """`settings` (with the chosen account of `--account-file`), `account` and `account-need`."""
+    if args.cmd == "account-need":
+        print(brief_account_need(sys.stdin.read()))
+    elif args.cmd == "account":
+        chosen = choose_account(args.repo.resolve(), args.account, args.need)
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps(chosen, indent=2) + "\n")
+        print(account_line(chosen))
+    else:
+        chosen = None
+        if args.account_file:
+            try:
+                chosen = json.loads(args.account_file.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise LaunchError(f"--account-file: {exc}", 2) from exc
+        write_settings(
+            args.repo.resolve(), args.key, args.out, args.session_start, args.name, chosen
+        )
+        print(args.out)
 
 
 def same_key_hint(name: str, key: str, prefix: str) -> None:
@@ -1259,9 +1421,8 @@ def main(argv: list[str] | None = None) -> int:
             print(backend(args.repo))
         elif args.cmd == "pr-owner":
             print(pr_owner(args.repo))
-        elif args.cmd == "settings":
-            write_settings(args.repo.resolve(), args.key, args.out, args.session_start, args.name)
-            print(args.out)
+        elif args.cmd in ("settings", "account", "account-need"):
+            _settings_verbs(args)
         elif args.cmd in ("tree", "marker"):
             code = _tree_verbs(args)
         elif args.cmd == "launch":
