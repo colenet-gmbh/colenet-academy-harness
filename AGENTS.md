@@ -60,7 +60,8 @@ we/                               plugin root
                                   wake_poller.py, gh_anchor.sh
     watch                         watch-pr-checks.sh (CI to the merge), watch-pr-conflicts.sh, watch-worker.sh
     flow                          flow_log.py (the flow log's one owner), sampler_age.py, flow_report.py (the
-                                  loop's numbers from gh and the board logs), context_load.py (what a cold
+                                  loop's numbers from gh and the board logs), flow_intervals.py (who works and who
+                                  waits on whom: interval rows, the flow page and the efficiency section), context_load.py (what a cold
                                   start loads per role)
     PR and plan                   pr-body-receipt.py, plan_push.py (plans land by push), arm_pr.sh (arms
                                   auto-merge, never merges), required_checks.sh (a branch's required checks,
