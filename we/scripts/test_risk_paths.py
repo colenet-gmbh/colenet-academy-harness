@@ -113,6 +113,35 @@ def test_emptied_rules_and_a_hook_change_still_classify_by_mains_rules(repo: Pat
     )
 
 
+@pytest.mark.parametrize("staged", [False, True])
+def test_an_uncommitted_change_under_a_risk_path_refuses(repo: Path, staged: bool) -> None:
+    """Before the commit the classifier printed `T0` for a diff that was one-way once committed:
+    it reads committed history only, so a dirty risk path refuses instead of answering."""
+    rel = BRAKE[1]
+    write(repo, rel, "# changed, not committed\n")
+    if staged:
+        git(repo, "add", rel)
+    out = classify(repo)
+    assert out.returncode == 3, out.stdout
+    assert out.stdout.splitlines()[0] == f"T? uncommitted changes under {rel}: commit first"
+
+
+def test_an_untracked_file_under_a_risk_path_refuses(repo: Path) -> None:
+    write(repo, "we/process/new.md", "# new\n")
+    out = classify(repo)
+    assert out.returncode == 3, out.stdout
+    assert out.stdout.splitlines()[0] == (
+        "T? uncommitted changes under we/process/new.md: commit first"
+    )
+
+
+def test_an_uncommitted_change_off_the_risk_paths_still_classifies(repo: Path) -> None:
+    write(repo, "README.md", "dirty\n")
+    out = classify(repo)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.splitlines() == ["T0", "review: standard"]
+
+
 def test_a_rename_away_from_a_brake_path_counts(repo: Path) -> None:
     git(repo, "mv", "we/hooks/verification_gate.py", "we/hooks/gate_old.py")
     commit(repo, "rename")

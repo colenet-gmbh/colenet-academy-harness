@@ -40,6 +40,10 @@ Output (exit 0):
   line 2   `review: high` for a one-way class or a card section hit, else `review: standard`
   then     one `<file>\t<class>: path <glob>` (or `json <file> <key>`) line per hit
 
+Exit 3 with line 1 `T? uncommitted changes under <path>: commit first` when a file of the working
+tree or the index (untracked included) differs from HEAD under a rule: the diff above reads
+committed history only, and before the commit it printed `T0` for a change that was one-way.
+
 Exit 2 on any failure (missing `origin/main`, missing or broken rules, a git error): a caller
 treats it as "class not computed" and fails closed. Pinned by `scripts/test_risk_paths.py`.
 """
@@ -47,6 +51,7 @@ treats it as "class not computed" and fails closed. Pinned by `scripts/test_risk
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -69,6 +74,10 @@ SECTIONS = (*ONE_WAY, *HIGH, "t2")
 
 class RiskError(Exception):
     """A failure that must exit 2."""
+
+
+class UncommittedError(Exception):
+    """A risk path with uncommitted changes: the class of the diff is not known yet (exit 3)."""
 
 
 def _git(*args: str) -> str:
@@ -217,6 +226,12 @@ def run(argv: list[str]) -> list[str]:
     except RiskError as exc:
         raise RiskError(f"base {base} is not an ancestor of {RULES_FROM}") from exc
     rules = parse_rules(_git("show", f"{RULES_FROM}:{RULES_FILE}"))
+    # A tree without an index is the runner's no-checkout tree of a head: nothing uncommitted.
+    if os.path.exists(_git("rev-parse", "--git-path", "index").strip()):
+        dirty = _git("diff", "--name-only", "--no-renames", "HEAD").splitlines()
+        dirty += _git("ls-files", "--others", "--exclude-standard").splitlines()
+        for line in classify(sorted({d for d in dirty if d.strip()}), rules)[2:]:
+            raise UncommittedError(line.split("\t", 1)[0])
     diff = _git("diff", "--name-only", "--no-renames", f"{base}...HEAD")
     return classify(
         [line for line in diff.splitlines() if line.strip()], rules, _json_value_changed(base)
@@ -229,6 +244,9 @@ def main(argv: list[str] | None = None) -> int:
     except RiskError as exc:
         print(f"risk_paths: {exc}", file=sys.stderr)
         return 2
+    except UncommittedError as exc:
+        print(f"T? uncommitted changes under {exc}: commit first")
+        return 3
     print("\n".join(lines))
     return 0
 
