@@ -306,6 +306,11 @@ DELIVERED_KINDS = KINDS  # the answer kinds the deliverer carries; `read` is not
 PRUNE_AFTER_H = 24
 # board-questions.jsonl outcomes that take a question off the board for good
 GONE = ("withdrawn", "superseded")
+# ... and those that take it off as a side effect (merged PR, `ask --replace`, pruning)
+OFF_BOARD = ("closed", "replaced", "pruned")
+# Every outcome that closes a posted question (`question_status`, flow_intervals.py). `returned`,
+# `duplicate`, `repeat` and `reader-error` close none: they log a refused ask and carry no new id.
+QUESTION_CLOSED = GONE + OFF_BOARD
 # A `returned` item is the asker's, who has it as its line's note: it leaves `news` on the next write.
 RETURNED_KIND = "returned"
 # The board's `log` (docs/board.md § News): what is kept for the record, not for the owner to read.
@@ -1300,7 +1305,7 @@ def question_status(state, qid, board=None, logs=None):
         return None, None, [], []
     closing = [a for a in answers if a.get("answer") in CLOSING]
     gone = [q for q in lines if q.get("outcome") in GONE]
-    off = [q for q in lines if q.get("outcome") in ("closed", "replaced", "pruned")]
+    off = [q for q in lines if q.get("outcome") in OFF_BOARD]
     if closing:
         status = f"answered: {closing[0]['answer']}"
     elif gone:

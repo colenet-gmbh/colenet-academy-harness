@@ -6,13 +6,16 @@ from __future__ import annotations
 import json
 import re
 import sys
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import board  # noqa: E402
 import flow_intervals as fi  # noqa: E402
 import flow_report as fr  # noqa: E402
 
@@ -697,6 +700,25 @@ def test_page_self_contained_and_escaped(tmp_path, monkeypatch):
 def test_moved_helpers_have_one_home():
     for name in ("locate_board", "parse_ts", "parse_since", "read_jsonl", "question_waits"):
         assert getattr(fr, name) is getattr(fi, name), name
+
+
+def test_question_wait_ends_at_the_boards_closing_outcomes():
+    """A posted question's wait ends at the first line board.py counts as closing; a refused ask
+    (`returned`, `duplicate`) logs no id and leaves the wait to the window end."""
+    assert board.QUESTION_CLOSED == board.GONE + board.OFF_BOARD
+    until = at(1, 12, 0)
+    for outcome in board.QUESTION_CLOSED:
+        questions = [
+            {"id": "Q1", "ts": zt(at(1, 9, 0)), "outcome": "posted", "session": "m-1"},
+            {"ts": zt(at(1, 9, 30)), "outcome": "returned", "session": "m-1"},
+            {"id": "Q1", "ts": zt(at(1, 10, 0)), "outcome": outcome},
+        ]
+        out: dict = defaultdict(list)
+        fi._question_rows(SimpleNamespace(until=until), questions, [], out)
+        assert [(r[0], r[1]) for r in out["m-1"]] == [(at(1, 9, 0), at(1, 10, 0))], outcome
+    out = defaultdict(list)
+    fi._question_rows(SimpleNamespace(until=until), questions[:2], [], out)
+    assert [(r[0], r[1]) for r in out["m-1"]] == [(at(1, 9, 0), until)]
 
 
 def test_ended_worker_without_marker_and_span_in_the_window(tmp_path, monkeypatch):

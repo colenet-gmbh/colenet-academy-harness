@@ -38,7 +38,8 @@ Sources, per session lane (``who`` = the sampler's ``name``):
   with ``waiting_on`` a ``waiting:<waiting_on>``, without it ``blocked`` on the event's ``starter``.
 - ``<board stem>-questions.jsonl`` ``posted`` lines joined with ``-answers.jsonl``
   (``question_waits``): the asker waits on ``human`` from the post to the first answer that is not
-  ``read``; without one, to the question's first closing line (``CLOSING``), else the window end.
+  ``read``; without one, to the question's first closing line (``board.QUESTION_CLOSED``), else
+  the window end.
 - worker markers ``<name>.json``: the lane is a worker, its ``starter`` and ``started_at``
   (optional: without it the worker starts at its first probe); a lane without a sampled role that
   starts workers is a master. A marker goes when its worker ends, so an ended worker is known by
@@ -82,6 +83,7 @@ from typing import Any
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
+import board as board_mod  # noqa: E402  (owns which outcomes close a question)
 import crew as crew_mod  # noqa: E402
 import flow_log  # noqa: E402
 import worker_supervisor  # noqa: E402
@@ -91,7 +93,6 @@ REQUIRED = ("id", "start", "end", "kind", "who", "source")
 RESERVED = ("waiting:ci", "waiting:lock")
 OVERLAY = "holding:"
 NOT_WAITING = {"working", "no-data"}
-CLOSING = {"replaced", "withdrawn", "returned", "pruned", "closed", "superseded", "duplicate"}
 FIXED_SENTENCE = "Not counted: waiting that only transcripts show; this page has no such source."
 CI_LINE = "CI wait: no source yet"
 
@@ -478,7 +479,8 @@ def _question_rows(src, questions, answers, out) -> None:
     closed: dict = {}
     for q in questions:
         ts = parse_ts(q.get("ts"))
-        if ts and q.get("outcome") in CLOSING and isinstance(q.get("id"), str):
+        shuts = q.get("outcome") in board_mod.QUESTION_CLOSED
+        if ts and shuts and isinstance(q.get("id"), str):
             closed[q["id"]] = min(closed.get(q["id"], ts), ts)
     for ts, q, answered in question_waits(questions, answers):
         if not isinstance(q.get("session"), str):
