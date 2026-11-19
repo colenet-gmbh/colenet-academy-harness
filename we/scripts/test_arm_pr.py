@@ -597,14 +597,17 @@ def test_the_arm_runs_the_crews_risk_command(tmp_path, extra, classifier, code, 
     assert arm_calls(calls) == []
 
 
-def test_a_crew_without_any_risk_rules_is_refused(tmp_path):
-    sha = command_crew(tmp_path, "echo T0\n", crew_risk={})
+def test_a_base_without_any_risk_rules_is_not_classified(tmp_path):
+    """No `.weside/risk-paths` and no `risk.command` on the base: T0, as before the crew's command
+    was read (a repo whose default branch is not main has no origin/main either)."""
+    command_crew(tmp_path, "echo T0\n", crew_risk={})
     _git(tmp_path, "rm", "-q", ".weside/risk-paths")
     _git(tmp_path, "commit", "-q", "-m", "no rules")
     _git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
     sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True, check=True
     ).stdout.strip()
-    got, out, calls = run(tmp_path, [{"head": sha, "checks": GREEN}], ["ok"], extra=("--check",))
-    assert got == 6 and out[0].startswith("refused: one-way not classified (this repo has a crew")
-    assert arm_calls(calls) == []
+    got, out, _calls = run(
+        tmp_path, [{"head": sha, "checks": PENDING}], ["ok"], extra=("--check",)
+    )
+    assert (got, out) == (8, [f"pending: Claude Review on {sha} — not ready"])

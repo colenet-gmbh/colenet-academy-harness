@@ -13,8 +13,9 @@ the temp dir go whatever happens.
 `risk_runner.py here <base>` runs the same classifier in the current checkout (its uncommitted
 check included), for `arm_pr.sh`: stdout is the classifier's output and exit 0 when line 1 matches
 `CLASS_LINE`; otherwise one line `<classifier> exit <rc>: <why>` or `<classifier> line 1: <line>`
-(or the runner's reason) and exit 2. A repo without any rules prints `T0`. It fetches `RULES_FROM`
-best-effort and reads the rules from the ref it has.
+(or the runner's reason) and exit 2. A base without `.weside/risk-paths` and without a crew
+`risk.command` prints `T0`. It fetches `RULES_FROM` (and a crew's `risk.rules_from`) best-effort
+and reads the rules from the ref it has.
 
 `git(root, *args, timeout=...)` is the caller's git: stdout, or None on any failure. Python 3.9, stdlib only.
 """
@@ -213,12 +214,25 @@ def classifier_name(found: Found) -> str:
     return blob.split(":", 1)[1]
 
 
+def _has_rules(root: str, git: Git, ref: str) -> bool:
+    """`ref` (the PR's base) carries `.weside/risk-paths` or a crew `risk.command`."""
+    if git(root, "cat-file", "-e", f"{ref}:.weside/risk-paths") is not None:
+        return True
+    command = (crew_on(root, git, ref).get("risk") or {}).get("command")
+    return isinstance(command, str) and bool(command.strip())
+
+
 def here(
     root: str, base: str, git: Git = plain_git, timeout: float = CLASSIFY_TIMEOUT
 ) -> tuple[int, str]:
     """(0, the classifier's stdout) or (2, one line why): the crew's classifier on `base` in the
     checkout `root` itself, so a risk path with uncommitted changes is seen (`arm_pr.sh`)."""
+    if not _has_rules(root, git, base):
+        return 0, "T0"  # the PR's base sets no rules: nothing to classify, as without a crew
     fetch_rules(root, RULES_FROM, git)  # best-effort: offline, the ref at hand decides
+    rules_from = (crew_on(root, git).get("risk") or {}).get("rules_from")
+    if isinstance(rules_from, str) and rules_from != RULES_FROM:
+        fetch_rules(root, rules_from, git)
     found = rules(root, git, fetch=False)
     if found is None:
         return 0, "T0"
@@ -236,6 +250,11 @@ def here(
         shutil.rmtree(tmp, ignore_errors=True)
     if out is None:
         return 2, f"{name}: {why}"
+    return _judge(name, out)
+
+
+def _judge(name: str, out: subprocess.CompletedProcess) -> tuple[int, str]:
+    """(0, stdout) for a class on line 1 and exit 0; (2, one line why) otherwise."""
     line = (out.stdout.splitlines() or [""])[0].strip()
     if out.returncode != 0:
         last = line or (out.stderr.strip().splitlines() or ["no output"])[-1]
