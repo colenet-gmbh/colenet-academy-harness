@@ -25,7 +25,9 @@ Sources (read only; the script holds no credential):
   (``crew.resolve_board``; ``--board`` names another). Without a crew file and
   without ``--board`` the board rows print ``n/a``: the default board belongs to no repo.
 - The question log ``<board stem>-questions.jsonl`` joined with ``<stem>-answers.jsonl`` by ``id``
-  (``docs/board.md`` § Asking), and ``brakes.jsonl`` in the crew's state directory.
+  (``docs/board.md`` § Asking), and ``brakes.jsonl`` in the crew's state directory
+  (``worker_rights.brake_log`` owns its lines): ``Brakes per day`` by type, ``Brake outcomes`` per
+  type with its ``outcome`` lines' ``danger`` (``no`` is a false alarm) and the lines no one judged.
 - The required checks of the default branch, live from its rulesets and branch protection
   (``required_checks.sh``, the reader ``arm_pr.sh`` uses), and per head the runs of every check
   (all attempts of a check run, the last state of a status). ``Required checks: red heads``
@@ -996,8 +998,32 @@ def brake_rows(brakes: list, since: datetime, until: datetime, src: str) -> list
             p90(counts),
             value=text,
             source=f"{src}: lines by type",
-        )
+        ),
+        outcome_row(brakes, since, until, src),
     ]
+
+
+def outcome_row(brakes: list, since: datetime, until: datetime, src: str) -> dict:
+    """``Brake outcomes``: per brake type in the window, how many of its lines a later ``outcome``
+    line judged ``danger: yes`` (the danger was there) or ``no`` (a false alarm), and how many no
+    one judged. An outcome counts in the window of its own ``ts``; ``n`` is the judged count."""
+    in_window = [b for b in brakes if (t := parse_ts(b.get("ts"))) and since <= t <= until]
+    brakes_by = Counter(b.get("type") for b in in_window if b.get("type") != "outcome")
+    judged: dict = {}
+    for b in in_window:
+        if b.get("type") == "outcome" and b.get("danger") in ("yes", "no"):
+            judged.setdefault(b.get("kind"), Counter())[b["danger"]] += 1
+    parts = []
+    for kind in sorted(set(brakes_by) | set(judged), key=str):
+        c = judged.get(kind, Counter())
+        rest = max(0, brakes_by.get(kind, 0) - c["yes"] - c["no"])
+        parts.append(f"{kind}: {c['yes']} danger · {c['no']} false alarm · {rest} unjudged")
+    return row(
+        "Brake outcomes",
+        sum(sum(c.values()) for c in judged.values()),
+        value="; ".join(parts) or "no brake in the window",
+        source=f"{src}: outcome lines by kind",
+    )
 
 
 def ready_rows(root: Path | None, since: datetime, src_missing: str | None) -> list:
@@ -1328,7 +1354,8 @@ def log_rows(board: Path | None, state: Path | None, board_why, since, now) -> l
     if brakes is not None and brakes.is_file():
         rows += brake_rows(read_jsonl(brakes), since, now, "brakes.jsonl")
     else:
-        rows.append(na("Brakes per day", "brakes.jsonl not found" if state else "no crew file"))
+        why = "brakes.jsonl not found" if state else "no crew file"
+        rows += [na("Brakes per day", why), na("Brake outcomes", why)]
     return rows
 
 
