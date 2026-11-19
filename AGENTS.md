@@ -106,7 +106,8 @@ A full local test run goes through `scripts/full_test_run.py`: on a host shared 
 waits for the test slot (`$WESIDE_TESTS_LOCK`, default `/tmp/weside-tests.lock`) and ends with its
 peak process count and RSS; a single suite runs with plain `pytest <file>`. A worker on a shared
 host whose test slot is taken runs only the suites its change touches with plain `pytest` and leaves
-the full run to CI `Plugin Tests`: the slot is shared with other repos' suites, and waiting on it
+the full run to CI `Plugin Tests` (this repo's exception to the wait in `we/references/session-traps.md`
+§ One heavy gate run; a single suite is no heavy run): the slot is shared with other repos' suites, and waiting on it
 stalls the worker. The root `conftest.py`
 turns the run red when a test writes the live brake log; such a test takes the `own_state_dir` fixture.
 
