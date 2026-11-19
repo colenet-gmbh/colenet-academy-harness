@@ -1071,3 +1071,16 @@ def test_a_brief_naming_a_skill_whose_ticketing_plugin_is_off_refuses(tmp_path):
     assert proc.returncode == 2
     assert "/we:plan-story" in proc.stderr and "atlassian@claude-plugins-official" in proc.stderr
     assert not started(tmp_path)
+
+
+def test_a_crew_member_started_in_the_background_is_no_worker(tmp_path):
+    """`start.py launch` starts a member with `claude --bg`; its settings file sets WE_ROLE=master."""
+    rows = [{"id": "m1", "name": "Ada", "kind": "background", "pid": "-", "cwd": "-"}]
+    project, env = setup(tmp_path, rows)
+    state = tmp_path / "workers"
+    env["WE_WORKER_STATE_DIR"] = str(state)
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "Ada.settings.json").write_text(json.dumps({"env": {"WE_ROLE": "master"}}))
+    assert run(project, env, "is-worker", "m1").returncode == 1
+    (state / "Ada.settings.json").write_text(json.dumps({"env": {"WE_ROLE": "worker"}}))
+    assert run(project, env, "is-worker", "m1").returncode == 0

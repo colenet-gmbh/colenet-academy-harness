@@ -855,6 +855,15 @@ def test_several_humans_render_per_human(monkeypatch):
     assert "never answer it yourself" in card and "answer each ticket" not in card
 
 
+def test_an_owned_state_the_crew_does_not_map_renders_by_its_key():
+    """A human owning ``in_test`` in a crew that maps no In Test status (its default is null) is
+    named by the key, not a crash of the role hook."""
+    crew = all_bound()
+    crew["humans"]["quentin"]["owns_states"] = ["in_test", "done"]
+    crew["board"]["states"]["in_test"] = None
+    assert "owns in_test, Done;" in rp.humans_part(crew, "product")
+
+
 def test_a_human_who_decides_nothing_claims_no_decision(monkeypatch):
     crew = all_bound()
     crew["humans"]["marisol"]["decides"] = []

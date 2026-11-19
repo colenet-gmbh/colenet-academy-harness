@@ -182,8 +182,14 @@ print(next((a.get("name") or "" for a in json.load(sys.stdin) if a.get("sessionI
 }
 _is_worker() { # <kind> <pid> <cwd> [<name>]: a background session, a worktree whose launcher marker
   # names this session, or a process started as a worker (WE_ROLE=worker, readable on Linux); never a
-  # master or companion, not even one that sits in a worker's tree
-  [[ "$1" == background ]] && return 0
+  # master or companion, not even one that sits in a worker's tree. A background session whose settings
+  # file (<state dir>/<name>.settings.json) sets WE_ROLE=master is a crew member `start.py launch`
+  # started, no worker.
+  if [[ "$1" == background ]]; then
+    python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if (d.get("env") or {}).get("WE_ROLE")=="master" else 1)' \
+      "${WE_WORKER_STATE_DIR:-$HOME/.claude/we-state/workers}/${4:--}.settings.json" 2>/dev/null && return 1
+    return 0
+  fi
   local gd  # the marker as worker_launch.read_marker reads it: a JSON object whose name is <name>
   if [[ "$3" != - ]] && gd=$(git -C "$3" rev-parse --absolute-git-dir 2>/dev/null) &&
     python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if isinstance(d,dict) and d.get("name") and d.get("name")==sys.argv[2] else 1)' "$gd/we-worker.json" "${4:--}" 2>/dev/null; then

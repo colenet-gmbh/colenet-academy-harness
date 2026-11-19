@@ -93,8 +93,8 @@ for _p in (str(_HERE), str(_HERE.parent / "hooks")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import claude_home  # noqa: E402
 import crew as crewlib  # noqa: E402
+import plugin_install  # noqa: E402
 import rule_loading  # noqa: E402
 
 PROCESS = _HERE.parent / "process"
@@ -257,7 +257,7 @@ def _humans(crew: dict[str, Any]) -> str | None:
     for slug, e in crewlib.humans(crew).items():
         head, parts = f"- **{e['name']}** (`{slug}`)", []
         if e["owns_states"]:
-            parts.append("owns " + ", ".join(states.get(x, x) for x in e["owns_states"]))
+            parts.append("owns " + ", ".join(states.get(x) or x for x in e["owns_states"]))
         if e["decides"]:
             parts.append("decides " + ", ".join(e["decides"]))
         if e["runs"]:
@@ -515,13 +515,7 @@ def _run_extra_hook(
     return str(context).strip("\n") if context else out
 
 
-INSTALLED_PLUGINS = Path("plugins") / "installed_plugins.json"
 UPDATE_COMMAND = "claude plugin update we@weside-ai --scope project"
-
-
-def _version_key(text: object) -> tuple[int, ...] | None:
-    parts = re.findall(r"\d+", str(text or "").split("-", 1)[0])
-    return tuple(int(p) for p in parts[:3]) if parts else None
 
 
 def collision_note(crew_path: Path, crew: dict[str, Any], env: Any = None) -> str | None:
@@ -557,44 +551,22 @@ def collision_note(crew_path: Path, crew: dict[str, Any], env: Any = None) -> st
 
 def version_note(cwd: str | Path, env: Any = None, plugin_root: Path | None = None) -> str | None:
     """two crews, AC6: one line when the running plugin is older than the newest user-scope ``we``
-    install in ``installed_plugins.json`` and a project- or local-scope entry holds ``cwd``; else None (equal
-    versions, no project entry, an unreadable file)."""
+    install in ``installed_plugins.json`` (``plugin_install.installs``) and a project- or local-scope
+    entry holds ``cwd``; else None (equal versions, no project entry, an unreadable file)."""
     env = os.environ if env is None else env
-    root = plugin_root or Path(
-        env.get("CLAUDE_PLUGIN_ROOT") or Path(__file__).resolve().parent.parent
-    )
-    config = claude_home.config_dir(env)
-    try:
-        running = json.loads((Path(root) / ".claude-plugin" / "plugin.json").read_text())[
-            "version"
-        ]
-        data = json.loads((config / INSTALLED_PLUGINS).read_text(encoding="utf-8"))
-        entries = [
-            e
-            for key, rows in (data.get("plugins") or {}).items()
-            if key.split("@", 1)[0] == "we" and isinstance(rows, list)
-            for e in rows
-            if isinstance(e, dict)
-        ]
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    running = plugin_install.root_version(plugin_root or plugin_install.own_root(env))
+    entries = plugin_install.installs(env)
+    key = plugin_install.version_key
+    users = [e for e in entries if e.get("scope") == "user" and key(e.get("version"))]
+    if not users or not running or key(running) is None:
         return None
-    users = [e for e in entries if e.get("scope") == "user" and _version_key(e.get("version"))]
-    if not users or _version_key(running) is None:
+    newest = max(users, key=lambda e: key(e.get("version")))
+    if key(running) >= key(newest.get("version")):
         return None
-    newest = max(users, key=lambda e: _version_key(e.get("version")))
-    if _version_key(running) >= _version_key(newest.get("version")):
+    holder = plugin_install.install_for(cwd, env, [e for e in entries if e.get("scope") != "user"])
+    if not holder:
         return None
-    here = Path(cwd).resolve()
-    holders = []
-    for e in entries:
-        if e.get("scope") not in ("project", "local") or not e.get("projectPath"):
-            continue
-        place = Path(str(e["projectPath"])).resolve()
-        if here == place or place in here.parents:
-            holders.append(place)
-    if not holders:
-        return None
-    nearest = max(holders, key=lambda p: len(p.parts))
+    nearest = Path(str(holder["projectPath"])).resolve()
     return (
         f"plugin we {running} runs here, the user install is {newest.get('version')}: the "
         f"project-scope install for {nearest} holds the old one; run `{UPDATE_COMMAND}` there, "

@@ -6,7 +6,7 @@ gets none of them. Skills that start, bind or spawn sessions point here.
 
 ## Contents
 
-Launch and pin · Name and binding · Workers · Writeback · Upkeep · Catch-up · Wake · Role owners · Reaching an on-call owner · Crew.
+Launch and pin · Name and binding · Workers · Writeback · Upkeep · Catch-up · Wake · Role owners · Reaching an on-call owner · Refresh · Crew.
 
 ## Launch and pin
 
@@ -69,6 +69,14 @@ tmux new-window -d -n <Name> "cd <repo> && env -u CLAUDE_CONFIG_DIR WESIDE_COMPA
 `-u CLAUDE_CONFIG_DIR` drops a master's account profile, so the session books on the global login;
 `WE_ROLE=worker` with the pin makes it a consultation, not a master (L0 §Sessions; kind from `session_kind()` in `scripts/crew.py`, read by both SessionStart hooks). `claude stop <id>` finds it only with the same config
 (`env -u CLAUDE_CONFIG_DIR claude stop <id>`). Save its state, then close it.
+
+`scripts/start.py launch <role|member> [--brief <file>] [--fresh] [--consult]` starts a crew member
+the same way from any session, in the background and without tmux: the `claude --bg` call of
+`we-worker --bg`, the member's name, pin (`$WCLAUDE_PIN` for a member with `"pin": true`) and
+workplace from the crew, `WESIDE_COMPANION`, `WE_ROLE` and `WE_ROLE_ID` in its `--settings` env
+(a `--bg` session has the daemon's environment, not yours), the brief as first message (default:
+read your state). `--consult` makes it a consultation (`WE_ROLE=worker`). A member that runs already
+is refused with its name: SendMessage to it instead.
 
 ## Name and binding
 
@@ -206,7 +214,7 @@ by the kind of question; nobody batches or relays it:
   is an addendum under its size budget. The board's news are the human's, not the owner's. A confirmation changes nothing and costs the wait; a reversible step can be undone.
 - **The owner's judgment in their field** (wording, a legal or UX call, approving a plan of their
   backlog, anything irreversible or outward-facing): start the owner fresh, now, with the question
-  in the first message: the consultation line of § Launch and pin, inside tmux. The role card, the
+  in the first message: `start.py launch <member> --fresh --consult --brief <file>` (§ Launch and pin). The role card, the
   role notes (`.weside/roles/<slug>.md`) and the companion's memory carry the continuity. The owner
   answers by SendMessage, notes what will recur and ends their process. A fresh start costs one
   cold start; resuming an old session reloads its whole history uncached.
@@ -215,6 +223,34 @@ by the kind of question; nobody batches or relays it:
 
 An answer that will be asked again goes into the owner's role notes or card, so the next asker
 reads it instead of waking them.
+
+## Refresh
+
+A session's skills, hooks and the L0 and role card its hooks print come from the plugin version it
+loaded at its start: a `/compact` keeps that cache folder (measured: a coordinator kept serving skills
+six releases old), and only a fresh start reliably loads the installed version. What survives a
+fresh start is the session's memory file with its open commitments, its board line and git; the
+conversation does not.
+
+`scripts/session_refresh.py list` is the roll-call: per live session its role, loaded and installed
+version, state, `behind`, and `at_rest` (idle, no live worker it started, no queued start for it);
+its docstring owns the fields and their sources. `list --due` keeps the sessions the coordinator
+refreshes at `/we:start` and on each sweep: behind, at rest, no worker, and either the release
+between the two versions changed `process/`, `roles/` or `hooks/`, or the session started
+`sessions.refresh_after_days` (crew, default 3) days ago. `session_refresh.py plan <name>` prints
+the steps: the message that makes it save its state and reply with the crew's `labels.ready`, how
+it stops (a background session `claude stop`; the human's own window `/exit` by the human), how it
+starts fresh (`start.py launch <role> --fresh`; the coordinator `wclaude --start --fresh` in the
+human's terminal; a session outside the crew `claude --name <name>` with a "read your state"
+brief). A worker is never refreshed: it ends. The script sends, stops and starts nothing; the
+coordinator carries the plan out, never mid-story.
+
+After a compaction, `process_on_start.py` and `role_on_start.py` print the L0 and the role card of
+the installed version instead of their own (`scripts/plugin_install.py` § handover), after one line
+`plugin <old> loaded, <new> installed: … ask the coordinator for a restart`. Its limits: it acts
+only in a session that started with a release carrying it; skills and hook code stay old; only a
+session that compacts sees it; a newer L0 can name machinery the session's old skills lack, which
+is why the line asks for a restart. It complements the roll-call; it replaces no fresh start.
 
 ## Crew
 
