@@ -74,7 +74,6 @@ Per companion, read first, then fix, then measure again:
 - Titles are unique per circle. To split a block, create the parts under new titles and archive
   the original once all parts stand. Splitting saves nothing (everything autoloads); only cutting
   saves. Keep the sum at or under the size the user set.
-- Archiving hides a memory at once; the purge follows later.
 - A restricted circle loads only in its bound rooms and is invisible to search from elsewhere: what
   a companion needs in a direct chat belongs in the circle for all.
 

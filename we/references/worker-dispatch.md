@@ -41,7 +41,6 @@ worker cannot rely on reading this file: the Lead's brief carries every rule the
   schema, API and types merges into the integration branch, and the disjoint chunks start with
   `Base: git merge <int>`. Migrations, lockfiles, generated artifacts (`openapi.json`, typed
   clients) and gate baselines always serialize.
-- Timing: the plugin hook `hooks/subagent_timing.py` appends one line per `SubagentStart`/`SubagentStop` (`ts`, `event`, `agent_id`, `agent_type`, `cwd`) to `~/.claude/we-timing/<session_id>.jsonl`, the measurement for comparing orchestration approaches; the same file gets `InstructionsLoaded` and skill-run lines for `/we:retro` and `/we:instruction-audit`. A file older than 45 days is deleted (`scripts/state_prune.py`: the audit's 30-day span plus a margin).
 
 ### What `isolation: "worktree"` does (Claude Code 2.1.283)
 
@@ -51,7 +50,6 @@ worker cannot rely on reading this file: the Lead's brief carries every rule the
   branch the brief names before its first commit.
 - `isolation` and `cwd` are mutually exclusive. A worker for an existing tree (the integration
   worktree) gets `cwd=<path>` instead.
-- The result returns the worktree path and branch. A worktree without changes is removed.
 - All worktrees share one `.git`: a worker's local branch is visible to the Lead without a push.
 - The repo's `post-checkout` bootstrap may not have fired. The worker runs the bootstrap from
   `.weside/orchestrate.md` itself and checks it before the first gate.
@@ -376,10 +374,9 @@ it checks the marker, the sha against the PR's current head and the file's mtime
 worker's start, then posts the file unchanged with `gh pr comment <N> --body-file <file>`. The worker judged, the starter only passes the verdict on, so this does not go
 around `worker_rights_gate.py`; never start a second worker only to post (owner decision, 13.11.2026).
 
-The merge question on a one-way PR goes onto the board only once the card verdict for its head is
-in; until then the starter's board line reads `waiting: card` (`board.py set now=…`), because a PR
-merged before its card needed a follow-up PR. The card is input, not a gate (security owner,
-18.11.2026). Right after the post the starter:
+A one-way PR's merge question goes onto the board once the card verdict for its head is in, until then
+`waiting: card` (`board.py set now=…`): a PR merged before its card needed a follow-up PR. The card is
+input, not a gate (security owner, 18.11.2026). Right after the post the starter:
 
 - logs the verdict: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/worker_rights.py brake card --pr <N> --file <file>`
   (one `card` line in `brakes.jsonl` with `verdict` and `pr`);
@@ -428,9 +425,8 @@ arrives or the worker is stopped, `TaskStop` its watchdog by task id in the same
 An `exited:` line naming `auth` restarts the worker at once with the resume command it names (after
 `usage-limit`: at the reset), one line to the coordinator; a worker that died stays a row in
 `claude agents`, so only its living pid counts as alive. `we-worker status` lists window workers too.
-A commit becomes one status line to the human (phase done). A count you pass on (jobs done of N) is
-read from `gh run view <id> --json jobs` when you send it, not summed from workers' partial reports:
-those sums were wrong three times in one day. A stall gets evidence (`git log -3`,
+A commit becomes one status line to the human (phase done). A count you pass on (jobs done of N) comes
+from `gh run view <id> --json jobs` as you send it, not from summed worker reports (three wrong in a day). A stall gets evidence (`git log -3`,
 `git status`, the agent's state) before any word about it. Three runs with it had 0 idle nudges
 by the human (#4308, #4326, #4328); without it a worker sat idle 7 h 47 min (#4299).
 
