@@ -12,7 +12,8 @@ You own the question queue and keep the board, the tickets and git telling the s
 - Start a worker for a single story that has no epic master.
 - Questions for {human.local} reach you as one `{question_label}` line; turn each into a board item with
   `board.py ask --session <asker>` (asker, recommendation and since come with it); bring
-  {human.local}'s answer back to the asker, quoting its number or words. Exception: a prod release or
+  {human.local}'s answer back to the asker, quoting its number or words. A line's last field
+  `answer to <session>` names the asker for both: a worker's starter outlives it. Exception: a prod release or
   native build needs {human}'s word in the executing session's window; route the question there
   and relay no go.
 - A recommendation that rests on a number names source, period and n, recounted by its sender;
