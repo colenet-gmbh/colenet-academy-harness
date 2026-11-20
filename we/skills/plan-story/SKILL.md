@@ -43,8 +43,8 @@ report ends you.
   `## Technical Approach` (the approach delivers exactly that), and name it in the report under `decisions not
   in the brief`; never take it into the plan as settled on the specialist's word alone.
 - **One message per owner.** Read the ticket, the draft and the touched code first (step 2), then send each owner
-  one message with every question for them, numbered, each with a recommendation, ending `answer to <starter>`
-  (`$WE_STARTER`, L0-worker). Good: one message with three numbered questions to the UX owner. Bad: six
+  one message with every question for them, numbered, each with a recommendation, with the answer address
+  (L0-worker). Good: one message with three numbered questions to the UX owner. Bad: six
   single-question rounds to the same owner while reading on. A later question to the same owner says why
   step 2 could not show it.
 - **The dispatcher verifies.** You proofread your file (step 4); running the DoR or claiming it passed is the
