@@ -193,6 +193,8 @@ def hook(world, command, cwd=None, session="s-1", **env):
     [
         "gh pr ready",
         "gh pr ready 7",
+        "/plugin/scripts/pr_ready.sh 7 ready --sha 0123abc",
+        "bash pr_ready.sh 7 undo 'waits on the lens — ready when it passes'",
         "gh pr comment --body x",
         "gh pr comment 7 --body x",
         "gh pr comment -R acme/app 7 -b x",
@@ -223,6 +225,10 @@ def test_a_held_right_in_a_compound_command_only_passes(world):
         ("echo x | gh pr ready 8", "not this branch's PR"),
         ("cd .\ngh pr ready 8", "not this branch's PR"),
         ("gh pr ready && gh pr comment 8 --body x", "not this branch's PR"),
+        ("pr_ready.sh 8 ready", "not this branch's PR"),
+        ("bash pr_ready.sh -R acme/other 7 ready", "another repo"),
+        ("pr_ready.sh --sha 0123abc", "pr_ready.sh without a PR"),
+        ("cd . && pr_ready.sh 8 ready", "not this branch's PR"),
     ],
 )
 def test_a_right_inside_a_command_chain_is_judged_on_its_segment(world, command, why):
@@ -696,6 +702,7 @@ def test_settings_grant_exactly_the_repos_rights_and_deny_the_never_list(world):
     doc = wr.settings(world["repo"], KEY)
     assert doc["permissions"]["allow"] == [
         "Bash(gh pr ready*)",
+        "Bash(*pr_ready.sh *)",
         "Bash(gh pr comment*)",
         "Bash(a release staging*)",
     ]
