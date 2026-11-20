@@ -15,7 +15,7 @@
 #                                  stops a worker (a background session with `claude stop`, a window
 #                                  worker with SIGTERM to its pid) and waits until it is gone (30 s);
 #                                  then ends what it left running (watchers, dev servers: its process
-#                                  tree) and names each one; removes its settings file; prints the
+#                                  tree) and names each one; removes its settings and brief files; prints the
 #                                  full session id and the resume command, and keeps them in
 #                                  <state dir>/<name>.resume.json. A session that is no worker (no background,
 #                                  no launcher marker, no WE_ROLE=worker: a master, a companion) refuses
@@ -83,9 +83,13 @@
 # A flag before the claude args that neither we-worker nor `claude --help` knows refuses (a typo like
 # `--cwd` would otherwise reach claude as a prompt): run `we-worker <name> --tree <tree> …` instead.
 # A start refuses (exit 2, before any claude call) a name that does not start with the story key (crew
-# `naming.key`, `<key>-<chunk>`; `worker_launch.py check`). The brief is the last argument; one
-# starting with `-`, or none, is an empty brief; a last argument that is blank (`"$(cat <brief>)"` of an empty or unwritten
-# file) refuses (exit 2), nothing starts. A brief line `Needs: <plugin or MCP server>, …` naming one that
+# `naming.key`, `<key>-<chunk>`; `worker_launch.py check`). The brief is the last argument; a --bg
+# start without one (none, or a flag last) refuses (exit 2; a window start may be empty), so does a last argument that is blank (`"$(cat <brief>)"` of an empty or unwritten
+# file); a --resume needs none, its prompt is the brief when given. The brief also lands in
+# <state dir>/<name>.brief.md, which the worker's SessionStart hook names (`worker_launch.py
+# settings`): a SendMessage that reaches the new session before its start prompt pushes that prompt
+# out, the file keeps it. Every start appends one line to <state dir>/launched.jsonl
+# (`worker_launch.py marker` or `launched`). A brief line `Needs: <plugin or MCP server>, …` naming one that
 # `workers.context` turns off refuses (exit 2; `worker_launch.py needs`). Without the plugin's worker_launch.py no worker
 # starts. Every worker starts with `--settings <state dir>/<name>.settings.json` (`worker_launch.py
 # settings`: its rights in this repo, the never-list, WE_ROLE, WE_STORY_KEY and WE_STARTER) and WE_STORY_KEY=<key>.
@@ -324,7 +328,7 @@ for x in json.load(sys.stdin):
       kill -TERM "$cpid" 2>/dev/null && ended="${ended:+$ended, }$cpid $comm"
     done <<<"$left"
     if [[ -n "$gone" ]]; then
-      [[ "${aname:--}" == - ]] || rm -f "${WE_WORKER_STATE_DIR:-$HOME/.claude/we-state/workers}/$aname.settings.json"
+      [[ "${aname:--}" == - ]] || rm -f "${WE_WORKER_STATE_DIR:-$HOME/.claude/we-state/workers}/$aname".{settings.json,brief.md}
       echo "we-worker: $key ($id) stopped${ended:+; also ended: $ended}"
       if [[ "${sid:--}" != - && "${aname:--}" != - && -n "$sup" && -f "$sup" ]]; then
         targs=()
@@ -491,15 +495,27 @@ if [[ -z "$wl" || ! -f "$wl" ]]; then
   exit 2
 fi
 resuming=0
+resume_at=0 # the position of --resume/-r: its value is the session, never a brief
+i=0
 for a in "$@"; do
-  case $a in --resume | -r | --resume=* | --continue | -c) resuming=1 ;; esac
+  i=$((i + 1))
+  case $a in
+    --resume | -r) resuming=1; resume_at=$i ;;
+    --resume=* | --continue | -c) resuming=1 ;;
+  esac
 done
 brief=""
-[[ $# -gt 0 && "${!#}" != -* ]] && brief=${!#}
+[[ $# -gt 0 && "${!#}" != -* && ($resume_at -eq 0 || $# -gt $((resume_at + 1))) ]] && brief=${!#}
 # A last argument that is there but blank is a brief that failed to arrive (`"$(cat brief)"` of a file
 # a refused command never wrote): the worker would run without a task, so nothing starts.
 if [[ $resuming -eq 0 && $# -gt 0 && -z "${brief//[[:space:]]/}" && "${!#}" != -* ]]; then
   echo "we-worker: the brief is empty (the last argument holds no text); write the brief first, then start $name; no worker started" >&2
+  exit 2
+fi
+# No brief at all (no last argument, or a flag there) in the background: nobody hands a --bg or
+# queued worker its task later, so nothing starts. A window worker may start empty: a human types there.
+if [[ $resuming -eq 0 && $bg -eq 1 && -z "$brief" ]]; then
+  echo "we-worker: no brief: the last argument is the worker's brief (we-worker $name … \"\$(cat <brief>)\"); no worker started" >&2
   exit 2
 fi
 key=$(python3 "$wl" check --name "$name" --prefix we-worker) || exit 2
@@ -587,8 +603,13 @@ starter=$(_starter)
 mode="tmux"
 [[ $bg -eq 1 ]] && mode="bg"
 if [[ $mark -eq 1 ]]; then
-  python3 "$wl" marker --tree "$PWD" --name "$name" --key "$key" --role worker ${starter:+--starter "$starter"} --mode "$mode" ||
+  python3 "$wl" marker --tree "$PWD" --name "$name" --key "$key" --role worker ${starter:+--starter "$starter"} --mode "$mode" \
+    ${CLAUDE_CODE_SESSION_ID:+--starter-session "$CLAUDE_CODE_SESSION_ID"} ||
     { echo "we-worker: the marker of $name could not be written in $PWD; no worker started" >&2; exit 2; }
+else
+  # no marker in a tree that is not the worker's own; the starter log still records the start
+  python3 "$wl" launched --name "$name" --key "$key" ${starter:+--starter "$starter"} \
+    ${CLAUDE_CODE_SESSION_ID:+--starter-session "$CLAUDE_CODE_SESSION_ID"} || true
 fi
 
 extra=()

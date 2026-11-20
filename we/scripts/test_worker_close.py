@@ -168,7 +168,8 @@ class TestClose:
         assert not tree.exists()
         assert "feat/PROJ-12-export" not in git(world.top, "branch", "--list")
         assert "feat/PROJ-12-export" not in world.remote_branches()
-        assert list(world.workers.iterdir()) == []
+        # the starter log outlives the worker's files (worker_launch.record_launch)
+        assert [p.name for p in world.workers.iterdir()] in ([], ["launched.jsonl"])
         assert f"- 2026-11-18 — {KEY} merged (PR #7); none" in out
         assert out.splitlines()[-1] == f"close {KEY}: done"
         # idempotent: a second call moves nothing again and finds nothing to remove

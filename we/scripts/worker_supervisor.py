@@ -304,7 +304,12 @@ def _living(rows: list[dict], name: str) -> list[dict]:
 
 def _remove_files(state: Path, name: str) -> list[str]:
     gone = []
-    for path in (state / f"{name}.settings.json", state / f"{name}.json"):
+    # the brief file (`worker_launch.write_brief`) goes too; launched.jsonl stays
+    for path in (
+        state / f"{name}.settings.json",
+        state / f"{name}.json",
+        state / f"{name}.brief.md",
+    ):
         with contextlib.suppress(OSError):
             path.unlink()
             gone.append(path.name)

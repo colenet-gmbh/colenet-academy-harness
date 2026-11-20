@@ -932,3 +932,34 @@ def test_project_name_arrives_as_text(tmp_path, monkeypatch, capsys):
     with pytest.raises(SystemExit) as exc:
         run_cli(root, capsys, *window, "--project", "zeta/other", "--jsonl")
     assert exc.value.code == 2
+
+
+def test_launched_log_names_the_starter_of_an_ended_worker(tmp_path, monkeypatch):
+    """AC1 of the starter log: no marker, no `blocked` event; the launcher's line keeps the
+    starter, the lane's `session_id` feeds `backfill-starters`, and `starterless` names the rest."""
+
+    def sessions(t):
+        out = [s("m-1", "idle", role="master")]
+        if t <= at(1, 2, 0, 4):
+            out.append(s("gone-2", "busy" if t <= at(1, 1, 0, 4) else "idle", role="worker"))
+            out.append(s("lost-3", "busy", role="worker"))
+        return out
+
+    root, board, log_dir, mdir = make_state(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        first=at(1, 0, 0, 4),
+        last=at(1, 23, 55, 4),
+        sessions_at=sessions,
+        board_lines=(*DEFAULT_LINES, {"name": "lost-3", "session_id": "sid-lost-3"}),
+    )
+    jsonl(
+        mdir / "launched.jsonl",
+        [{"name": "gone-2", "key": None, "starter": "m-1", "starter_session": None, "ts": "x"}],
+    )
+    crew = json.loads((root / ".weside" / "crew.json").read_text())
+    built = fi.build(board, mdir, log_dir, "UTC", crew, H_SINCE, H_UNTIL)
+    assert built["lanes"]["gone-2"]["starter"] == "m-1"
+    assert built["lanes"]["gone-2"]["session_id"] == "sid-gone-2"
+    assert built["counts"]["launched"]["rows"] == 1
+    assert fi.starterless(built) == [("lost-3", "sid-lost-3")]
