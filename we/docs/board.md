@@ -370,7 +370,7 @@ Outcomes, each a row (readers fold the rows of one `id`, `answer_ts` and `role` 
 | both reached | `delivered: true` per recipient | `→ delivered to <asker> 16:08 UTC` |
 | the asker is unknown by that name, carried by two sessions, or stopped | asker `delivered: false` with the engine's reason; the routing prompt | `not delivered, with <orchestrator> (not reachable)`, `(name not unique)` or `(gone)` |
 | the asker's session holds the message (a `[Cross-session delivery notice]` naming it, usually another permission mode) | asker `delivered: false, reason: held`; the routing prompt | `not delivered, with <orchestrator> (held)` |
-| the orchestrator's prompt is never stored (a turn that started after it ended without it, or 30 s idle) | `reason: resubmitted`, the prompt once more; still none after the next turn: `delivered: false` and a toast there | `not delivered, with <orchestrator> (not stored after a resubmit)` |
+| the orchestrator's prompt is never stored (30 s idle after it; a turn that ends meanwhile is no miss, the prompt may be queued behind it) | `reason: resubmitted`, the prompt once more; still none after another 30 s idle: `delivered: false` and a toast there | `not delivered, with <orchestrator> (not stored after a resubmit)` |
 | the orchestrator's session is not running | a pane whose live column names it gone writes `delivered: false, reason: coordinator not running` for an answer a minute old with no row; the deliverer delivers it once it runs, its newer row replacing the marker | `not delivered, with <orchestrator> (not running)` |
 
 On start the deliverer reads the ledger first: a key with a verdict is never sent again, a key with
