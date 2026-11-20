@@ -802,6 +802,13 @@ class TestCrewGuard:
         assert go(crewless, "set", "state=build") == 0
         assert not (crewless / "crew.id").exists()
 
+    def test_a_crewless_session_may_name_a_stamped_board(self, crewless):
+        # Repro 20.11.: from a repo without a crew file, `--board <the crew's board> set` was
+        # refused like the bare call; the explicit file is the intent, the stamp stays.
+        (crewless / "crew.id").write_text("acme/first-crew\n")
+        assert go(crewless, "set", "state=build") == 0
+        assert (crewless / "crew.id").read_text() == "acme/first-crew\n"
+
     def test_a_relative_state_dir_moves_the_board(self, crewed, monkeypatch, capsys):
         monkeypatch.delenv("WE_STATE_DIR", raising=False)
         _crew_with(crewed, state_dir="../../second")
@@ -3163,6 +3170,24 @@ class TestBlocked:
         assert sorted(queue) == ["Q7", "Q8", "Q9"]
         assert queue["Q8"]["obsolete"] == "prompt resolved at 11:07"  # Berlin
         assert "obsolete" not in queue["Q9"] and "obsolete" not in queue["Q7"]
+
+    def test_clear_of_a_chat_wait_marks_its_info_question_obsolete(self, crewed, capsys):
+        # Q874, Q883, Q891, Q892 (20.11.): the detector asked "worker waits over 30 min on its
+        # starter" (cause info); the starter answered or the worker stopped, the wait was cleared,
+        # and the question stayed open until the owner answered a dead one.
+        agents(crewed, {**BLOCKED_ROW, "state": "idle", "waitingFor": None})
+        go(crewed, "blocked", WORKER, "--kind", "chat", "--waiting-on", "coordinator")
+        answer_with(crewed, CLEAR)
+        go(crewed, *ask_argv(**{"--session": WORKER, "--cause": "info"}))
+        go(crewed, *ask_argv(**{"--session": WORKER, "--cause": "access-click"}))
+        agents(crewed)  # the worker stopped
+        capsys.readouterr()
+        later = datetime(2026, 11, 3, 10, 40, tzinfo=timezone.utc)
+        assert go(crewed, "blocked", WORKER, "--clear", now=later) == 0
+        assert json.loads(capsys.readouterr().out)["obsolete"] == ["Q8"]
+        queue = {q["id"]: q for q in board_of(crewed)["owner_queue"]}
+        assert queue["Q8"]["obsolete"] == "prompt resolved at 11:40"
+        assert "obsolete" not in queue["Q9"]
 
     def test_the_obsolete_reason_speaks_the_crews_label(self, crewed):
         path = crewed / "work" / ".weside" / "crew.json"

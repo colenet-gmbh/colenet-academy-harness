@@ -262,6 +262,34 @@ export type LiveView = {
   error?: string
 }
 
+// One live session of `scripts/crew_view.py --json` (its docstring owns the fields), schema 1.
+export type CrewEntry = {
+  name: string
+  session_id: string
+  kind: string
+  role: string
+  state: string
+  doing: string | null
+  keys: string[]
+  waiting_on: string | null
+  blocked_kind: string | null
+  since: string | null
+  age_s: number | null
+  plugin: string
+  starter: string | null
+  group: string | null
+  waits: boolean
+}
+
+// The crew pane's view: the document crew_view.py printed, the board it read, when it was read.
+export type CrewView = {
+  board?: string
+  generatedAt?: string
+  sessions: CrewEntry[]
+  at: number
+  error?: string
+}
+
 declare module 'claude-code' {
   interface PluginState {
     we: {
@@ -276,6 +304,8 @@ declare module 'claude-code' {
       boardLogOpen: boolean
       boardWork: Shaped<BoardWorkView | null>
       boardWorkOpen: Shaped<string[]>
+      crewView: Shaped<CrewView | null>
+      crewOpen: boolean
     }
   }
 }
