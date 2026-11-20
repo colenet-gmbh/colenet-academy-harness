@@ -51,7 +51,8 @@
 # Start: every CLAUDE* variable of the calling session is dropped, CLAUDE_CONFIG_DIR above all: started
 # from a pinned master, the worker would otherwise bill the pinned account. WESIDE_COMPANION is dropped
 # too (a worker is never the companion of its starter), so is WE_ROLE_ID (nor its role), and
-# WE_ROLE=worker is set; WE_HUMAN stays (it works for the same human).
+# WE_ROLE=worker is set; WE_HUMAN stays (it works for the same human); WE_STARTER names the starting
+# session, the answer address of the worker's questions ("" when the starter has no name).
 #   default  interactive in a tmux window <name> (the caller's tmux session, else the attached one)
 #   --bg     a background session (`claude --bg`): listed in `claude agents`, steered with SendMessage
 #   --limit  the time limit handed to the timer (default 3h; 90m, 2h30m; a bare number is minutes)
@@ -87,7 +88,7 @@
 # file) refuses (exit 2), nothing starts. A brief line `Needs: <plugin or MCP server>, …` naming one that
 # `workers.context` turns off refuses (exit 2; `worker_launch.py needs`). Without the plugin's worker_launch.py no worker
 # starts. Every worker starts with `--settings <state dir>/<name>.settings.json` (`worker_launch.py
-# settings`: its rights in this repo, the never-list, WE_ROLE and WE_STORY_KEY) and WE_STORY_KEY=<key>.
+# settings`: its rights in this repo, the never-list, WE_ROLE, WE_STORY_KEY and WE_STARTER) and WE_STORY_KEY=<key>.
 # The crew (`.weside/crew.json`, scripts/crew.py) adds, when set:
 #   launch.allow_bypass true   --allow-dangerously-skip-permissions: the start mode stays
 #                              permissions.defaultMode, bypass is one Shift+Tab away; without a crew
@@ -619,7 +620,7 @@ fi
 # whether the ticketing plugin loads (`worker_launch.py ticketing_unneeded`), read from the worker's
 # own config dir (the global login, without CLAUDE_CONFIG_DIR).
 settings_file="${WE_WORKER_STATE_DIR:-$HOME/.claude/we-state/workers}/$name.settings.json"
-printf '%s' "$brief" | env -u CLAUDE_CONFIG_DIR python3 "$wl" settings --repo "$PWD" --key "$key" --name "$name" --out "$settings_file" --brief-stdin ${hook:+--session-start "$hook"} \
+printf '%s' "$brief" | env -u CLAUDE_CONFIG_DIR python3 "$wl" settings --repo "$PWD" --key "$key" --name "$name" --out "$settings_file" --brief-stdin ${hook:+--session-start "$hook"} ${starter:+--starter "$starter"} \
   ${account_file:+--account-file "$account_file"} >/dev/null ||
   { echo "we-worker: the settings of $name could not be written; no worker started" >&2; rm -f ${account_file:+"$account_file"}; exit 2; }
 [[ -z "$account_file" ]] || rm -f "$account_file"
@@ -636,7 +637,7 @@ fi
 
 for var in $(compgen -e | grep -E '^CLAUDE' || true); do unset "$var"; done
 unset WESIDE_COMPANION WE_ROLE_ID
-export WE_ROLE=worker WE_STORY_KEY="$key"
+export WE_ROLE=worker WE_STORY_KEY="$key" WE_STARTER="${starter:-}"
 
 if [[ $bg -eq 1 ]]; then
   exec claude --bg -n "$name" ${extra[@]+"${extra[@]}"} "$@"
@@ -656,5 +657,5 @@ fi
 args=$(printf ' %q' -n "$name" ${extra[@]+"${extra[@]}"} "$@")
 # tmux starts the window with the server's environment, not this shell's: clear it there.
 human=${WE_HUMAN:+ WE_HUMAN=$(printf '%q' "$WE_HUMAN")}
-tmux new-window -d ${target:+-t "$target"} -n "$name" "env -u CLAUDE_CONFIG_DIR -u WESIDE_COMPANION -u WE_ROLE_ID$human WE_ROLE=worker WE_STORY_KEY=$(printf '%q' "$key") claude$args"
+tmux new-window -d ${target:+-t "$target"} -n "$name" "env -u CLAUDE_CONFIG_DIR -u WESIDE_COMPANION -u WE_ROLE_ID$human WE_ROLE=worker WE_STORY_KEY=$(printf '%q' "$key") WE_STARTER=$(printf '%q' "${starter:-}") claude$args"
 echo "we-worker: $name starts in tmux window $name${target:+ of ${target%:}} (global login${timer:+; time limit $limit})"
