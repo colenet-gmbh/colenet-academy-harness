@@ -1229,13 +1229,24 @@ def _hook_brief(call, tmp_path):
     return path.read_text()
 
 
-@pytest.mark.parametrize("args", [("--bg",), ()])
-def test_a_start_without_a_brief_refuses_before_claude(tmp_path, args):
-    """A worker without a task idles until someone notices. Red arm: it started."""
+@pytest.mark.parametrize("args", [("--bg",), ("--bg", "--queue")])
+def test_a_background_start_without_a_brief_refuses_before_claude(tmp_path, args):
+    """In the background nobody hands the task in later: the worker would idle until someone
+    notices. Red arm: it started."""
     project, env = setup(tmp_path)
     proc = run(project, env, "AC-12-impl", *args)
     assert proc.returncode == 2 and "no brief" in proc.stderr, proc.stderr
     assert not started(tmp_path)
+    assert not (tmp_path / "home/.claude/we-state/workers/queue/AC-12-impl.json").exists()
+
+
+def test_a_window_start_without_a_brief_still_opens(tmp_path):
+    """A window worker may start empty: a human types its task there, as on main."""
+    project, env = setup(tmp_path)
+    proc = run(project, env, "AC-12-impl")
+    assert proc.returncode == 0, proc.stderr
+    (window,) = [c["tmux"] for c in calls(tmp_path) if c.get("tmux", [""])[0] == "new-window"]
+    assert "AC-12-impl" in window[-1]
 
 
 def test_a_queued_start_hands_its_brief_to_claude_and_to_the_start_hook(tmp_path, monkeypatch):
@@ -1285,6 +1296,20 @@ def test_a_resume_without_a_prompt_writes_no_brief(tmp_path):
     ]
     assert not any("your brief is the file" in c for c in hooks)
     assert not (tmp_path / "home/.claude/we-state/workers/AC-12-impl.brief.md").exists()
+
+
+def test_stop_removes_the_brief_file_with_the_settings(tmp_path):
+    """`we-worker stop` takes `<name>.brief.md` with the settings file."""
+    project, env = setup(
+        tmp_path, rows=[{"id": "bg1", "name": "AC-12-impl", "kind": "background", "pid": 999999}]
+    )
+    state = tmp_path / "home/.claude/we-state/workers"
+    state.mkdir(parents=True)
+    for suffix in ("settings.json", "brief.md"):
+        (state / f"AC-12-impl.{suffix}").write_text("x")
+    assert run(project, env, "stop", "AC-12-impl").returncode == 0
+    assert not (state / "AC-12-impl.brief.md").exists()
+    assert not (state / "AC-12-impl.settings.json").exists()
 
 
 def test_every_start_lands_in_the_starter_log(tmp_path):

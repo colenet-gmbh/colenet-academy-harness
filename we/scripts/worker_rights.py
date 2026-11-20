@@ -1006,6 +1006,25 @@ def _own_pr_refusal(
 BRAKE_LOG = "brakes.jsonl"
 
 
+def forbidden_write(out: Path, line: dict) -> bool:
+    """A test run's write into a live state directory or one below it (`WE_STATE_FORBIDDEN`,
+    `os.pathsep`-separated, set by the repo's `conftest.py`): the line goes to the file named by
+    `WE_STATE_LEAKS` instead and True says to write nothing. Shared by `brake_log` and
+    `worker_launch.record_launch`."""
+    here = os.path.realpath(str(out.parent))
+    for d in os.environ.get("WE_STATE_FORBIDDEN", "").split(os.pathsep):
+        if not d.strip():
+            continue
+        live = os.path.realpath(os.path.expanduser(d.strip()))
+        if here == live or here.startswith(live.rstrip(os.sep) + os.sep):
+            leaks = os.environ.get("WE_STATE_LEAKS", "").strip()
+            if leaks:
+                with open(leaks, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"path": str(out), **line}, ensure_ascii=False) + "\n")
+            return True
+    return False
+
+
 def brake_log(cwd: str | Path | None, record: dict) -> Path | None:
     """Append one JSON line to `<state dir>/brakes.jsonl` (`crew.state_dir`: `WE_STATE_DIR`, else
     the crew's `state_dir`, else `~/.claude/we-state`); best effort, None when nothing was written.
@@ -1034,16 +1053,7 @@ def brake_log(cwd: str | Path | None, record: dict) -> Path | None:
             path, crew = None, None
         out = crew_mod.state_dir(path, crew) / BRAKE_LOG
         line = {"ts": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), **record}
-        forbidden = {
-            os.path.realpath(os.path.expanduser(d))
-            for d in os.environ.get("WE_STATE_FORBIDDEN", "").split(os.pathsep)
-            if d.strip()
-        }
-        if os.path.realpath(str(out.parent)) in forbidden:
-            leaks = os.environ.get("WE_STATE_LEAKS", "").strip()
-            if leaks:
-                with open(leaks, "a", encoding="utf-8") as fh:
-                    fh.write(json.dumps({"path": str(out), **line}, ensure_ascii=False) + "\n")
+        if forbidden_write(out, line):
             return None
         out.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(out), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)

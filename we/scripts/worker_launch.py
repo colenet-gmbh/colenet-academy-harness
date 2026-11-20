@@ -755,28 +755,15 @@ def record_launch(
         "ts": _utc(),
         **extra,
     }
+    import worker_rights  # noqa: PLC0415
+
     path = (state or _state_dir()) / LAUNCHED
-    if _forbidden(path):
+    if worker_rights.forbidden_write(path, doc):
         return
     try:
         append_line(path, doc)
     except OSError as exc:
         print(f"worker_launch: {LAUNCHED} not written ({exc})", file=sys.stderr)
-
-
-def _forbidden(path: Path) -> bool:
-    """A test run's write into a live state directory (`WE_STATE_FORBIDDEN`, set by the repo's
-    `conftest.py`, as `worker_rights.brake_log`): its line goes to `WE_STATE_LEAKS` instead."""
-    here = os.path.realpath(str(path.parent))
-    for d in os.environ.get("WE_STATE_FORBIDDEN", "").split(os.pathsep):
-        live = os.path.realpath(d.strip()) if d.strip() else None
-        if live and (here == live or here.startswith(live + os.sep)):
-            leaks = os.environ.get("WE_STATE_LEAKS", "").strip()
-            if leaks:
-                with open(leaks, "a", encoding="utf-8") as fh:
-                    fh.write(json.dumps({"path": str(path)}) + "\n")
-            return True
-    return False
 
 
 def read_launched(state: Path) -> tuple[list[dict], int]:
@@ -787,12 +774,14 @@ def read_launched(state: Path) -> tuple[list[dict], int]:
     except FileNotFoundError:
         return [], 0
     for line in text.splitlines():
+        if not line.strip():
+            continue
         try:
             doc = json.loads(line)
         except ValueError:
             bad += 1
             continue
-        if isinstance(doc, dict) and isinstance(doc.get("name"), str):
+        if isinstance(doc, dict) and isinstance(doc.get("name"), str) and doc["name"]:
             rows.append(doc)
         else:
             bad += 1
