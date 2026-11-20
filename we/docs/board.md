@@ -820,7 +820,7 @@ names the question to its owner, `board.py ask --to <owner>`, instead of the mov
 refused, never decided by the local row; a `tickets` entry without `status` is refused as a form
 error. With an owner of `in_test`, Done comes only from In Test. A ticket that already stands at the
 target (a session moved it first), or past Selected when `select` comes late, gets its row and no
-transition (`ticket already <state>: no transition`); `select` then comments that the ticket stays.
+transition (`ticket already <state>: no transition`), and no owner is asked: the ticket leaves no state; `select` then comments that the ticket stays.
 `board.select_unlabel` names labels `select` removes in its carry (an owner's release label).
 
 | Verb | What it does | Refusal |

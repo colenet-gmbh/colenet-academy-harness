@@ -98,6 +98,21 @@ class TestSelect:
         ]
         assert transitions(moving)[-1]["to"] == "selected"
 
+    def test_a_late_select_writes_the_row_and_leaves_the_ticket(self, moving, monkeypatch):
+        """Red arm: a session pulled the story first; product's late `select` was refused by the
+        owner of In Progress although the ticket does not leave it."""
+        with_humans(moving)
+        committed(moving)
+        green_lenses(moving)
+        as_(monkeypatch, "bob", "Paula")  # runs product, owns no in_progress
+        adapter = ticket_adapter.FakeAdapter({KEY: "In Progress"})
+        assert act(moving, "select", KEY, adapter=adapter) == 0
+        assert all(c[0] != "move" for c in adapter.calls)
+        comment = [c for c in adapter.calls if c[0] == "comment"][-1][2]
+        assert comment.startswith("selected by product@bob")
+        assert comment.endswith("The ticket stays in_progress.")
+        assert transitions(moving)[-1]["to"] == "selected"
+
     def test_another_role_than_product_is_refused(self, moving, monkeypatch, capsys):
         with_humans(moving)
         committed(moving)
@@ -792,6 +807,24 @@ class TestDoneByHumans:
         assert act(moving, "move", KEY, "in_test", adapter=adapter) == 1
         assert "maps no in_test status" in capsys.readouterr().err
         assert all(c[0] != "move" for c in adapter.calls)
+
+    def test_in_test_on_a_ticket_already_in_test_writes_the_row_only(self, moving, monkeypatch):
+        """Red arm: "in_test needs the key to be in_review (it is in_test)"."""
+        shared(moving)
+        as_(monkeypatch, "bob", "Paula")
+        adapter = ticket_adapter.FakeAdapter({KEY: "In Test"})
+        assert act(moving, "move", KEY, "in_test", adapter=adapter) == 0
+        assert all(c[0] != "move" for c in adapter.calls)
+        assert transitions(moving)[-1]["to"] == "in_test"
+
+    def test_done_on_a_ticket_already_done_writes_the_row_only(self, moving, monkeypatch):
+        """Red arm: "last move is done, not in_test"."""
+        shared(moving)
+        as_(monkeypatch, "cleo", "Pia")
+        adapter = ticket_adapter.FakeAdapter({KEY: "Done"})
+        assert self.done(moving, "Done", adapter) == 0
+        assert all(c[0] != "move" for c in adapter.calls)
+        assert transitions(moving)[-1]["to"] == "done"
 
 
 class TestInboxReplyWithdraw:

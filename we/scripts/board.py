@@ -2983,8 +2983,9 @@ def _human_of(m):
 def rule_owner(m):
     """With several humans only a human who owns the state the story leaves (`owns_states`)
     moves it on; out of a running state (`crew.RUNNING_STATES`) the refusal names the question
-    to its owner instead."""
-    if not crew_mod.several_humans(m.crew) or m.source is None:
+    to its owner instead. A ticket that already stands at the target, or past Selected on a late
+    `select` (`ticket_already`), leaves no state, so no owner is asked."""
+    if not crew_mod.several_humans(m.crew) or m.source is None or m.extra.get("ticket_already"):
         return []
     owners = crew_mod.state_owners(m.crew, m.source)
     if not owners:
@@ -3221,6 +3222,8 @@ def rule_pulled(m):
 def rule_reviewed(m):
     if not crew_mod.maps_state(m.crew, "in_test"):
         return ["the crew maps no in_test status (crew.json board.states.in_test)"]
+    if m.extra.get("ticket_already"):
+        return []
     if m.source != "in_review":
         return [f"in_test needs the key to be in_review (it is {m.source or 'none'})"]
     return []
@@ -3344,7 +3347,9 @@ DONE_VIA_ACCEPT = (
 def rule_in_review(m):
     """Done comes from in_review, or from in_test; with an owner of in_test (several humans) only
     from in_test. `--already-fixed` (a story another merged PR already fixed) comes from any
-    state but done."""
+    state but done. A ticket already Done (`ticket_already`) gets its row."""
+    if m.extra.get("ticket_already"):
+        return []
     was = m.source or "none"
     if getattr(m.args, "already_fixed", None):
         return [f"{m.key} is done already"] if was == "done" else []
@@ -3782,6 +3787,9 @@ def move_done(
                 "--comment-file <the receipt comment> --input FILE`"
             )
     m.source = source
+    already = _ticket_already(crew, source, "done")
+    if already:
+        m.extra["ticket_already"] = source
     for _group, rule in ENTRY_RULES["done"]:
         lines = rule(m)
         if lines:
@@ -3801,7 +3809,10 @@ def move_done(
         "ticket": adapter.name,
     }
     state.record_transition(key, lambda _last: row)
-    ops = adapter.move(key, status) + adapter.comment(key, m.comment)
+    ops = [] if already else adapter.move(key, status)
+    if already:
+        print(f"ticket already {source}: no transition")
+    ops += adapter.comment(key, m.comment)
     sample = _sample(state, crew, key, now) if row["via"] == "receipt" else None
     return row, ops, sample
 
