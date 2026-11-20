@@ -379,9 +379,9 @@ async function checkAwaiting($: $) {
   delivery.awaiting = delivery.awaiting.filter(a => !missed.includes(a))
   const messages = await transcript($)
   for (const a of missed) {
-    const verdict = transcriptVerdict(a, messages)
+    const verdict = transcriptVerdict(a, messages, now)
     if (verdict === 'stored') await recordStored($, a)
-    else if (verdict === 'busy') delivery.awaiting.push({ ...a, submittedAt: now, seen: messages!.length })
+    else if (verdict === 'busy') delivery.awaiting.push({ ...a, submittedAt: now, seen: messages!.length, firstAt: a.firstAt ?? a.submittedAt })
     else await settleMissed($, a)
   }
 }

@@ -15,8 +15,16 @@ const REFRESH_MS = 30_000
 // A document older than two refreshes shows its age in warning colour: the pane does not pass off old data as now.
 const STALE_MS = 2 * REFRESH_MS
 
+// A read below the refresh interval: two runs never overlap.
+const READ_TIMEOUT_MS = 25_000
+
 const view = atom({ plugin: 'we', key: 'crewView' } as const, null, { shape: 'crew-view-1' })
 const isOpen = atom({ plugin: 'we', key: 'crewOpen' } as const, false)
+
+// The engine reports no closed pane, and a draw may not write state. A drawn pane redraws on every
+// read the refresh stores, so a read with no draw after it means the pane is closed: the refresh
+// pauses until the pane is drawn again.
+const crew = { isLoading: false, drawnAt: Number.NEGATIVE_INFINITY, loadedAt: Number.NEGATIVE_INFINITY }
 
 // `7800` → `2h10`, as crew_view.py age_text.
 export const ageText = (seconds: number | null) => {
@@ -25,7 +33,7 @@ export const ageText = (seconds: number | null) => {
   return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}`
 }
 
-// `samu · coordinator · Q-Triage WA-3104 · since 0h12 · waits: human · 9.14.0`
+// `samu · coordinator · Q-Triage PROJ-31 · since 0h12 · waits: human · 9.14.0`
 export const crewLine = (e: CrewEntry) =>
   [
     e.name,
@@ -40,10 +48,13 @@ export const crewLine = (e: CrewEntry) =>
 const isOrphan = (e: CrewEntry) => e.role === 'worker' && e.group !== e.starter
 
 async function loadCrew($: $, board?: string) {
+  if (crew.isLoading) return
+  crew.isLoading = true
   const at = await $.clock.now()
+  crew.loadedAt = at
   try {
     const argv = ['python3', '-I', `${$.plugin.root}/scripts/crew_view.py`, '--json', ...(board ? ['--board', board] : [])]
-    const run = await $.process.run(argv, { timeoutMs: 40_000 })
+    const run = await $.process.run(argv, { timeoutMs: READ_TIMEOUT_MS })
     const doc = JSON.parse(run.stdout || '{}') as { board?: string; generated_at?: string; sessions?: CrewEntry[]; error?: string }
     const next: CrewView = {
       ...(doc.board ? { board: doc.board } : {}),
@@ -56,6 +67,8 @@ async function loadCrew($: $, board?: string) {
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
     await update($, view, v => ({ ...(v ?? { sessions: [] }), at: v?.at ?? 0, error }))
+  } finally {
+    crew.isLoading = false
   }
 }
 
@@ -71,8 +84,9 @@ export async function openCrew($: $, board?: string): Promise<string> {
 // From the module's one session.start hook: the refresh while the pane is open.
 export async function startCrew($: $) {
   $.clock.every(REFRESH_MS, () => {
-    void read($, isOpen).then(open => {
-      if (open) void read($, view).then(v => loadCrew($, v?.board))
+    void read($, isOpen).then(async open => {
+      if (!open || crew.drawnAt < crew.loadedAt) return
+      await loadCrew($, (await read($, view))?.board)
     })
   })
 }
@@ -82,8 +96,9 @@ export const registerCrew = (on: On) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const v = await read($, view)
     const width = Math.max(30, e.props.bodyColumns ?? e.viewport?.columns ?? 80)
-    if (!v) return <Text dimColor>Reading the crew…</Text>
     const now = await $.clock.now()
+    crew.drawnAt = now
+    if (!v) return <Text dimColor>Reading the crew…</Text>
     const stale = now - v.at >= STALE_MS
     const stamp = v.generatedAt ? `as of ${v.generatedAt.slice(11, 16)} UTC` : 'not read yet'
     const waiting = v.sessions.filter(s => s.waits).length

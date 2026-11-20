@@ -99,15 +99,15 @@ LINES = [
     {
         "name": "samu",
         "session_id": "s-samu",
-        "now": "Q-Triage WA-3104",
+        "now": "Q-Triage PROJ-31",
         "waiting_on": "human",
         "since": minute(12),
         "updated_at": minute(3),
     },
-    {"name": "lead", "session_id": "s-lead", "topic": "epic WA-1", "updated_at": minute(90)},
+    {"name": "lead", "session_id": "s-lead", "topic": "epic PROJ-1", "updated_at": minute(90)},
     {
         "name": "w-old",
-        "keys": ["WA-2"],
+        "keys": ["PROJ-2"],
         "waiting_on": "master",
         "since": minute(40),
         "blocked": {"kind": "chat", "since": at(45)},
@@ -154,7 +154,7 @@ def test_waiting_first_oldest_first_workers_under_their_starter(board):
     ]
     samu = rows[0]
     assert (samu["doing"], samu["waiting_on"], samu["age_s"], samu["plugin"]) == (
-        "Q-Triage WA-3104",
+        "Q-Triage PROJ-31",
         "human",
         12 * 60,
         "9.14.0",
@@ -163,12 +163,12 @@ def test_waiting_first_oldest_first_workers_under_their_starter(board):
     assert (w_old["blocked_kind"], w_old["since"], w_old["doing"], w_old["starter"]) == (
         "chat",
         at(45),
-        "WA-2",
+        "PROJ-2",
         "lead",
     )
     assert (
         crew_view.text_line(samu)
-        == "samu · coordinator · Q-Triage WA-3104 · since 0h12 · waits: human · 9.14.0"
+        == "samu · coordinator · Q-Triage PROJ-31 · since 0h12 · waits: human · 9.14.0"
     )
 
 

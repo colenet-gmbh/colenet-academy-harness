@@ -218,7 +218,7 @@ def age_text(seconds: int | None) -> str:
 
 
 def text_line(e: dict) -> str:
-    """`samu · coordinator · Q-Triage WA-3104 · seit 0h12 · wartet: human · 9.14.0`, in English."""
+    """`samu · coordinator · Q-Triage PROJ-31 · since 0h12 · waits: human · 9.14.0`."""
     parts = [e["name"], e["role"], e["doing"] or "-", f"since {age_text(e['age_s'])}"]
     if e["waits"]:
         why = e["waiting_on"] or "?"

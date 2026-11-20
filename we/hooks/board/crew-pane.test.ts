@@ -16,9 +16,9 @@ const DOC = JSON.stringify({
   generated_at: '2026-11-20T21:10:00Z',
   board: '/home/me/.claude/we-state/board.json',
   sessions: [
-    entry('samu', { role: 'coordinator', doing: 'Q-Triage WA-3104', waiting_on: 'human', waits: true, age_s: 720 }),
-    entry('lead', { doing: 'epic WA-1', age_s: 7800 }),
-    entry('w-old', { role: 'worker', kind: 'background', doing: 'WA-2', waiting_on: 'master', blocked_kind: 'chat', waits: true, starter: 'lead', group: 'lead' }),
+    entry('samu', { role: 'coordinator', doing: 'Q-Triage PROJ-31', waiting_on: 'human', waits: true, age_s: 720 }),
+    entry('lead', { doing: 'epic PROJ-1', age_s: 7800 }),
+    entry('w-old', { role: 'worker', kind: 'background', doing: 'PROJ-2', waiting_on: 'master', blocked_kind: 'chat', waits: true, starter: 'lead', group: 'lead' }),
     entry('w-lost', { role: 'worker', kind: 'background', starter: null, group: '(no starter)' }),
   ],
 })
@@ -28,8 +28,8 @@ const RUN = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isS
 test('crewLine reads like the brief: name, role, work, age, wait, version', () => {
   expect(ageText(7800)).toBe('2h10')
   expect(ageText(null)).toBe('?')
-  expect(crewLine(entry('samu', { role: 'coordinator', doing: 'Q-Triage WA-3104', waiting_on: 'human', waits: true, age_s: 720 }) as never)).toBe(
-    'samu · coordinator · Q-Triage WA-3104 · since 0h12 · waits: human · 9.14.0',
+  expect(crewLine(entry('samu', { role: 'coordinator', doing: 'Q-Triage PROJ-31', waiting_on: 'human', waits: true, age_s: 720 }) as never)).toBe(
+    'samu · coordinator · Q-Triage PROJ-31 · since 0h12 · waits: human · 9.14.0',
   )
 })
 
@@ -76,9 +76,9 @@ test('/board: Crew opens a pane with one line per live session, waiting first, w
   await ui.unmount()
   expect(lines.filter(Boolean)).toEqual([
     'Crew: 4 live, 2 waiting',
-    'samu · coordinator · Q-Triage WA-3104 · since 0h12 · waits: human · 9.14.0',
-    'lead · master · epic WA-1 · since 2h10 · 9.14.0',
-    '└ w-old · worker · WA-2 · since 0h10 · waits: master (chat) · 9.14.0',
+    'samu · coordinator · Q-Triage PROJ-31 · since 0h12 · waits: human · 9.14.0',
+    'lead · master · epic PROJ-1 · since 2h10 · 9.14.0',
+    '└ w-old · worker · PROJ-2 · since 0h10 · waits: master (chat) · 9.14.0',
     'Workers without a live starter',
     '└ w-lost · worker · - · since 0h10 · 9.14.0',
     '[ Refresh ]  as of 21:10 UTC',
@@ -91,4 +91,18 @@ test('/board: Crew opens a pane with one line per live session, waiting first, w
   const after = paint((await late.drawn()) as never, 100).map(l => l.trimEnd())
   await late.unmount()
   expect(after).toContain('[ Refresh ]  as of 21:10 UTC (stale)')
+
+  // Closed: a read with no draw after it stops the refresh; drawn again, it reads again.
+  const reads = () => ran.filter(a => String(a[2] ?? '').endsWith('/crew_view.py')).length
+  hangs = false
+  const before = reads()
+  await clock.advance(30_000)
+  await clock.advance(30_000)
+  await clock.advance(120_000)
+  expect(reads()).toBe(before + 1)
+  const again = await $.ui.mount({ plugin: 'we', surface: 'terminal', component: 'Pane', requestId: 'we-crew', props: { bodyColumns: 100 } as never })
+  await again.drawn()
+  await clock.advance(30_000)
+  await again.unmount()
+  expect(reads()).toBe(before + 2)
 })

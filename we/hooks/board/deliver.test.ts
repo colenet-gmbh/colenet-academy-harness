@@ -290,6 +290,19 @@ test('a queued answer in a busy session is neither resubmitted nor lost when its
   expect(h.rows('Q1', 'coordinator').map(r => [r.delivered, r.reason])).toEqual([[true, undefined]])
 })
 
+test('a prompt a busy session holds past ten minutes takes the resubmit path: a dropped one is retried', async ($, on) => {
+  const { clock, h } = await coordinator($, on, { stores: () => false })
+  await h.click({ id: 'Q1', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
+  await clock.advance(3_000)
+  const prompt = 'Q1: proposal accepted (answered from the board pane in foxy)'
+  for (let i = 0; i < 21; i += 1) {
+    h.aside('user', `cross-session message ${i}`)
+    await clock.advance(30_000)
+  }
+  expect(h.submitted).toEqual([prompt, prompt])
+  expect(h.rows('Q1', 'coordinator').map(r => r.reason)).toEqual(['resubmitted'])
+})
+
 // The engine merges two prompts queued behind a busy turn into one user row: each is confirmed once,
 // whether the row carries them as one joined text or as one block each.
 for (const shape of ['one text', 'two blocks'] as const) {
