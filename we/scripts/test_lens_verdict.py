@@ -1601,3 +1601,125 @@ def test_lenses_when_t2_names_only_defined_lenses(repo):
     (repo / ".weside" / "crew.json").write_text(json.dumps(crew))
     code, _out, err = run("plan", "ready", KEY)
     assert code == 2 and "ready_panel.lenses_when_t2: 'nonesuch' is no lens" in err
+
+
+# --- check outside the plan's checkout ----------------------------------------------------------
+
+
+def _main_tree(repo: Path, monkeypatch, ref: str = "HEAD~1") -> Path:
+    """A second worktree on the first commit, which holds no plan: the main checkout while the plan
+    lives only on its branch."""
+    tree = repo.parent / "main-tree"
+    _git(repo, "worktree", "add", "-q", "--detach", str(tree), ref)
+    monkeypatch.chdir(tree)
+    return tree
+
+
+def _branch(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "symbolic-ref", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def test_check_outside_the_plan_checkout_reads_the_plan_on_its_branch(repo, monkeypatch):
+    """A check in the main checkout while the plan lives only on its branch reads it there: green,
+    and an edit pushed on the branch after the verdict makes it stale, even with an older copy on
+    another branch. Red arm: without the fallback the check says `missing (here and on
+    origin/main)` and is red."""
+    write_plan(repo, PLAN)
+    commit_plan(repo)
+    vid = green_panel(repo)
+    _git(repo, "branch", "older-copy")
+    tree = _main_tree(repo, monkeypatch)
+    code, out, _ = run("check", vid)
+    assert code == 0, out
+    assert f"panel {vid}: plan not in this checkout nor on origin/main, read on " in out
+    write_plan(repo, PLAN.replace("**Then** c", "**Then** d"))
+    commit_plan(repo)
+    code, out, _ = run("check", vid)
+    assert code == 1 and f"panel {vid}: stale (bound to" in out
+    assert f"read on {_branch(repo)}" in out
+    assert not (tree / "docs" / "plans" / f"{KEY}-story.md").exists()
+
+
+def _root_commit(repo: Path) -> str:
+    """The fixture's first commit, which tracks no plan."""
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-list", "--max-parents=0", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def test_check_with_only_a_stored_blob_stays_red(repo, monkeypatch):
+    """A plan no branch and no worktree holds is missing, even when its bound blob is still in the
+    object store. Red arm: a fallback to the stored bound blob judges the panel as bound, green by
+    construction."""
+    write_plan(repo, PLAN)
+    _git(repo, "hash-object", "-w", f"docs/plans/{KEY}-story.md")  # stored, on no branch
+    vid = green_panel(repo)
+    _main_tree(repo, monkeypatch, "HEAD")  # the fixture's first commit tracks no plan
+    (repo / "docs" / "plans" / f"{KEY}-story.md").unlink()
+    code, out, _ = run("check", vid)
+    assert code == 1, out
+    assert "missing (here, on origin/main, on every branch and in every worktree)" in out
+
+
+def test_check_sees_an_ac_edit_behind_a_newer_old_copy(repo, monkeypatch):
+    """An AC edit on the plan branch makes the panel stale even when another branch touched the
+    plan later (a rebase redates it) and still holds the bound text. Red arm: ranking the branches
+    by the date of their last commit to the plan reads the old copy and stays green."""
+    write_plan(repo, PLAN)
+    commit_plan(repo)
+    vid = green_panel(repo)
+    plan_branch = _branch(repo)
+    _git(repo, "checkout", "-q", "-b", "decoy")
+    git_id = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+    future = {
+        "GIT_COMMITTER_DATE": "2030-01-01T00:00:00",
+        "GIT_AUTHOR_DATE": "2030-01-01T00:00:00",
+    }
+    for text in (PLAN + "x\n", PLAN):
+        write_plan(repo, text)
+        subprocess.run(
+            [*git_id, "commit", "-qam", "rebased copy"],
+            check=True,
+            env={**os.environ, **future},
+        )
+    _git(repo, "checkout", "-q", plan_branch.removeprefix("refs/heads/"))
+    write_plan(repo, PLAN.replace("**Then** c", "**Then** d"))
+    commit_plan(repo)
+    _git(repo, "checkout", "-q", "decoy")  # the plan worktree shows the bound text
+    _main_tree(repo, monkeypatch, _root_commit(repo))
+    code, out, _ = run("check", vid)
+    assert code == 1, out
+    assert f"panel {vid}: stale (bound to" in out
+    assert f"read on {plan_branch} " in out
+
+
+def test_check_sees_an_uncommitted_ac_edit_in_the_plan_worktree(repo, monkeypatch):
+    """An AC edit written but not committed in the plan's worktree makes the panel stale. Red arm:
+    reading only the branch blobs sees the bound text and stays green."""
+    write_plan(repo, PLAN)
+    commit_plan(repo)
+    vid = green_panel(repo)
+    _main_tree(repo, monkeypatch)
+    write_plan(repo, PLAN.replace("**Then** c", "**Then** d"))
+    code, out, _ = run("check", vid)
+    assert code == 1, out
+    assert f"panel {vid}: stale (bound to" in out
+    assert f"read on worktree {repo}" in out
+
+
+def test_check_without_plan_file_or_stored_blob_stays_red(repo, monkeypatch):
+    write_plan(repo, PLAN + "uncommitted\n")  # hash-object without -w: no blob in the store
+    vid = green_panel(repo)
+    _main_tree(repo, monkeypatch, "HEAD")  # the fixture's first commit tracks no plan
+    (repo / "docs" / "plans" / f"{KEY}-story.md").unlink()
+    code, out, _ = run("check", vid)
+    assert code == 1
+    assert "missing (here, on origin/main, on every branch and in every worktree)" in out
