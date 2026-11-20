@@ -66,7 +66,8 @@ we/                               plugin root
     PR and plan                   pr-body-receipt.py, plan_push.py (plans land by push), arm_pr.sh (arms
                                   auto-merge, never merges), required_checks.sh (a branch's required checks,
                                   read by arm_pr.sh and flow_report.py), test-delta.py,
-                                  session_tokens.py, retro_claim.sh, retro_write.py, optimization_close.py
+                                  session_tokens.py, retro_claim.sh, retro_write.py, optimization_close.py,
+                                  pr_ready.sh (draft to ready and back with its `**Draft:**` line)
     statusline                    statusline.js, install_statusline.py
     hook state                    state_prune.py (ages out per-session hook files), claude_home.py (Claude Code's config dir)
     test support                  node_test_procs.py (the node binary and process reaping for statusline tests)

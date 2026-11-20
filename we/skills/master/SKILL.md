@@ -252,7 +252,7 @@ A worker briefed `PR owner: worker` runs steps 2–3 and its fix rounds; you act
   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/risk_runner.py here origin/<default>` in the PR branch's
   worktree gives the class (the crew's `risk.command`, else `risk_paths.py`); `arm_pr.sh` runs the same. Every PR that is not one-way you arm right after `gh pr create`: a review that must
   block the merge is a required check of the repo, and GitHub waits for it. Under the crew's
-  `merge.armer: workflow` the repo's own workflow arms every ready PR: your step is `gh pr ready`,
+  `merge.armer: workflow` the repo's own workflow arms every ready PR: your step is `pr_ready.sh <PR> ready --sha <head>`,
   and `arm_pr.sh` refuses. A PR with a label of `merge.hold_labels` is the human's merge in either mode. No hook checks the arm;
   this table is an instruction, backed by the human's permission prompts and the repo's ruleset.
 
