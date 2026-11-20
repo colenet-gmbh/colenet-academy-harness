@@ -512,8 +512,9 @@ if [[ $resuming -eq 0 && $# -gt 0 && -z "${brief//[[:space:]]/}" && "${!#}" != -
   echo "we-worker: the brief is empty (the last argument holds no text); write the brief first, then start $name; no worker started" >&2
   exit 2
 fi
-# No brief at all (no last argument, or a flag there): a worker without a task waits for nobody.
-if [[ $resuming -eq 0 && -z "$brief" ]]; then
+# No brief at all (no last argument, or a flag there) in the background: nobody hands a --bg or
+# queued worker its task later, so nothing starts. A window worker may start empty: a human types there.
+if [[ $resuming -eq 0 && $bg -eq 1 && -z "$brief" ]]; then
   echo "we-worker: no brief: the last argument is the worker's brief (we-worker $name … \"\$(cat <brief>)\"); no worker started" >&2
   exit 2
 fi

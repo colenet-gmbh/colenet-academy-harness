@@ -119,7 +119,6 @@ OVERLAY = "holding:"
 NOT_WAITING = {"working", "no-data"}
 FIXED_SENTENCE = "Not counted: waiting that only transcripts show; this page has no such source."
 CI_LINE = "CI wait: no source yet"
-LAUNCHED = "launched.jsonl"
 
 
 # --- helpers (one home; flow_report imports them) ------------------------------------------------
@@ -478,27 +477,23 @@ def read_markers(src: Sources, state_dir: Path | None) -> dict:
 
 
 def read_launched(src: Sources, state_dir: Path | None) -> dict:
-    """`{name: line}` of the launcher's append-only `<state_dir>/launched.jsonl` (owner:
-    `worker_launch.record_launch`), the newest line per name; it outlives the marker."""
+    """`{name: line}` of the launcher's append-only `launched.jsonl`, read by its owner
+    (`worker_launch.read_launched`), the newest line per name; it outlives the marker."""
+    import worker_launch  # noqa: PLC0415 (the file's owner)
+
     src.counts.setdefault("launched", {"rows": 0, "bad": 0, "intervals": 0})
     if state_dir is None:
         return {}
-    path = Path(state_dir) / LAUNCHED
     try:
-        rows, bad = read_jsonl_counted(path)
-    except FileNotFoundError:
-        return {}
+        rows, bad = worker_launch.read_launched(Path(state_dir))
     except (OSError, UnicodeDecodeError):
         src.gap("launched", "source unreadable: launched.jsonl")
         return {}
     src.counts["launched"]["bad"] += bad
     out: dict = {}
     for line in sorted(rows, key=lambda x: str(x.get("ts"))):
-        if isinstance(line.get("name"), str) and line["name"]:
-            out[line["name"]] = line
-            src.counts["launched"]["rows"] += 1
-        else:
-            src.counts["launched"]["bad"] += 1
+        out[line["name"]] = line
+        src.counts["launched"]["rows"] += 1
     return out
 
 
