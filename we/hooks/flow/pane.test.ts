@@ -81,3 +81,81 @@ test('/flow PROJ-10 fills the pane after the command returned', async ($, on) =>
   expect(toasts).toEqual([])
   expect(opened).toEqual(['we-flow', 'we-board', 'we-board'])
 })
+
+// flow_intervals.py --snapshot's document, as far as Crew flow reads it.
+const SNAP = (generatedAt: string) =>
+  JSON.stringify({
+    schema_version: 1,
+    generated_at: generatedAt,
+    project: 'acme/app',
+    header: ['one probe every 300 s', 'Not counted: …', 'CI wait: gh check runs, fetched_at 2026-11-20T21:58:00Z'],
+    now: [
+      { who: 'ABC-1-build', group: 'workers', starter: 'lead', kind: 'waiting:ci', since: '2026-11-20T21:40:00Z', waiting_on: 'ci', key: 'ABC-1', label: null },
+      { who: 'lead', group: 'masters', starter: null, kind: 'working', since: '2026-11-20T21:50:00Z', waiting_on: null, key: 'ABC-1', label: null },
+      { who: 'ABC-9', group: 'stories', starter: null, kind: 'stage:in_review', since: '2026-11-20T18:00:00Z', waiting_on: null, key: 'ABC-9', label: 'waits on acceptance' },
+    ],
+    ci: { prs: [{ number: 7, title: 'ABC-1 export', heads: [{ pr: 7, start: '2026-11-20T21:00:00Z', end: '2026-11-20T22:00:00Z', queue_s: 2400, run_s: 900, open: true }] }] },
+    gaps: [{ reason: 'no data: sampler 2026-11-19' }],
+    page: '/home/me/.claude/we-state/flow/flow-acme-app.html',
+  })
+
+test('Flow from the board: Crew flow from the last snapshot, a stale one refreshed once in the background', async ($, on) => {
+  const clock = mock.clock(on, { now: Date.parse('2026-11-20T22:00:00Z') })
+  mock.store(on)
+  const path = '/home/me/.claude/we-state/flow/flow-acme-app.json'
+  let snapshot = SNAP('2026-11-20T21:57:00Z') // 3 min old: fresh
+  const ran: string[] = []
+  on('process.run', (_$, e) => {
+    const line = e.argv.join(' ')
+    ran.push(line)
+    if (line.endsWith('--snapshot-path')) return RUN_OK(`${path}\n`)
+    if (line.includes('--snapshot')) {
+      snapshot = SNAP('2026-11-20T22:20:00Z')
+      return RUN_OK(path)
+    }
+    return RUN_OK('')
+  })
+  on('fs.exists', () => ({ value: true }))
+  on('fs.read', () => ({ value: snapshot }))
+  on('env.get', () => ({ value: '/home/me' }))
+  on('session.id', () => ({ value: 's1' }))
+  on('session.messages', () => ({ value: [] }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.log', () => ({ value: undefined }))
+
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.register', () => ({ value: { command: 'flow' } }))
+  on('ui.status', () => ({ value: undefined }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  // No key in this session: the pane still opens, Crew flow on top.
+  const answer = await $.command.run({ command: 'flow', args: '', origin: { kind: 'composer' } } as never)
+  expect(answer.text).toContain('Crew flow')
+  await clock.settle()
+  const draw = async () => {
+    const ui = await $.ui.mount({ plugin: 'we', surface: 'terminal', component: 'Pane', requestId: 'we-flow', props: { bodyColumns: 100 } as never })
+    const texts: string[] = []
+    for (const re of [/Crew flow/, /ABC-1-build/, /lead  works/, /ABC-9  waits on acceptance/, /#7  queue 40 min · run 15 min/, /gap: no data/, /Swimlanes: \/home\/me/]) {
+      const hit = await ui.find({ type: 'Text', text: re })
+      texts.push(hit ? String(re) : `missing ${re}`)
+    }
+    const head = await ui.find({ type: 'Text', text: /Crew flow · acme\/app · snapshot \d+ min old/ })
+    await ui.unmount()
+    return { texts, head }
+  }
+  const fresh = await draw()
+  expect(fresh.texts.filter(t => t.startsWith('missing'))).toEqual([])
+  expect(fresh.head).toBeDefined()
+  expect(ran.filter(l => l.includes('--snapshot ') || l.endsWith('--snapshot'))).toEqual([])
+
+  // 20 min later the snapshot is stale: the pane's 2-minute timer starts one background run (no
+  // second while the first counts), then the section redraws from it.
+  await clock.advance(20 * 60_000)
+  await clock.settle()
+  const runs = ran.filter(l => / --since 1d --snapshot$/.test(l))
+  expect(runs.length).toBe(1)
+  const ui = await $.ui.mount({ plugin: 'we', surface: 'terminal', component: 'Pane', requestId: 'we-flow', props: { bodyColumns: 100 } as never })
+  expect(await ui.find({ type: 'Text', text: /snapshot 0 min old/ })).toBeDefined()
+  await ui.unmount()
+})
+
+const RUN_OK = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })

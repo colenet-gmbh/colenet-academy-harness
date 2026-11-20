@@ -3,10 +3,19 @@
 
 Usage:
   flow_intervals.py [--since 14d] [--until UTC] [--board FILE] [--project NAME] [--from FILE]…
-                    [--note TEXT]… [--jsonl | --html FILE]
+                    [--note TEXT]… [--no-ci]
+                    [--jsonl | --html FILE | --json | --snapshot [DIR] | --snapshot-path]
 
 Prints one JSON object per interval (JSON Lines, the default) or writes one self-contained HTML
-page (``--html``); stderr names every source with the rows it read and the intervals written.
+page (``--html``); stderr names every source with the rows it read and the intervals written
+(``answers``: the question waits an answer ended; ``transitions``: the story-stage intervals).
+``--json`` prints one document ``{schema_version, generated_at, project, window, header, sources,
+ci, lanes, now, intervals, gaps, summary}`` (``now``: per lane its interval that reaches the window's
+end). ``--snapshot [DIR]`` writes that document and the page as ``flow-<project>.json`` and
+``.html`` into DIR (default ``snapshot_dir()``: ``~/.claude/we-state/flow``) through a temp file and
+``os.replace``, the JSON naming the page as ``page``; ``--snapshot-path`` prints the JSON's path
+and reads nothing else (the ``/flow`` pane's section Crew flow reads it from there). No verb writes
+anywhere else.
 Write the file; publishing it is the caller's step. ``--since`` and ``--until`` take the forms of
 ``flow_report.py``. ``--board`` names the board whose logs to read (default: the crew's board,
 ``crew.resolve_board``); the sampler directory and the day zone come from the crew
@@ -37,10 +46,11 @@ Row contract (harness-neutral). Required: ``id, start, end, kind, who, source``;
 ``role``, ``waiting_on``; any other field is kept and ignored. Times are UTC ISO with ``Z``; ``id``
 is a stable hash of ``who, start, kind``; ``source`` names the file stem the row came from
 (``sampler``, ``waits``, ``blocked``, ``questions``, ``marker``, ``from:<file name>``). Kinds written
-here: ``working``, ``waiting:human``, ``waiting:<role key>``, ``blocked``, ``idle-after-end``,
-``idle``, ``parked``, ``no-data``, and the overlay ``holding:<lock>`` (it may overlap the lane's
-other kinds). Reserved without a producer: ``waiting:ci`` and ``waiting:lock`` (they need a watcher
-or a lock-wait event in the flow log; no source records either today, the page says so). A
+here: ``working``, ``waiting:human``, ``waiting:<role key>``, ``waiting:ci``, ``blocked``,
+``idle-after-end``, ``idle``, ``parked``, ``no-data``, the overlay ``holding:<lock>`` (it may overlap
+the lane's other kinds) and ``stage:<to>`` on a story lane. ``RESERVED`` kinds are named in the
+tables when no row has them: ``waiting:lock`` has no producer (it needs a lock-wait event in the
+flow log), ``waiting:ci`` has none on a run without CI rows (``--no-ci``, a gap, no session on a key). A
 ``--from`` file brings rows of any writer: a row without a required field or with an unparseable
 time is refused on stderr (``<file>:<line>: <reason>``) and becomes a gap; an unknown kind keeps its
 name.
@@ -68,9 +78,18 @@ Sources, per session lane (``who`` = the sampler's ``name``):
   worker with none of them has no starter (the page lists it without a master; stderr counts it,
   ``worker_launch.py backfill-starters`` recovers it).
 
+- ``<board stem>-transitions.jsonl``: per story key one lane in group ``stories``, one ``stage:<to>``
+  interval from each move to the next (the last open to the window end; ``done`` draws none);
+  ``in_review`` carries ``label: waits on acceptance``. Stage hours count in no ratio and no wait.
+- CI (``command_center/ci_source.py``, its docstring owns the queue/run contract and the cache):
+  each PR head's ``waiting:ci`` with ``pr``, ``queue_s``, ``run_s`` and ``checks``, on the lane of
+  every session whose probes carry the PR's key inside the head's span, as an explicit wait of the
+  lowest priority. The header reads ``CI wait: gh check runs, fetched_at <ts>``; gh missing or
+  failing is a gap ``no data: ci (gh …)``; ``--no-ci`` asks no gh and reads ``CI wait: off``.
+
 Precedence inside a candidate idle stretch, top wins: an explicit wait (waits row, ``blocked`` event
 with ``waiting_on``, open question) → ``waiting:<role key or human>``; a ``blocked`` event without
-``waiting_on`` → ``blocked``; a worker after the last busy probe of a run that ended before the
+``waiting_on`` → ``blocked``; a CI head → ``waiting:ci``; a worker after the last busy probe of a run that ended before the
 window end → ``idle-after-end`` on its starter; else ``idle``. A busy probe beats every wait. Equal
 neighbours (kind, ``waiting_on``, ``key``, ``source``) merge. ``waiting_on`` resolves ``human`` to itself, a
 role key through ``crew.roles`` to the lane of that member, a name to the lane of that name; what
@@ -1404,12 +1423,17 @@ def page_data(built: dict, notes=()) -> dict:
 
 
 def now_rows(built: dict) -> list:
-    """Per lane its interval that is still open at the window's end: who works and who waits now,
-    since when and on whom; story lanes give their stage. Overlays left out."""
-    until = iso(built["until"])
+    """Per lane its last interval when it reaches the window's end (within two probe periods):
+    who works and who waits now, since when and on whom; story lanes give their stage. Overlays
+    and lanes gone before the end are left out."""
+    edge = iso(built["until"] - timedelta(seconds=2 * built["interval_s"]))
+    last: dict = {}
+    for r in sorted(built["intervals"], key=lambda r: r["end"]):
+        if not r["kind"].startswith(OVERLAY) and r["who"] != "-":
+            last[r["who"]] = r
     out = []
-    for r in built["intervals"]:
-        if r["end"] != until or r["kind"].startswith(OVERLAY) or r["who"] == "-":
+    for r in last.values():
+        if r["end"] < edge:
             continue
         lane = built["lanes"].get(r["who"]) or {}
         out.append(

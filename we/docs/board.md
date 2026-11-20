@@ -193,7 +193,11 @@ Opening the pane re-reads without asking.
 ## Opening it
 
 `/board` opens the pane; the flow pane's **Board** button does the same, and the board's **Flow**
-button opens `/flow` for what this session works on. The board's **Crew** button opens the crew pane:
+button opens `/flow`: first its section **Crew flow** (who works, who waits on whom since when, CI
+queue and run per open PR, stories waiting on acceptance, every gap, and the swimlane page's path),
+read from the last snapshot of `scripts/flow_intervals.py --snapshot` with its age shown; a snapshot
+older than 5 min starts one refresh in the background. Below it come the story lights for what this
+session works on, when the session names a key. The board's **Crew** button opens the crew pane:
 one line per live session of the crew (name, role, what it works on, since when, what it waits on, the
 plugin version it loaded), sessions that wait first, then the oldest, each worker under its starter and
 a worker without a live starter in a group of its own. It renders `scripts/crew_view.py --json` (that

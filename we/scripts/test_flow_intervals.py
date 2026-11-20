@@ -4,6 +4,7 @@ summary both readers print; the page. Every fixture is written by its test, ever
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from collections import defaultdict
@@ -974,3 +975,116 @@ def test_launched_log_names_the_starter_of_an_ended_worker(tmp_path, monkeypatch
     assert built["lanes"]["gone-2"]["session_id"] == "sid-gone-2"
     assert built["counts"]["launched"]["rows"] == 1
     assert fi.starterless(built) == [("lost-3", "sid-lost-3")]
+
+
+def _stage_state(tmp_path, monkeypatch):
+    moves = [("selected", at(1, 1, 0, 4)), ("in_progress", at(1, 2, 0, 4))]
+    moves += [("in_review", at(1, 6, 0, 4)), ("done", at(1, 9, 0, 4))]
+    return make_state(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        first=at(1, 0, 0, 4),
+        last=at(1, 23, 55, 4),
+        sessions_at=lambda t: [s("m-1", "busy" if t < at(1, 4, 0, 4) else "idle", role="master")],
+        transitions=[
+            {"ts": zt(ts), "key": "ABC-9", "from": None, "to": to, "by": "m-1"} for to, ts in moves
+        ],
+    )
+
+
+def test_story_stage_lanes(tmp_path, monkeypatch):
+    """AC4: one lane per story in group `stories`, one `stage:<to>` per stage, In Review reads
+    "waits on acceptance"; the stage hours count in no ratio and in no wait."""
+    root, board, log_dir, mdir = _stage_state(tmp_path, monkeypatch)
+    crew = json.loads((root / ".weside" / "crew.json").read_text())
+    built = fi.build(board, mdir, log_dir, "UTC", crew, H_SINCE, H_UNTIL)
+    assert built["lanes"]["ABC-9"]["group"] == "stories"
+    rows = [(r["kind"], r["start"], r["end"]) for r in of(built["intervals"], "ABC-9")]
+    assert rows == [
+        ("stage:selected", zt(at(1, 1, 0, 4)), zt(at(1, 2, 0, 4))),
+        ("stage:in_progress", zt(at(1, 2, 0, 4)), zt(at(1, 6, 0, 4))),
+        ("stage:in_review", zt(at(1, 6, 0, 4)), zt(at(1, 9, 0, 4))),
+    ]
+    review = of(built["intervals"], "ABC-9", "stage:in_review")[0]
+    assert review["label"] == "waits on acceptance" and not review.get("waiting_on")
+    assert built["counts"]["transitions"]["intervals"] == 3
+    sm = fi.summary(built)
+    assert not any(k.startswith("stage:") for k in sm["waiting"])
+    assert not any(t["kind"].startswith("stage:") for t in sm["top"])
+    assert "ABC-9" not in sm["matrix"] and [x["key"] for x in sm["stories"]] == ["ABC-9"]
+    text = fi.render_page(fi.page_data(built))
+    assert "'waits on acceptance'" in text and "'Stories (stage)'" in text
+
+
+def test_flow_intervals_json_snapshot(tmp_path, monkeypatch, capsys):
+    """AC7: `--json` is one document whose field list is pinned; `generated_at` and
+    `schema_version` lead it; the `now` block names who works and waits at the window's end."""
+    root, _board, _log, _m = _stage_state(tmp_path, monkeypatch)
+    code, out, _err = run_cli(
+        root, capsys, "--since", "2026-04-01", "--until", "2026-04-02T00:00", "--json"
+    )
+    assert code == 0
+    doc = json.loads(out)
+    assert list(doc) == [
+        "schema_version",
+        "generated_at",
+        "project",
+        "window",
+        "header",
+        "sources",
+        "ci",
+        "lanes",
+        "now",
+        "intervals",
+        "gaps",
+        "summary",
+    ]
+    assert doc["schema_version"] == 1 and re.fullmatch(r"\d{4}-.*Z", doc["generated_at"])
+    assert doc["ci"] == {"state": "off", "gap": "ci: off (--no-ci)", "fetched_at": None, "prs": []}
+    assert sorted(doc["now"][0]) == [
+        "group",
+        "key",
+        "kind",
+        "label",
+        "since",
+        "starter",
+        "waiting_on",
+        "who",
+    ]
+    assert sorted(doc["sources"]["transitions"]) == ["bad", "intervals", "rows"]
+    assert any(n["who"] == "m-1" and n["kind"] == "idle" for n in doc["now"])
+
+
+def _tree(path: Path) -> dict:
+    return {
+        str(p.relative_to(path)): p.stat().st_mtime_ns
+        for p in sorted(path.rglob("*"))
+        if p.is_file()
+    }
+
+
+def test_no_verb_writes_outside_its_snapshot_dir(tmp_path, monkeypatch, capsys):
+    """AC7: every verb of `flow_intervals.py` leaves HOME and the state as they were; only
+    `--snapshot DIR` writes, and only its two files, through a temp file."""
+    root, _board, _log, _m = _stage_state(tmp_path, monkeypatch)
+    window = ["--since", "2026-04-01", "--until", "2026-04-02T00:00"]
+    before = _tree(tmp_path)
+    for verb in ([], ["--jsonl"], ["--json"], ["--snapshot-path"]):
+        assert run_cli(root, capsys, *window, *verb)[0] == 0
+        assert _tree(tmp_path) == before, verb
+    snap = tmp_path / "snap"
+    assert run_cli(root, capsys, *window, "--snapshot", str(snap))[0] == 0
+    names = sorted(p.name for p in snap.iterdir())
+    assert names == [
+        f"flow-{PROJECT.replace('/', '-')}.html",
+        f"flow-{PROJECT.replace('/', '-')}.json",
+    ]
+    after = _tree(tmp_path)
+    assert {k for k in after if k not in before} == {f"snap/{n}" for n in names}
+    doc = json.loads((snap / names[1]).read_text())
+    assert doc["page"] == str(snap / names[0])
+    # the pane's path: the snapshot dir under HOME, named by the project
+    out = run_cli(root, capsys, *window, "--snapshot-path")[1]
+    assert out.strip() == str(
+        Path(os.environ["HOME"]) / f".claude/we-state/flow/flow-{PROJECT.replace('/', '-')}.json"
+    )
