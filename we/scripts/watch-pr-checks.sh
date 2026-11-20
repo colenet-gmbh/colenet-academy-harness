@@ -38,7 +38,9 @@
 #       goes on in every mode and ends with one of the next two lines)
 #   final <sha>: merged-green[ · merge commit <c>]          exit 0
 #   final <sha>: merged-red[ · merge commit <c>] · failed: <names> — the base branch carries it: fix it first
-#                                                            exit 15
+#                                                            exit 15 (also `· codex <WARNING|BLOCKING>` in place of
+#       `failed:`; after such a merge no other exit ends the watch: a red check, a job that never started, a
+#       review quota or a Codex verdict all end merged-red)
 #   final <sha>: merged (red: <names>)                      exit 7  (with --until-merged, the red
 #       non-required checks it watched past stay in the line)
 #   final <sha>: closed                                     exit 8
@@ -72,7 +74,8 @@
 # it` (`mergeable` CONFLICTING ends the watch with exit 12 first).
 # A check name that ran more than once on the head (a draft run, then the ready run) is judged
 # by its newest run only (`startedAt`; a run not started yet is the newest). The checks of a
-# cancelled run that a newer run of the same workflow and event replaced count for nothing.
+# cancelled or failed run that a newer, still open run of the same workflow and event replaced
+# count for nothing.
 # Final means: the head's checks are non-empty, none pending, no workflow run for the head SHA
 # queued or in progress (a rerun counts as pending until it completes), and the whole set
 # unchanged for WATCH_QUIET seconds and at least two reads. Checks register seconds after a
@@ -352,8 +355,12 @@ infra_exit() {  # every failed check is a job that never started: no red, no rer
   echo "final $SHA: infra · $1: job never started ($2) — do not rerun, tell the coordinator"
   exit 13
 }
+merged_red() {  # merged_red <what>: the one end of a watch whose PR merged before its CI ended
+  echo "final $SHA: merged-red$(merge_commit) · $1 — the base branch carries it: fix it first"; exit 15
+}
 red_exit() {  # red_exit <failed names>: the red final line; a failed review check disarms first
   local note="" name run reason zero="" why="" all=1
+  [ -n "$MERGED_EARLY" ] && merged_red "failed: $1"
   while IFS=$'\t' read -r name run job; do
     [ -n "$name" ] || continue
     reason=$(zero_steps "$run" "$job" | head -n 1)
@@ -368,9 +375,6 @@ red_exit() {  # red_exit <failed names>: the red final line; a failed review che
       [ -n "$reason" ] && quota_exit "$name: $reason"
     done <<<"$FAILED_RUNS"
     [ "$(field 4)" = on ] && note=" · $(disarm)"
-  fi
-  if [ -n "$MERGED_EARLY" ]; then
-    echo "final $SHA: merged-red$(merge_commit) · failed: $1 — the base branch carries it: fix it first"; exit 15
   fi
   echo "final $SHA: red · failed: $1 · $(merge_note)$note$(predates)"; exit 1
 }
@@ -401,12 +405,13 @@ codex_exit() {  # exit 6 when the Codex comment for this head carries WARNING or
         echo "codex $verdict on $SHA, its check green: skipped with a reason, the watch goes on"
         return 0
       fi
+      [ -n "$MERGED_EARLY" ] && merged_red "codex $verdict"
       echo "final $SHA: codex $verdict · $(disarm) — then /we:ci-review"
       exit 6 ;;
     ERROR)
       local why
       why=$(grep -iE "$QUOTA_RX" <<<"$BODY" | head -n 1)
-      [ -n "$why" ] && quota_exit "codex: $(grep -oiE "$QUOTA_RX" <<<"$why" | head -n 1)"
+      [ -n "$why" ] && [ -z "$MERGED_EARLY" ] && quota_exit "codex: $(grep -oiE "$QUOTA_RX" <<<"$why" | head -n 1)"
       why=$(grep -vE '^\s*<!--.*-->\s*$' <<<"$BODY" | grep -iE 'error|fail|reason' | head -n 1)
       echo "codex ERROR: ${why:-no reason in the comment} — rerun the Codex check" ;;
   esac
@@ -473,7 +478,7 @@ while :; do
     # A cancelled run with a newer run of the same workflow and event on the head was replaced
     # (`gh pr ready` cancels the draft run, a push or edit cancels the older run): its checks are
     # history, never a failure, a progress line or a --fail-fast exit (a failed run too: the draft
-# run's red ci-summary while the ready run is open), but only while the newer
+    # run's red ci-summary while the ready run is open), but only while the newer
     # run is still open: once it finished, CLASSIFY already shows its result for every check it
     # reported, and a cancelled check it never reported stays the latest for its name, so red.
     SUPERSEDED=$(awk -F'\t' '{ id[NR] = $1; s[NR] = $3; c[NR] = $4; k[NR] = $5 "\t" $6 }

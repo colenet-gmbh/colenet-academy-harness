@@ -1098,6 +1098,21 @@ def test_a_merge_before_ci_ended_that_turns_red_has_its_own_exit(tmp_path):
     )
 
 
+@pytest.mark.parametrize("verdict", ["WARNING", "BLOCKING"])
+def test_a_codex_verdict_after_a_merge_before_ci_ended_ends_merged_red(tmp_path, verdict):
+    """Red arm: exit 6 sent a PR already merged to /we:ci-review, the base branch unnamed."""
+    views, runs = _merged_early("SUCCESS")
+    views = [_with_codex(views[0], status="IN_PROGRESS", conclusion="")] + [
+        _with_codex(v, "FAILURE") for v in views[1:]
+    ]
+    code, out = run(tmp_path, views, "--until-merged", runs=runs, comments=[_codex(verdict)])
+    assert (code, out[-1]) == (
+        15,
+        f"final {SHA}: merged-red · merge commit {'m' * 12} · codex {verdict}"
+        " — the base branch carries it: fix it first",
+    ), out
+
+
 def test_a_merge_after_ci_ended_names_its_merge_commit(tmp_path):
     merged = {**_green(), "state": "MERGED", "mergeCommit": {"oid": "m" * 40}}
     code, out = run(tmp_path, [merged])
