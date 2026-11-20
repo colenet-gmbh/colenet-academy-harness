@@ -140,7 +140,7 @@ Finish what is open → money → marketing. The kernel runs on its own.
 [ + 1 idle/other ]
 ⚠ Live, not on the board: stray
 
-[ Refresh ]  [ Flow ]  file 21:11 UTC · live 21:11 UTC · watch 3 s, all 1 min
+[ Refresh ]  [ Flow ]  [ Crew ]  file 21:11 UTC · live 21:11 UTC · watch 3 s, all 1 min
 ● runs  ◉ waits for you  ○ rests  ? unknown  second ● = start mode`
 
 const AT_60 = `
@@ -218,7 +218,7 @@ its own.
 [ + 1 idle/other ]
 ⚠ Live, not on the board: stray
 
-[ Refresh ]  [ Flow ]
+[ Refresh ]  [ Flow ]  [ Crew ]
 file 21:11 UTC · live 21:11 UTC · watch 3 s, all 1 min
 ● runs  ◉ waits for you  ○ rests  ? unknown
 second ● = start mode`

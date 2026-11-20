@@ -203,11 +203,11 @@ def test_the_generic_crew_renders_no_security_routing():
     ("name", "fixture"),
     [
         ("card-blocking-after-merge", SECURITY_FIXTURE),
-        ("main-red-before-arm", GENERIC_FIXTURE),
+        ("main-red-keeps-merging", GENERIC_FIXTURE),
     ],
 )
 def test_the_merge_cases_route_on_a_line_the_rendered_l0_carries(name, fixture):
-    """A card verdict after the merge becomes a fix story; main red holds the arm.
+    """A card verdict after the merge becomes a fix story; main red does not hold the arm.
     Both routes must be satisfiable by the L0 the master reads with the case's crew."""
     case = REPO / "tests" / "coldstart" / "master" / f"{name}.yaml"
     top = {k: v.strip() for k, v in TOP.findall(case.read_text(encoding="utf-8"))}

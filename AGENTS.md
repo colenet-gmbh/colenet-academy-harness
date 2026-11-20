@@ -31,7 +31,7 @@ we/                               plugin root
                                   and pointer), orchestrate.md and risk-paths (copied by /we:setup), cold-reader.md
   hooks/
     hooks.json, register.ts       the hook table and the one function-hooks module (both panes)
-    flow/, board/, plans/         the /flow pane (phase.ts), the /board pane (board.ts, work.ts, deliver.ts, probe.py,
+    flow/, board/, plans/         the /flow pane (phase.ts), the /board pane and its crew pane (crew.tsx; board.ts, work.ts, deliver.ts, probe.py,
                                   answer.py, deliveries.py), plan files and PRs both panes read
     SessionStart                  materialize_on_start, process_on_start (L0), role_on_start (role card),
                                   optimization_reminder, compact_on_start (matcher compact)
@@ -52,7 +52,8 @@ we/                               plugin root
     gates                         ready_gate.py, plan_tier.py, risk_paths.py, risk_runner.py, lens_verdict.py,
                                   check-plan-identifiers.py, check-instruction-budget.py
     rules                         rule_loading.py, load-rules.py, probe-rule-loading.py, probe-hook-cap.py (fixtures/)
-    sessions                      session_refresh.py (roll-call of the live sessions' plugin versions, refresh plan),
+    sessions                      crew_view.py (the crew pane's read-only document: live sessions, work, waits, age),
+                                  session_refresh.py (roll-call of the live sessions' plugin versions, refresh plan),
                                   plugin_install.py (loaded and installed version, the compact handover)
     launch                        wclaude, we-worker, install_launcher.py, worker_launch.py, worker_rights.py,
                                   worker_supervisor.py (a worker's end and gc), worker_close.py (the one closing step after a

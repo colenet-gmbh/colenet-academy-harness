@@ -584,6 +584,13 @@ def time_limit(state: Path, name: str, now: float) -> str | None:
     return "time-limit=" + dt.datetime.fromtimestamp(deadline, dt.timezone.utc).strftime("%H:%M")
 
 
+def lives(row: dict) -> bool:
+    """Whether a `claude agents --json` row's process runs: the one test `we-worker status` marks
+    `exited(...)` by, also the crew view's "live" (`crew_view.py`)."""
+    pid = str(row.get("pid", "-"))
+    return pid.isdigit() and int(pid) > 0 and wl._pid_lives(pid)
+
+
 def status_lines(
     rows: list[dict], key: str | None, projects: Path, state: Path, now: float
 ) -> list[str]:
@@ -607,7 +614,7 @@ def status_lines(
             else (row.get("state") or row.get("status"))
         )
         pid = str(row.get("pid", "-"))
-        gone = not (pid.isdigit() and int(pid) > 0 and wl._pid_lives(pid))  # no pid: exited
+        gone = not lives(row)  # no pid: exited
         if gone:
             st = f"exited({st})"
         tl = time_limit(state, row.get("name") or "", now)

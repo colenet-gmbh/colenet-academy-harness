@@ -73,6 +73,9 @@ function home($: T$, on: TOn, o: Opts) {
   const toasts: string[] = []
   const logs: string[] = []
   let row = 0
+  // The transcript $.session.messages lists: every stored row, and what `aside` stores past our append hook.
+  const transcript: { role: string; text: string; toolUses: never[] }[] = []
+  on('session.messages', () => ({ value: transcript }))
   on('env.get', () => ({ value: '/home/me' }))
   on('fs.exists', (_$, e) => ({ value: files.has(String((e as { path?: unknown }).path)) }))
   on('fs.stat', (_$, e) => ({ value: { kind: 'file', size: 1, mtimeMs: mtimes.get(String((e as { path?: unknown }).path)) ?? 1, isLink: false } }))
@@ -123,6 +126,7 @@ function home($: T$, on: TOn, o: Opts) {
     submitted.push(text)
     if (o.stores?.(text, submitted.filter(t => t === text).length) ?? true) {
       row += 1
+      transcript.push({ role: 'user', text, toolUses: [] })
       await $.session.append({
         message: { type: 'user', role: 'user', content: [{ type: 'text', text }] },
         door: 'prompt',
@@ -166,6 +170,7 @@ function home($: T$, on: TOn, o: Opts) {
   // The engine storing a prompt that was queued earlier, as its turn begins.
   const store = async (...texts: string[]) => {
     row += 1
+    transcript.push({ role: 'user', text: texts.join('\n'), toolUses: [] })
     await $.session.append({
       message: { type: 'user', role: 'user', content: texts.map(text => ({ type: 'text', text })) },
       door: 'prompt',
@@ -173,8 +178,10 @@ function home($: T$, on: TOn, o: Opts) {
       uuid: `row-${row}`,
     } as never)
   }
+  // A row the engine stores while our session.append hook is skipped (another plugin's hook ran first).
+  const aside = (role: string, text: string) => transcript.push({ role, text, toolUses: [] })
   const rows = (id: string, role?: string) => ledger().filter(r => r.id === id && (!role || r.role === role))
-  return { files, submitted, sent, toasts, logs, ledger, rows, click, store, answersPath: ANSWERS }
+  return { files, submitted, sent, toasts, logs, ledger, rows, click, store, aside, answersPath: ANSWERS }
 }
 
 const turn = async ($: T$, id: string) => {
@@ -257,6 +264,43 @@ test('a busy coordinator: its row counts when the queued prompt is stored, well 
   expect(row.delivered).toBe(true)
   expect(latency(row)).toBe(42_000)
   expect(latency(row)).toBeLessThanOrEqual(60_000)
+})
+
+// Q891–Q893 (20.11.): the coordinator ran turns back to back for two minutes, cross-session messages
+// overtaking the queued answer; the turn clock counted it lost, the resubmit queued a second copy, and
+// each answer was stored twice, its confirming append hook skipped. The transcript decides instead.
+test('a queued answer in a busy session is neither resubmitted nor lost when its append hook is skipped (Q891–Q893)', async ($, on) => {
+  const { clock, h } = await coordinator($, on, { stores: () => false })
+  await h.click({ id: 'Q1', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
+  await clock.advance(3_000)
+  const prompt = 'Q1: proposal accepted (answered from the board pane in foxy)'
+  expect(h.submitted).toEqual([prompt])
+  // Other messages are stored meanwhile; no turn hook reaches the deliverer.
+  for (let i = 0; i < 4; i += 1) {
+    h.aside('user', `cross-session message ${i}`)
+    h.aside('assistant', `reply ${i}`)
+    await clock.advance(30_000)
+  }
+  expect(h.submitted).toEqual([prompt])
+  expect(h.rows('Q1', 'coordinator')).toEqual([])
+  // The queued answer is stored; our append hook does not see it.
+  h.aside('user', prompt)
+  await clock.advance(33_000)
+  expect(h.submitted).toEqual([prompt])
+  expect(h.rows('Q1', 'coordinator').map(r => [r.delivered, r.reason])).toEqual([[true, undefined]])
+})
+
+test('a prompt a busy session holds past ten minutes takes the resubmit path: a dropped one is retried', async ($, on) => {
+  const { clock, h } = await coordinator($, on, { stores: () => false })
+  await h.click({ id: 'Q1', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
+  await clock.advance(3_000)
+  const prompt = 'Q1: proposal accepted (answered from the board pane in foxy)'
+  for (let i = 0; i < 21; i += 1) {
+    h.aside('user', `cross-session message ${i}`)
+    await clock.advance(30_000)
+  }
+  expect(h.submitted).toEqual([prompt, prompt])
+  expect(h.rows('Q1', 'coordinator').map(r => r.reason)).toEqual(['resubmitted'])
 })
 
 // The engine merges two prompts queued behind a busy turn into one user row: each is confirmed once,

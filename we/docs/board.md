@@ -193,7 +193,13 @@ Opening the pane re-reads without asking.
 ## Opening it
 
 `/board` opens the pane; the flow pane's **Board** button does the same, and the board's **Flow**
-button opens `/flow` for what this session works on. Until `/board` runs in a session the pane polls
+button opens `/flow` for what this session works on. The board's **Crew** button opens the crew pane:
+one line per live session of the crew (name, role, what it works on, since when, what it waits on, the
+plugin version it loaded), sessions that wait first, then the oldest, each worker under its starter and
+a worker without a live starter in a group of its own. It renders `scripts/crew_view.py --json` (that
+script's docstring owns the fields, the order and `schema_version`; a session counts as live by the
+test `we-worker status` uses), re-reads it every 30 s while open, and marks its stamp `(stale)` once
+the last read is older than two refreshes. Until `/board` runs in a session the pane polls
 nothing; the deliverer (§ Answers) checks the board file every three seconds in every session, pane or not, and acts only in the orchestrator's. Once open, the pane checks the file's modification time every three seconds and re-reads it
 when it moved; every minute it re-reads the file and the live column whatever happened.
 
@@ -541,10 +547,11 @@ A line that is missing is appended with `name` and `session_id`; no other field 
 `sampler_on_prompt.py` names a blocked line once per wait to its starter and the coordinator, the
 command JSON-quoted and labelled as data.
 
-`--clear` prints `{cleared, kind, key, since, duration_s, obsolete}`. For a permission wait it marks
-every open `owner_queue` question of that session with cause `access-click` posted during the wait
-`obsolete: "<labels.prompt_resolved> <HH:MM>"` (crew time zone): the question stays in the queue,
-so nobody answers a dead prompt and nothing vanishes silently.
+`--clear` prints `{cleared, kind, key, since, duration_s, obsolete}`. It marks every open
+`owner_queue` question of that session that the wait raised, posted during the wait (cause
+`access-click` for a permission wait, `info` for a chat wait), `obsolete: "<labels.prompt_resolved>
+<HH:MM>"` (crew time zone): the question stays in the queue, so nobody answers a dead prompt (a
+worker its starter answered meanwhile, or one that stopped) and nothing vanishes silently.
 
 **`decision` — an owner's cut, fence or process decision.** `board.py decision <area>
 <cut|fence|process> --key <KEY> --text "<decision>"` needs the caller to hold `roles.<area>`; a

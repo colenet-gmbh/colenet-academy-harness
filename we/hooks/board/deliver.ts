@@ -331,8 +331,13 @@ export const versionAtLeast = (version: string | undefined, floor: string) => {
   return true
 }
 
-// A prompt the deliverer submitted and waits to see stored.
-export type Awaiting = { key: string; delivery: Delivery; text: string; ledgerPath: string; submittedAt: number; tries: number }
+// A prompt the deliverer submitted and waits to see stored; `seen` is the transcript's length at the
+// submit (undefined when the engine gave none), `firstAt` when a busy session first held it.
+export type Awaiting = { key: string; delivery: Delivery; text: string; ledgerPath: string; submittedAt: number; tries: number; seen?: number; firstAt?: number }
+
+// How long a busy session may hold a prompt before the old resubmit path runs: a prompt the engine
+// really dropped is retried, at the price of a second copy in a queue longer than this.
+export const BUSY_MAX_MS = 600_000
 
 // The awaiting prompts one stored user row confirms, by index: a text block equal to the prompt, or the
 // row's text containing it, as the engine may merge queued prompts into one user message.
@@ -354,6 +359,24 @@ export type TurnClock = { runningSince?: number; lastEndedAt?: number }
 // the original was stored, the answer then delivered twice).
 export const isMissed = (a: Awaiting, now: number, turn: TurnClock) =>
   turn.runningSince === undefined && now - Math.max(a.submittedAt, turn.lastEndedAt ?? 0) >= IDLE_MS
+
+// One transcript message as `$.session.messages()` lists it.
+export type Seen = { role: string; text: string }
+
+// The transcript's word on a prompt the turn clock counts lost. `stored`: a user message since the
+// submit carries its text; the append hook that confirms it can be skipped (another plugin's
+// session.append hook ran first and sent the event on past ours). `busy`: the session stored messages
+// since the submit, so its queue drains and the prompt may still wait in it; a resubmit then lands
+// twice (Q891–Q893: each answer stored twice in a coordinator busy for two minutes), up to BUSY_MAX_MS
+// after the submit. `lost` otherwise, and without a transcript the clock's verdict stands.
+export const transcriptVerdict = (a: Awaiting, messages: readonly Seen[] | undefined, now: number): 'stored' | 'busy' | 'lost' => {
+  if (!messages) return 'lost'
+  const since = messages.slice(a.seen ?? 0)
+  const text = a.text.trim()
+  if (text && since.some(m => m.role === 'user' && m.text.includes(text))) return 'stored'
+  const held = now - (a.firstAt ?? a.submittedAt) < BUSY_MAX_MS
+  return a.seen !== undefined && since.length > 0 && held ? 'busy' : 'lost'
+}
 
 const SHORT_REASONS: readonly [RegExp, string][] = [
   [/^No agent named .* is reachable/, 'not reachable'],

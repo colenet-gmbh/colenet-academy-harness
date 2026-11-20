@@ -133,8 +133,9 @@ blocked  marks another session's line as blocked (docs/board.md § Blocked worke
          prompt (`waiting_on: human`), `chat` only while it is idle (`--waiting-on` a role key or
          human). It writes `blocked`, `waiting_on`, `since`, `sla_due` of that one line and nothing
          else; the same wait again writes nothing. `--clear` removes them once (refused while the
-         permission prompt still stands) and marks the session's open `access-click` questions
-         posted during the wait `obsolete` (`labels.prompt_resolved` and the time), never deleted.
+         permission prompt still stands) and marks the session's open questions the wait raised
+         (`access-click` for a permission wait, `info` for a chat wait) posted during the wait
+         `obsolete` (`labels.prompt_resolved` and the time), never deleted.
 decision records an owner's cut, fence or process decision of their area (`roles.<area>`; `--key`
          a ticket key or, for a decision without a ticket, a plan slug as in `ask`): one `log`
          entry `D<n>` of kind `decision`, then one line in board-decisions.jsonl.
@@ -1183,6 +1184,12 @@ def _resolved_label(crew, now):
     return f"{label} {now.astimezone(ZoneInfo(tz)).strftime('%H:%M')}"
 
 
+# The cause of the question a wait raises (the sampler's detector asks it): a cleared wait makes its
+# open questions obsolete. Q874, Q883, Q891, Q892: a chat wait cleared (the worker answered by its
+# starter, or stopped) left its `info` question open for hours, and the owner answered a dead one.
+WAIT_CAUSES = {"permission": "access-click", "chat": "info"}
+
+
 def _clear_blocked(state, args, crew, now):
     closed = {a.get("id") for a in state.answers() if a.get("answer") in CLOSING}
     ended, out = [], {}
@@ -1213,13 +1220,14 @@ def _clear_blocked(state, args, crew, now):
         del line["blocked"]
         line["updated_at"] = now.strftime(MINUTE_FMT)  # a rewritten line is not stale
         obsolete = []
-        if blocked.get("kind") == "permission":
+        cause = WAIT_CAUSES.get(blocked.get("kind"))
+        if cause:
             reason = _resolved_label(crew, now)
             for item in board.get("owner_queue") or []:
                 if (
                     isinstance(item, dict)
                     and item.get("session") == args.name
-                    and item.get("cause") == "access-click"
+                    and item.get("cause") == cause
                     and not item.get("obsolete")
                     and item.get("id") not in closed
                     and str(item.get("ts") or "") >= str(blocked.get("since") or "")
@@ -4247,9 +4255,11 @@ def crew_guard(args, env=None, cwd=None):
     """(refusal or None, the board to stamp after the write or None) for a `board.py` call.
 
     Refused (two crews, AC11): a writing verb of a session without a crew on the default board
-    (no `--board`), and a writing verb on a board whose stamp (`crew.stamp_path`) names another
-    crew than the session's. The session's own board, resolved from its crew, is stamped by its
-    first write. An explicit `--board` on an unstamped file passes (scratch and test boards)."""
+    (no `--board`), and a writing verb of a crew's session on a board whose stamp
+    (`crew.stamp_path`) names another crew. The session's own board, resolved from its crew, is
+    stamped by its first write. A session without a crew that names a board with `--board` passes
+    and writes under the board's own stamp: the explicit file is the intent, and only a second
+    crew's session can mistake another crew's board for its own."""
     verb = _verb_name(args)
     if verb in READ_VERBS:
         return None, None
@@ -4261,7 +4271,9 @@ def crew_guard(args, env=None, cwd=None):
     mine = None
     if cid is not None:
         mine = crew_mod.board_file(crew_path, crew, env, DEFAULT_BOARD)
-    if cid is None and not args.board:
+    if cid is None:
+        if args.board:
+            return None, None
         owner = f"crew {stamp}" if stamp else "the default board, no crew stamped yet"
         return _guard_text(verb, why, target, owner), None
     if stamp is not None and stamp != cid:
