@@ -550,6 +550,16 @@ def test_lenses_when_t2_takes_a_list_of_lens_keys(tmp_path):
         assert out.returncode == 1 and says in out.stderr, (bad, out.stderr)
 
 
+@pytest.mark.parametrize("bad", ["x", ["security"], 3])
+def test_a_ready_panel_that_is_no_object_is_a_crew_error(tmp_path, bad):
+    """No AttributeError: the lens check refuses it on its own, and `show` names the key."""
+    with pytest.raises(crew.CrewError, match="ready_panel must be an object"):
+        crew._validate_lenses(tmp_path / "crew.json", {"ready_panel": bad}, set())
+    core, _ = workspace(tmp_path, {**CREW, "ready_panel": bad})
+    out = run(core, "show")
+    assert out.returncode == 1 and "ready_panel must be an object" in out.stderr, out.stderr
+
+
 def test_a_value_of_the_wrong_type_is_refused(tmp_path):
     core, _ = workspace(tmp_path, with_(limits__masters="five"))
     out = run(core, "show")

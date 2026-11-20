@@ -783,7 +783,10 @@ def _validate_lenses(path: Path, data: dict[str, Any], slugs: set[str]) -> None:
         for lens in data.get(key, []):
             if lens not in lens_keys and lens not in FORMER_DEFAULT_LENSES:
                 raise _fail(path, f"{key}: {lens!r} is no lens")
-    for lens in (data.get("ready_panel") or {}).get("lenses_when_t2") or []:
+    panel = data.get("ready_panel") or {}
+    if not isinstance(panel, dict):
+        raise _fail(path, "ready_panel must be an object")
+    for lens in panel.get("lenses_when_t2") or []:
         if lens not in lens_keys:
             raise _fail(path, f"ready_panel.lenses_when_t2: {lens!r} is no lens")
 
