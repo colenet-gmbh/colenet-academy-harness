@@ -5,9 +5,9 @@
 // empty the session `crew.py deliverer` names for this machine: the coordinator, or on a machine of a
 // crew with several humans that runs none, the first role its human runs), carries
 // each answer line to up to three recipients and writes one ledger row per recipient:
-//   coordinator  `$.prompt.submit` as the person; delivered once its user row is stored. No row by
-//                the end of a turn that started after the submit (or 30 s idle): submit once more,
-//                row `resubmitted`; still none: `delivered: false`.
+//   coordinator  `$.prompt.submit` as the person; delivered once its user row is stored. No row after 30 s idle since the submit: submit once more,
+//                row `resubmitted`; still none: `delivered: false`. A turn that ends meanwhile is no
+//                miss: the prompt may wait in the queue behind it, and a resubmit then lands twice.
 //   asker        `$.session.send`; `isDelivered: false` (no such name, several, gone) or a held notice
 //                later: `delivered: false` with the reason, and a routing prompt to the coordinator
 //                (role `route`, confirmed like the coordinator's).
@@ -121,10 +121,11 @@ export const isFinal = (row: BoardDelivery | undefined) => !!row && (row.deliver
 export type Recipient = { role: BoardDeliveryRole; to: string }
 
 // Who a line goes to: the coordinator unless the line came from its own chat; the asker unless the line
-// was written in the asker's session. A question no longer on the board, or without `session`, has no asker.
+// was written in the asker's session or the asker is the coordinator (its prompt carries the answer
+// already). A question no longer on the board, or without `session`, has no asker.
 export const recipientsOf = (line: AnswerLine, coordinator: string, asker: string | undefined, owner?: string): Recipient[] => [
   ...(line.via === 'chat' && line.session === coordinator ? [] : [{ role: 'coordinator' as const, to: coordinator }]),
-  ...(asker && line.session !== asker ? [{ role: 'asker' as const, to: asker }] : []),
+  ...(asker && asker !== coordinator && line.session !== asker ? [{ role: 'asker' as const, to: asker }] : []),
   ...(owner && owner !== coordinator && owner !== asker && line.session !== owner ? [{ role: 'owner' as const, to: owner }] : []),
 ]
 
@@ -344,15 +345,15 @@ export const storedHits = (awaiting: readonly Awaiting[], content: readonly { ty
   })
 }
 
-// The main loop's turns as the deliverer follows them: when the running one started, when the last one
-// ended and when that one had started.
-export type TurnClock = { runningSince?: number; lastEndedAt?: number; lastEndedStart?: number }
+// The main loop's turns as the deliverer follows them: when the running one started, when the last one ended.
+export type TurnClock = { runningSince?: number; lastEndedAt?: number }
 
-// Lost: a turn that started after the submit ended without its row, or the session sat idle for
-// IDLE_MS since the submit and since its last turn ended, with nothing started.
+// Lost: the session sat idle for IDLE_MS since the submit and since its last turn ended, with nothing
+// started. A turn that ends without the row is no loss: a notification or message turn runs before
+// the queued prompt, which is stored as the next turn starts (measured: a resubmit one second before
+// the original was stored, the answer then delivered twice).
 export const isMissed = (a: Awaiting, now: number, turn: TurnClock) =>
-  (turn.lastEndedStart !== undefined && turn.lastEndedStart >= a.submittedAt) ||
-  (turn.runningSince === undefined && now - Math.max(a.submittedAt, turn.lastEndedAt ?? 0) >= IDLE_MS)
+  turn.runningSince === undefined && now - Math.max(a.submittedAt, turn.lastEndedAt ?? 0) >= IDLE_MS
 
 const SHORT_REASONS: readonly [RegExp, string][] = [
   [/^No agent named .* is reachable/, 'not reachable'],
