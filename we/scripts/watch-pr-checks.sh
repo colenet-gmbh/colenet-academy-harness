@@ -32,7 +32,13 @@
 #   head never reached <expected> (still <sha>) after <n>s  exit 5
 #   final <sha>: codex <WARNING|BLOCKING> · auto-merge <disarmed|off> — then /we:ci-review   exit 6
 #       (the head's `<!-- codex-review -->` comment judged it and its check is not green: a skip with a reason turns it green)
-#   final <sha>: merged                                     exit 0  (a merge is the good end)
+#   final <sha>: merged[ · merge commit <c>]                exit 0  (a merge is the good end)
+#   merged <sha> before its CI ended — watching the head's runs to their end   (a merge while a run on
+#       the head is still open, a human merging past the checks: the merge is no verdict, so the watch
+#       goes on in every mode and ends with one of the next two lines)
+#   final <sha>: merged-green[ · merge commit <c>]          exit 0
+#   final <sha>: merged-red[ · merge commit <c>] · failed: <names> — the base branch carries it: fix it first
+#                                                            exit 15
 #   final <sha>: merged (red: <names>)                      exit 7  (with --until-merged, the red
 #       non-required checks it watched past stay in the line)
 #   final <sha>: closed                                     exit 8
@@ -153,7 +159,8 @@ CLASSIFY='def ckey: [(.workflowName // ""), (.name // .context // "")];
   def newest: . as $all | [$all[] | . as $c | select(all($all[]; ckey != ($c | ckey) or at <= ($c | at)))];
   .headRefOid, ((.mergeStateStatus // "UNKNOWN") + "\t" + (.mergeable // "UNKNOWN")
     + "\t" + (.state // "OPEN") + "\t" + (if .autoMergeRequest then "on" else "off" end)
-    + "\t" + ((.isDraft // false) | tostring) + "\t" + ([(.labels // [])[].name] | join(","))),
+    + "\t" + ((.isDraft // false) | tostring) + "\t" + ([(.labels // [])[].name] | join(","))
+    + "\t" + (.mergeCommit.oid // "")),
   (((.statusCheckRollup // []) | newest)[] | (
   (if .__typename == "StatusContext" then
      (if .state == "SUCCESS" then "pass" elif (.state == "PENDING" or .state == "EXPECTED") then "pending" else "fail" end)
@@ -243,13 +250,14 @@ lock_head() {  # the holder line names the head it watches
 
 view() {
   gh_try OUT pr view "$PR" -R "$REPO" \
-    --json headRefOid,statusCheckRollup,mergeStateStatus,mergeable,state,autoMergeRequest,isDraft,labels \
+    --json headRefOid,statusCheckRollup,mergeStateStatus,mergeable,state,autoMergeRequest,isDraft,labels,mergeCommit \
     --jq "$CLASSIFY" && [ -n "$OUT" ]
 }
 field() { sed -n 2p <<<"$OUT" | cut -f"$1"; }
+merge_commit() { local c; c=$(field 7); [ -n "$c" ] && echo " · merge commit ${c:0:12}"; return 0; }
 closed_exit() {  # a merged or closed PR ends the watch with its own line, never "red"
   case "$(field 3)" in
-    MERGED) echo "final $1: merged${WAITING:+ (red: $WAITING)}"; [ -n "$WAITING" ] && exit 7; exit 0 ;;
+    MERGED) echo "final $1: merged$(merge_commit)${WAITING:+ (red: $WAITING)}"; [ -n "$WAITING" ] && exit 7; exit 0 ;;
     CLOSED) echo "final $1: closed"; exit 8 ;;
   esac
 }
@@ -294,7 +302,7 @@ merge_stuck() {  # green, but GitHub will not merge it by itself
 }
 disarm() {  # prints the auto-merge note after disarming an armed PR; never exits
   local out
-  if [ "$(field 4)" != on ]; then echo "auto-merge off"; return; fi
+  if [ "$(field 4)" != on ] || [ -n "$MERGED_EARLY" ]; then echo "auto-merge off"; return; fi
   if out=$(gh pr merge "$PR" -R "$REPO" --disable-auto 2>"$GH_ERR"); then
     echo "auto-merge disarmed"
   else
@@ -361,6 +369,9 @@ red_exit() {  # red_exit <failed names>: the red final line; a failed review che
     done <<<"$FAILED_RUNS"
     [ "$(field 4)" = on ] && note=" · $(disarm)"
   fi
+  if [ -n "$MERGED_EARLY" ]; then
+    echo "final $SHA: merged-red$(merge_commit) · failed: $1 — the base branch carries it: fix it first"; exit 15
+  fi
   echo "final $SHA: red · failed: $1 · $(merge_note)$note$(predates)"; exit 1
 }
 infra_rerun() {  # infra_rerun <name> <run id>: rerun a first-attempt run that failed on infra; 0 if rerun
@@ -404,6 +415,7 @@ codex_exit() {  # exit 6 when the Codex comment for this head carries WARNING or
 take_lock
 quota_wait
 SHA=""
+MERGED_EARLY=""
 until view; do tick; done
 SHA=$(head -n 1 <<<"$OUT")
 if [ -n "$EXPECT" ]; then
@@ -434,7 +446,14 @@ watch_head() {  # (re)start the per-head state: on start and, with --until-merge
 watch_head
 while :; do
   if view && gh_try RUNROWS run list -R "$REPO" --commit "$SHA" --limit 100 --json databaseId,attempt,status,conclusion,workflowName,event --jq "$RUNS"; then
-    closed_exit "$SHA"
+    # Merged while runs on its head are still open (a human merged past the checks): the merge is
+    # no verdict, so the watch goes on to those runs' end and says merged-green or merged-red.
+    if [ "$(field 3)" = MERGED ] && [ -z "$MERGED_EARLY" ] \
+      && awk -F'\t' '$3 ~ /^(queued|in_progress|requested|pending)$/ { f = 1 } END { exit !f }' <<<"$RUNROWS"; then
+      MERGED_EARLY=1
+      echo "merged $SHA$(merge_commit) before its CI ended — watching the head's runs to their end"
+    fi
+    [ -n "$MERGED_EARLY" ] || closed_exit "$SHA"
     NOW_SHA=$(head -n 1 <<<"$OUT")
     if [ "$NOW_SHA" != "$SHA" ]; then
       [ -n "$UNTIL_MERGED" ] || { echo "head moved $SHA -> $NOW_SHA"; exit 3; }
@@ -442,7 +461,7 @@ while :; do
       echo "head moved $SHA -> $NOW_SHA — watching it"
       SHA=$NOW_SHA; INTERVAL=$BASE_INTERVAL; watch_head; tick; continue
     fi
-    if [ "$(field 2)" = CONFLICTING ]; then
+    if [ -z "$MERGED_EARLY" ] && [ "$(field 2)" = CONFLICTING ]; then
       echo "final $SHA: conflicts with the base — merge it"; exit 12
     fi
     ROWS=$(tail -n +3 <<<"$OUT")
@@ -453,11 +472,12 @@ while :; do
     [ -n "$OPEN_RUNS" ] && PENDING=1
     # A cancelled run with a newer run of the same workflow and event on the head was replaced
     # (`gh pr ready` cancels the draft run, a push or edit cancels the older run): its checks are
-    # history, never a failure, a progress line or a --fail-fast exit, but only while the newer
+    # history, never a failure, a progress line or a --fail-fast exit (a failed run too: the draft
+# run's red ci-summary while the ready run is open), but only while the newer
     # run is still open: once it finished, CLASSIFY already shows its result for every check it
     # reported, and a cancelled check it never reported stays the latest for its name, so red.
     SUPERSEDED=$(awk -F'\t' '{ id[NR] = $1; s[NR] = $3; c[NR] = $4; k[NR] = $5 "\t" $6 }
-      END { for (i = 1; i <= NR; i++) if (c[i] == "cancelled") for (j = 1; j <= NR; j++)
+      END { for (i = 1; i <= NR; i++) if (c[i] == "cancelled" || c[i] == "failure") for (j = 1; j <= NR; j++)
         if (k[j] == k[i] && id[j] + 0 > id[i] + 0 && s[j] ~ /^(queued|in_progress|requested|pending)$/) {
           print id[i]; break } }' <<<"$RUNROWS")
     FAILED=""
@@ -511,7 +531,7 @@ while :; do
     if [ -n "$LIVE" ] && [ -z "$PENDING" ] && [ "$READS" -ge 2 ] && [ $((NOW - STABLE_SINCE)) -ge "$QUIET" ]; then
       if [ -n "$FAILED" ]; then
         # A red non-required check (an auto-merge workflow) does not stop a PR GitHub still merges.
-        if [ -n "$UNTIL_MERGED" ] && can_merge && ! grep -qiE "$REVIEW_RX" <<<"$(tr ',' '\n' <<<"$FAILED")"; then
+        if [ -z "$MERGED_EARLY" ] && [ -n "$UNTIL_MERGED" ] && can_merge && ! grep -qiE "$REVIEW_RX" <<<"$(tr ',' '\n' <<<"$FAILED")"; then
           [ "$WAITING" = "$FAILED" ] || echo "still merging: $FAILED red, $(merge_note) — watching to the merge"
           WAITING=$FAILED; backoff; tick; continue
         fi
@@ -519,7 +539,9 @@ while :; do
       fi
       # Auto-merge off is said once and watched past: the caller arms it (or the human merges) and
       # still gets the `merged` exit; DIRTY, BEHIND and a long BLOCKED need the session, so they end.
-      if [ -n "$UNTIL_MERGED" ] && [ -z "$HUMAN_MERGE" ] && [ "$(field 4)" = off ] \
+      if [ -n "$MERGED_EARLY" ]; then
+        echo "final $SHA: merged-green$(merge_commit)"; exit 0
+      elif [ -n "$UNTIL_MERGED" ] && [ -z "$HUMAN_MERGE" ] && [ "$(field 4)" = off ] \
         && [ "$(field 1)" != DIRTY ] && [ "$(field 1)" != BEHIND ] \
         && ! { [ "$(field 1)" = BLOCKED ] && [ $(($(date +%s) - STABLE_SINCE)) -ge "$BLOCKED_GRACE" ]; }; then
         [ "$OFF_SAID" = "$SHA" ] || echo "waiting $SHA: green · $(merge_note) — watching to the merge"

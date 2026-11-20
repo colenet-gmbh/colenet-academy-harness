@@ -230,7 +230,8 @@ A worker briefed `PR owner: worker` runs steps 2–3 and its fix rounds; you act
      review check) → `/we:ci-review <PR>`, which re-arms when green. Never from the shared main checkout: `EnterWorktree(path=<wt>)` first,
      or a `we:dev-medium` worker in `<wt>` runs it. Green but not yet armed → the same, open threads and
      findings remain on a green run.
-   - `final … merged` (exit 0, or 7 with red non-required checks named) → `/we:merged <PR>` yourself;
+   - `final … merged` (exit 0, or 7 with red non-required checks named) or `merged-green` → `/we:merged <PR>`
+     yourself; `merged-red` (exit 15, a human merged before CI ended) → the fix first, its waiters told;
      exit 8 (closed) → report.
    - exit 3 (head moved; `--until-merged` follows it), 12 (conflict, before the checks) or 0 under
      `--until-merged` without `merged` (behind, dirty) → handle it, then re-arm on the new head.

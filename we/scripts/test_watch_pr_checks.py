@@ -1059,3 +1059,75 @@ def test_the_interval_never_drops_under_60_seconds(tmp_path):
         if " | sleep " in c
     ]
     assert slept and min(slept) == 60, slept
+
+
+def _merged_early(conclusion):
+    """A PR merged by hand while CI run 7 on its head still runs; the run then ends `conclusion`."""
+    open_run = {"databaseId": 7, "attempt": 1, "status": "in_progress", "conclusion": ""}
+    closed_run = {**open_run, "status": "completed", "conclusion": conclusion.lower()}
+    running = _pending(_green())
+    running["statusCheckRollup"][0]["detailsUrl"] = RUN_URL.format(7, 1)
+    merged = {**running, "state": "MERGED", "mergeCommit": {"oid": "m" * 40}}
+    done = copy.deepcopy(merged)
+    done["statusCheckRollup"][0].update(status="COMPLETED", conclusion=conclusion)
+    return [running, merged, merged, done], [[open_run], [open_run], [open_run], [closed_run]]
+
+
+@pytest.mark.parametrize("mode", [(), ("--until-merged",)])
+def test_a_merge_before_ci_ended_is_watched_to_merged_green(tmp_path, mode):
+    """Red arm: the watcher ended `final … merged` at the hand merge, the head's run still open."""
+    views, runs = _merged_early("SUCCESS")
+    code, out = run(tmp_path, views, *mode, runs=runs)
+    assert (code, out) == (
+        0,
+        [
+            f"merged {SHA} · merge commit {'m' * 12} before its CI ended — watching the head's runs to their end",
+            f"final {SHA}: merged-green · merge commit {'m' * 12}",
+        ],
+    )
+
+
+def test_a_merge_before_ci_ended_that_turns_red_has_its_own_exit(tmp_path):
+    views, runs = _merged_early("FAILURE")
+    code, out = run(tmp_path, views, "--until-merged", runs=runs)
+    name = REAL["statusCheckRollup"][0]["name"]
+    assert code == 15, out
+    assert out[-1] == (
+        f"final {SHA}: merged-red · merge commit {'m' * 12} · failed: {name}"
+        " — the base branch carries it: fix it first"
+    )
+
+
+def test_a_merge_after_ci_ended_names_its_merge_commit(tmp_path):
+    merged = {**_green(), "state": "MERGED", "mergeCommit": {"oid": "m" * 40}}
+    code, out = run(tmp_path, [merged])
+    assert (code, out) == (0, [f"final {SHA}: merged · merge commit {'m' * 12}"])
+
+
+def test_a_failed_draft_run_replaced_by_an_open_run_prints_no_failure(tmp_path):
+    """Red arm: the draft run's red ci-summary printed `fail: ci-summary` while the ready run ran."""
+    d = _green()
+    base = d["statusCheckRollup"][1]
+    old_sum = copy.deepcopy(base)
+    old_sum.update(name="ci-summary", conclusion="FAILURE", detailsUrl=RUN_URL.format(100, 2))
+    d["statusCheckRollup"].append(old_sum)
+    draft = {
+        "databaseId": 100,
+        "attempt": 1,
+        "status": "completed",
+        "conclusion": "failure",
+        "workflowName": "CI",
+        "event": "pull_request",
+    }
+    queued = {**draft, "databaseId": 101, "status": "queued", "conclusion": ""}
+    done = {**queued, "status": "completed", "conclusion": "success"}
+    ready = copy.deepcopy(d)
+    new = copy.deepcopy(base)
+    new.update(
+        name="ci-summary", startedAt="2026-10-05T00:00:00Z", detailsUrl=RUN_URL.format(101, 4)
+    )
+    ready["statusCheckRollup"].append(new)
+    code, out = run(
+        tmp_path, [d, d, ready], runs=[[draft, queued], [draft, queued], [draft, done]]
+    )
+    assert (code, out) == (0, [f"final {SHA}: green · {MERGE}"])
