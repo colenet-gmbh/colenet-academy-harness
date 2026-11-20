@@ -226,6 +226,7 @@ def test_ttl_cache_and_gap_without_gh(tmp_path, monkeypatch, gh, capsys):
     """AC6: a second run inside the TTL asks gh nothing and keeps the first `fetched_at`; without
     gh the gap is named and no CI row exists; `--no-ci` runs no gh."""
     until = T0 + timedelta(hours=3)
+    path = os.environ["PATH"]  # the fake gh first
     first = collect(tmp_path, until)
     n = gh()
     assert n > 0
@@ -239,7 +240,15 @@ def test_ttl_cache_and_gap_without_gh(tmp_path, monkeypatch, gh, capsys):
     assert gone["state"] == "gap" and gone["gap"] == "no data: ci (gh not found)"
     assert later["prs"] and not gone["prs"]
 
-    monkeypatch.setenv("PATH", os.environ["PATH"])
+    # a cache directory this user does not own is a gap, never read
+    cache = tmp_path / "theirs"
+    cache.mkdir()
+    uid = cache.stat().st_uid
+    monkeypatch.setattr(ci_source.os, "getuid", lambda: uid + 1)
+    theirs = ci_source.collect("acme/app", T0, until, cache, required_reader=lambda _r: REQUIRED)
+    assert theirs["state"] == "gap" and "not this user" in theirs["gap"]
+    monkeypatch.setattr(ci_source.os, "getuid", lambda: uid)
+    monkeypatch.setenv("PATH", path)
     root, board, log_dir, mdir = tfi.make_state(
         tmp_path / "flow",
         monkeypatch=monkeypatch,

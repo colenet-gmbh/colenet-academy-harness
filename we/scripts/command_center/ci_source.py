@@ -20,7 +20,8 @@ Every required check is also a row of its own (``check: <name>``), so tests and 
 (``Claude Review``, ``Codex Review``: required checks too) stay apart by name.
 
 Cache, one layer: every GitHub answer goes through ``flow_report.gh_runner`` (a file per hash of
-the request body and its ``window`` key, in ``--cache``, default ``/tmp/we-ci-cache``). The TTL
+the request body and its ``window`` key, in ``--cache``, default ``/tmp/we-ci-cache-<uid>``, made
+0700; one this user does not own is refused as a gap). The TTL
 sits in that key: requests about open PRs carry a 5-minute bucket, about merged PRs a day bucket,
 so a run inside the bucket reads the file and a later one asks afresh (an edge is up to 5 min or
 24 h old). The required names are kept beside them per repo and day bucket (``required-*.json``),
@@ -33,8 +34,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
+import tempfile
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,7 +47,8 @@ sys.path.insert(0, str(HERE.parent))
 import flow_report as fr  # noqa: E402
 
 SCHEMA_VERSION = 1
-CACHE = Path("/tmp/we-ci-cache")
+# per user under the temp dir: another user's directory of that name is refused, never read
+CACHE = Path(tempfile.gettempdir()) / f"we-ci-cache-{os.getuid()}"
 OPEN_TTL_S = 300
 CLOSED_TTL_S = 24 * 3600
 CHECK_BATCH = 10  # CHECKS_QUERY asks 30 suites x 50 runs per commit: 100 commits exceed gh's limit
@@ -83,6 +87,13 @@ def cached_required(repo: str, cache: Path, now: datetime, reader=None) -> list:
     cache.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(names), encoding="utf-8")
     return names
+
+
+def own_cache(cache: Path) -> None:
+    """Create the cache directory 0700, or refuse one this user does not own (`PermissionError`)."""
+    cache.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if cache.stat().st_uid != os.getuid():
+        raise PermissionError(f"owned by uid {cache.stat().st_uid}, not this user")
 
 
 def check_runs(run, ids: list) -> dict:
@@ -187,6 +198,10 @@ def collect(
     if not repo:
         return {**doc, "state": "gap", "gap": "no data: ci (GitHub repo not found)", "prs": []}
     now = now or datetime.now(timezone.utc)
+    try:
+        own_cache(cache)
+    except OSError as exc:
+        return {**doc, "state": "gap", "gap": f"no data: ci (cache {cache}: {exc})", "prs": []}
     run = bucketed_runner(cache, now)
     try:
         required = cached_required(repo, cache, now, required_reader)
@@ -202,6 +217,8 @@ def collect(
             "gap": f"no data: ci (gh: unexpected answer {exc})",
             "prs": [],
         }
+    except OSError as exc:
+        return {**doc, "state": "gap", "gap": f"no data: ci (cache {cache}: {exc})", "prs": []}
     out = []
     for p in prs:
         for h in p["heads"]:
@@ -251,7 +268,9 @@ def main(argv=None) -> int:
     p.add_argument("--json", action="store_true")
     args = p.parse_args(argv)
     now = datetime.now(timezone.utc).replace(microsecond=0)
-    until = fr.parse_ts(args.until + "Z") if args.until and not args.until.endswith("Z") else now
+    until = now
+    if args.until:
+        until = fr.parse_ts(args.until if args.until.endswith("Z") else args.until + "Z") or now
     since = fr.flow_intervals.parse_since(args.since, until)
     repo = args.repo or fr.norm_slug(fr.git(Path.cwd(), "remote", "get-url", "origin"))
     doc = collect(repo, since, until, args.cache)
