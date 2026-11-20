@@ -33,8 +33,8 @@ gh pr view <N> --json state,mergedAt,mergeCommit,headRefName,title,body,commits
 ```
 
 - `MERGED`: continue and note the merge commit for the report.
-- Merged while a run on its head was still open (a human merged past the checks): the merge is no
-  verdict. `watch-pr-checks.sh <N>` in the background watches those runs and ends `merged-green` or
+- Merged while a required check on its head was still open (a human merged past the checks): the
+  merge is no verdict; an open non-required run or a run started by the merge is none of that. `watch-pr-checks.sh <N>` in the background watches those runs and ends `merged-green` or
   `merged-red` (exit 15); the review's verdict on that head counts the same. Red or a WARNING/BLOCKING
   verdict → the fix comes first, and its waiters hear of it at once; the report names it.
 - `OPEN`: the user is ahead of GitHub. `CLOSED`: the PR was closed without a merge. Say which and stop.
