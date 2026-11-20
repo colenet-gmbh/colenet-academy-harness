@@ -360,6 +360,20 @@ def test_the_worker_gets_its_settings_file_and_key(tmp_path):
     assert call["key"] == "AC-12"
 
 
+def test_the_worker_env_names_its_starter_as_answer_address(tmp_path):
+    """A worker's question names `WE_STARTER` as the answer address (L0-worker): the starter outlives
+    the worker, so a late answer still lands. Red arm: without it the env carries no starter."""
+    project, env = setup(tmp_path)
+    env["WE_WORKER_STARTER"] = "EPIC-1-master"
+    assert run(project, env, "AC-12-impl", "--bg", GO).returncode == 0
+    (call,) = started(tmp_path)
+    doc = json.loads(Path(call["argv"][call["argv"].index("--settings") + 1]).read_text())
+    assert doc["env"]["WE_STARTER"] == "EPIC-1-master"
+    run(project, env, "AC-12-win", GO)
+    (window,) = [c["tmux"] for c in calls(tmp_path) if c.get("tmux", [""])[0] == "new-window"]
+    assert "WE_STARTER=EPIC-1-master" in window[-1]
+
+
 def test_a_develop_brief_starts_without_the_ticketing_plugin(tmp_path):
     project, env = setup(tmp_path)
     (project / ".weside" / "config.json").write_text(json.dumps({"ticketing": {"tool": "jira"}}))

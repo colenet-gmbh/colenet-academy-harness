@@ -186,8 +186,8 @@ const pane = ($: T$) =>
   $.ui.mount({ plugin: 'we', surface: 'terminal', component: 'Pane', requestId: 'we-board', props: { bodyColumns: 80 } as never })
 
 // Q189: the press queued the coordinator's prompt and no user row followed. The deliverer must notice
-// at the end of the next turn and submit it once more.
-test('a coordinator prompt that is never stored is submitted once more after the next turn (Q189)', async ($, on) => {
+// once the session sits idle 30 s after the next turn and submit it once more.
+test('a coordinator prompt that is never stored is submitted once more after 30 s idle (Q189)', async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   mock.store(on)
   const h = home($, on, { self: { sessionId: 's-coord', name: 'coord' }, ledger: EPOCH, stores: (_text, n) => n > 1 })
@@ -200,6 +200,8 @@ test('a coordinator prompt that is never stored is submitted once more after the
   await clock.advance(3_000)
   await turn($, 't1')
   await clock.advance(3_000)
+  expect(h.submitted).toHaveLength(1) // a turn's end alone is no miss
+  await clock.advance(30_000)
   expect(h.submitted).toEqual(['Q1: proposal denied (answered from the board pane in coord)', 'Q1: proposal denied (answered from the board pane in coord)'])
   await ui.unmount()
 })
@@ -347,10 +349,10 @@ test('Q189 to the end: no row after the resubmit either is a refusal row and a t
   await h.click({ id: 'Q1', answer: 'info', ts: iso(T0 + 1_000), session: 'foxy' })
   await clock.advance(3_000)
   await turn($, 't1')
-  await clock.settle()
+  await clock.advance(30_000)
   expect(h.rows('Q1', 'coordinator').map(r => r.reason)).toEqual(['resubmitted'])
   await turn($, 't2')
-  await clock.settle()
+  await clock.advance(30_000)
   expect(h.submitted).toEqual(['Q1: I need more information (answered from the board pane in foxy)', 'Q1: I need more information (answered from the board pane in foxy)'])
   expect(h.rows('Q1', 'coordinator').map(r => [r.delivered, r.reason])).toEqual([
     [false, 'resubmitted'],
@@ -372,6 +374,34 @@ test('an idle coordinator whose prompt never started a turn resubmits after 30 s
     [true, null],
   ])
   expect(latency(h.rows('Q1', 'coordinator')[1]!)).toBeLessThanOrEqual(60_000)
+})
+
+// Measured: a turn ran after the submit (a notification, a message) and ended
+// without the row; the resubmit went out a second before the queued original was stored, and the
+// answer arrived twice. Red arm: with a turn's end counted as a miss, `submitted` has two entries.
+test('a turn that ends while the prompt waits queued resubmits nothing; the answer arrives once', async ($, on) => {
+  const { clock, h } = await coordinator($, on, { stores: () => false })
+  await h.click({ id: 'Q1', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
+  await clock.advance(3_000)
+  await turn($, 'notification')
+  await clock.advance(1_000)
+  await $.turn.start({ text: '', turnId: 'queued' } as never)
+  await h.store('Q1: proposal accepted (answered from the board pane in foxy)')
+  await clock.settle()
+  await $.turn.complete({ reason: 'answer', answer: '', durationMs: 1, isAborted: false, turnId: 'queued' } as never)
+  await clock.advance(60_000)
+  expect(h.submitted).toEqual(['Q1: proposal accepted (answered from the board pane in foxy)'])
+  expect(h.rows('Q1', 'coordinator').map(r => [r.delivered, r.reason ?? null])).toEqual([[true, null]])
+})
+
+test('a question the coordinator asked itself reaches it once, by prompt, not also by message', async ($, on) => {
+  const board = boardOf({ owner_queue: [{ id: 'Q3', session: 'coord', key: 'PROJ-42', since: '2026-11-03' }] })
+  const { clock, h } = await coordinator($, on, { board })
+  await h.click({ id: 'Q3', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
+  await clock.advance(12_000)
+  expect(h.submitted).toEqual(['Q3: proposal accepted (answered from the board pane in foxy)'])
+  expect(h.sent).toEqual([])
+  expect(h.rows('Q3').map(r => r.role)).toEqual(['coordinator'])
 })
 
 test('a ledger present at start: a delivered line is not sent again, a marker line is', async ($, on) => {

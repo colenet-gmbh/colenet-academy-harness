@@ -247,11 +247,9 @@ const delivery = {
   // Prompts submitted and not yet seen stored, oldest first; the keys an asker send holds while it runs.
   awaiting: [] as Awaiting[],
   sending: new Set<string>(),
-  // The main loop's turns: when the running one started, and the start of the last one that ended.
-  turnStarts: new Map<string, number>(),
+  // The main loop's turns: when the running one started, when the last one ended.
   runningSince: undefined as number | undefined,
   lastEndedAt: undefined as number | undefined,
-  lastEndedStart: undefined as number | undefined,
 }
 
 const isoOf = (ms: number) => new Date(ms).toISOString()
@@ -708,19 +706,14 @@ export const registerBoard = (on: On, options: PluginOptions) => {
   }).catch(($, e, next) => next(e))
   on('turn.start', async ($, e, next) => {
     if (delivery.isOn && e.agentId === undefined) {
-      const now = await $.clock.now()
-      delivery.turnStarts.set(e.turnId, now)
-      delivery.runningSince = now
+      delivery.runningSince = await $.clock.now()
     }
     return next(e)
   })
   on('turn.complete', async ($, e, next) => {
     if (delivery.isOn && e.agentId === undefined) {
-      const started = delivery.turnStarts.get(e.turnId)
-      delivery.turnStarts.delete(e.turnId)
       delivery.runningSince = undefined
       delivery.lastEndedAt = await $.clock.now()
-      if (started !== undefined) delivery.lastEndedStart = started
       if (delivery.awaiting.length) $.clock.after(0, () => void checkAwaiting($))
     }
     return next(e)

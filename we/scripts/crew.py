@@ -70,7 +70,9 @@ or later whose red lenses stand on WARNINGs alone count green with those warning
 Selected row; a BLOCKING stays red, and a T2 panel never reads it; ``lens_verdict.py`` owns the
 round, and every new plan subject is one: pick N with that in mind; ``max_rounds``: 2, the
 default, is the last round lenses run in, above it the lens holder decides, null turns the cap
-off; a ``warning_ok_after_rounds`` above it never carries), ``select`` (``refiner``: true, the
+off; a ``warning_ok_after_rounds`` above it never carries; ``lenses_when_t2``: [], the default,
+lenses ``lens_verdict.py plan ready`` adds after ``ready_lenses`` when a file the plan names is on a
+``path`` rule of ``.weside/risk-paths`` on ``risk.rules_from``, e.g. ``["security"]``), ``select`` (``refiner``: true, the
 default, lets a refiner select its own story where its epic plan allows; false makes the product
 role select every story of the crew, ``board.py select --refiner`` refuses), ``t2_panel``, ``risk``,
 ``fallback`` (role key -> role key or ``human_bundle``), ``local_rules``, ``acceptance``,
@@ -81,7 +83,8 @@ role select every story of the crew, ``board.py select --refiner`` refuses), ``t
 a JQL clause every signal query starts with, null = signals refused; ``claim_hours``: how long a ticket claim
 lives; ``shared_accounts``: ticketing accounts several humans write from (email or account id); a
 comment signed ``<role>@<human>`` speaks for that human only from that human's own account or one
-of these, ``board_humans.py``), ``sla``, ``limits``, ``naming``, ``launch`` (``worker``: the command template that
+of these, ``board_humans.py``; ``select_unlabel``: labels ``board.py select`` removes from the ticket
+in its carry, e.g. the owner's release label once the story is Selected), ``sla``, ``limits``, ``naming``, ``launch`` (``worker``: the command template that
 starts a process worker, the one owner of it in a repo with a crew (``worker_launch.backend``);
 ``subagent_fallback``; ``allow_bypass``: true makes ``wclaude``, ``pin.sh`` and ``we-worker`` add
 ``--allow-dangerously-skip-permissions``, so bypass is one Shift+Tab away while the start mode stays
@@ -259,7 +262,7 @@ DEFAULTS: dict[str, Any] = {
         "acceptance": _lens("acceptance", 5),
     },
     "ready_lenses": ["product", "architecture", "acceptance"],
-    "ready_panel": {"warning_ok_after_rounds": None, "max_rounds": 2},
+    "ready_panel": {"warning_ok_after_rounds": None, "max_rounds": 2, "lenses_when_t2": []},
     # refiner: false — no refiner selects its own story in this crew, whatever an epic plan says
     # (the product role selects every story, e.g. after a ticket owner's yes)
     "select": {"refiner": True},
@@ -305,6 +308,7 @@ DEFAULTS: dict[str, Any] = {
         "jql_scope": None,
         "claim_hours": 4,
         "shared_accounts": [],
+        "select_unlabel": [],
     },
     "sla": {"hours": 4, "daytime": "08-20", "tz": "UTC", "t2_second_reviewer": None},
     "limits": {
@@ -703,6 +707,17 @@ def _check_signals(path: Path, value: Any) -> None:
             raise _fail(path, f"{dotted}.jql_window must be a number with m, h or d, like 35m")
 
 
+def _validate_board_lists(path, data):
+    """`board.shared_accounts` and `board.select_unlabel`: each a list of non-empty strings."""
+    board = data.get("board") if isinstance(data.get("board"), dict) else {}
+    for key, what in (("shared_accounts", "account"), ("select_unlabel", "label")):
+        found = board.get(key)
+        if found is not None and not (
+            isinstance(found, list) and all(isinstance(a, str) and a.strip() for a in found)
+        ):
+            raise _fail(path, f"board.{key} must be a list of {what} strings")
+
+
 def _validate(path: Path, data: dict[str, Any], *, paths: bool) -> None:
     """The hard checks, on ``data`` without its unknown keys."""
     for key in ("roles", "members"):
@@ -712,15 +727,7 @@ def _validate(path: Path, data: dict[str, Any], *, paths: bool) -> None:
     _validate_roles(path, data["roles"], slugs)
     if "humans" in data:
         _validate_humans(path, data, slugs)
-    shared = (
-        (data.get("board") or {}).get("shared_accounts")
-        if isinstance(data.get("board"), dict)
-        else None
-    )
-    if shared is not None and not (
-        isinstance(shared, list) and all(isinstance(a, str) and a.strip() for a in shared)
-    ):
-        raise _fail(path, "board.shared_accounts must be a list of account strings")
+    _validate_board_lists(path, data)
     for key, value in data.items():
         if key in ("lenses", "fallback") or key not in DEFAULTS:
             continue
@@ -776,6 +783,12 @@ def _validate_lenses(path: Path, data: dict[str, Any], slugs: set[str]) -> None:
         for lens in data.get(key, []):
             if lens not in lens_keys and lens not in FORMER_DEFAULT_LENSES:
                 raise _fail(path, f"{key}: {lens!r} is no lens")
+    panel = data.get("ready_panel") or {}
+    if not isinstance(panel, dict):
+        raise _fail(path, "ready_panel must be an object")
+    for lens in panel.get("lenses_when_t2") or []:
+        if lens not in lens_keys:
+            raise _fail(path, f"ready_panel.lenses_when_t2: {lens!r} is no lens")
 
 
 def _validate_urgent_commands(path: Path, patterns: list[str]) -> None:

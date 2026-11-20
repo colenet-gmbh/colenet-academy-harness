@@ -114,7 +114,8 @@ prune    drops what is handled from board.json (docs/board.md § Pruning) and pr
          a question or item an Accept or Deny closed once nothing is owed to its asker any more
          (the deliverer finds the asker only on the board): every answer line on it is older than
          the ledger's epoch, written in the asker's own session, or the asker's row in
-         board-deliveries.jsonl is `delivered: true` (refused, or not taken within PRUNE_AFTER_H:
+         board-deliveries.jsonl is `delivered: true` (the coordinator's row when the coordinator
+         asked it itself; refused, or not taken within PRUNE_AFTER_H:
          the starter's or the route row is), except a one-way merge-go accepted, which `close-merged` takes, and a
          `window-go` accepted, which stays until its asker runs `withdraw` once the go is typed; an
          unanswered `withdrawn` or `superseded` one; a news item the
@@ -595,16 +596,20 @@ def _parse_ts(text):
 
 
 def _ledger(state):
-    """The deliverer's first start (`epoch`, None without one) and every (id, answer_ts, role)
-    with a `delivered: true` row in board-deliveries.jsonl."""
-    epoch, delivered = None, set()
+    """The deliverer's first start (`epoch`, None without one), every (id, answer_ts, role)
+    with a `delivered: true` row in board-deliveries.jsonl, and every (id, answer_ts, to) of a
+    delivered `coordinator` row (the coordinator as asker gets no asker row: deliver.ts
+    `recipientsOf`)."""
+    epoch, delivered, to_coordinator = None, set(), set()
     for row in state.deliveries():
         if set(row) == {"epoch"}:
             ts = _parse_ts(row["epoch"])
             epoch = ts if epoch is None or (ts and ts < epoch) else epoch
         elif row.get("delivered") is True:  # a later refusal never follows a delivery
             delivered.add((row.get("id"), row.get("answer_ts"), row.get("role")))
-    return epoch, delivered
+            if row.get("role") == "coordinator":
+                to_coordinator.add((row.get("id"), row.get("answer_ts"), row.get("to")))
+    return epoch, delivered, to_coordinator
 
 
 def prune(board, state, now):
@@ -621,7 +626,7 @@ def prune(board, state, now):
         if a.get("answer") in CLOSING:
             closing[qid] = a
         last[qid] = a.get("answer")
-    epoch, delivered = _ledger(state)
+    epoch, delivered, to_coordinator = _ledger(state)
     gone = {q.get("id") for q in state.questions() if q.get("outcome") in GONE}
 
     def asker_carried(item, line):
@@ -631,6 +636,8 @@ def prune(board, state, now):
         if not asker or line.get("session") == asker or epoch is None or (at and at <= epoch):
             return True
         key = (line.get("id"), line.get("ts"))
+        if (*key, asker) in to_coordinator:
+            return True  # the coordinator asked it itself: its prompt was the asker's copy
         return any((*key, role) in delivered for role in ("asker", "starter", "route"))
 
     def answered(item, qid, close):
@@ -1900,8 +1907,8 @@ def _carry_reads(verb, searches, keys):
     _print_carry(ticket_adapter.read_ops(searches, keys))
     print(
         f"board.py {verb}: carry the reads with your ticketing tool, then run it again with "
-        '--input FILE ({"hits": {state: [key or {key, changed}]}, "tickets": {key: {labels, '
-        "comments}}})",
+        '--input FILE ({"hits": {state: [key or {key, changed}]}, "tickets": {key: {status, '
+        "labels, comments}}})",
         file=sys.stderr,
     )
     return 0
@@ -2983,8 +2990,9 @@ def _human_of(m):
 def rule_owner(m):
     """With several humans only a human who owns the state the story leaves (`owns_states`)
     moves it on; out of a running state (`crew.RUNNING_STATES`) the refusal names the question
-    to its owner instead."""
-    if not crew_mod.several_humans(m.crew) or m.source is None:
+    to its owner instead. A ticket that already stands at the target, or past Selected on a late
+    `select` (`ticket_already`), leaves no state, so no owner is asked."""
+    if not crew_mod.several_humans(m.crew) or m.source is None or m.extra.get("ticket_already"):
         return []
     owners = crew_mod.state_owners(m.crew, m.source)
     if not owners:
@@ -3207,6 +3215,8 @@ def rule_pulled(m):
             ]
         m.extra["reopen"] = reason
         return []
+    if m.extra.get("ticket_already"):
+        return []
     if m.source != "selected":
         was = "no row" if m.source is None else f"its last row is {m.source}"
         return [
@@ -3219,6 +3229,8 @@ def rule_pulled(m):
 def rule_reviewed(m):
     if not crew_mod.maps_state(m.crew, "in_test"):
         return ["the crew maps no in_test status (crew.json board.states.in_test)"]
+    if m.extra.get("ticket_already"):
+        return []
     if m.source != "in_review":
         return [f"in_test needs the key to be in_review (it is {m.source or 'none'})"]
     return []
@@ -3342,7 +3354,9 @@ DONE_VIA_ACCEPT = (
 def rule_in_review(m):
     """Done comes from in_review, or from in_test; with an owner of in_test (several humans) only
     from in_test. `--already-fixed` (a story another merged PR already fixed) comes from any
-    state but done."""
+    state but done. A ticket already Done (`ticket_already`) gets its row."""
+    if m.extra.get("ticket_already"):
+        return []
     was = m.source or "none"
     if getattr(m.args, "already_fixed", None):
         return [f"{m.key} is done already"] if was == "done" else []
@@ -3526,6 +3540,9 @@ def _transition(state, args, crew, now, target, head):
     )
     m = Move(state, key, target, root, plan, crew, args)
     m.source = source
+    already = _ticket_already(crew, source, target)
+    if already:
+        m.extra["ticket_already"] = source
     for group, rule in ENTRY_RULES[target]:
         lines = rule(m)
         if lines:
@@ -3551,9 +3568,7 @@ def _transition(state, args, crew, now, target, head):
             "ticket": adapter.name,
         },
     )
-    ops = adapter.move(key, status)
-    if target == "selected":
-        ops += adapter.comment(key, _select_comment(m))
+    ops = _transition_ops(adapter, m, status, already)
     if "tier" in m.extra:
         print(f"tier: {m.extra['tier']}")
     if "round" in m.extra:
@@ -3612,6 +3627,36 @@ def _status_bus(crew):
     return crew_mod.several_humans(crew) and ticketing != "none"
 
 
+def _transition_ops(adapter, m, status, already):
+    """The carry of a written row: the transition (none when the ticket already stands there),
+    and for `selected` the select comment and the crew's `board.select_unlabel` labels."""
+    ops = [] if already else adapter.move(m.key, status)
+    if already:
+        print(f"ticket already {m.source}: no transition")
+    if m.target == "selected":
+        comment = _select_comment(m)
+        if already and m.source != m.target:
+            comment += f"\nThe ticket stays {m.source}."
+        ops += adapter.comment(m.key, comment)
+        for label in (m.crew.get("board") or {}).get("select_unlabel") or []:
+            ops += adapter.unlabel(m.key, label)
+    return ops
+
+
+FORWARD = ("backlog", "selected", "in_progress", "in_review", "in_test", "done")
+
+
+def _ticket_already(crew, source, target):
+    """With the ticket's status as the shared state: the ticket already stands at the target (a
+    human or a session moved it first), or past Selected when the story is selected late. The
+    row is still written; the ticket gets no transition back."""
+    if not _status_bus(crew) or source not in FORWARD or target not in FORWARD:
+        return False
+    if source == target:
+        return True
+    return target == "selected" and FORWARD.index(source) > FORWARD.index(target)
+
+
 def _source_state(state, adapter, crew, key, verb="move"):
     """The state a story leaves: with several humans the ticket's status (every machine moves
     the ticket, each keeps its own rows), `CARRY` while the session has to read it, refused
@@ -3622,6 +3667,11 @@ def _source_state(state, adapter, crew, key, verb="move"):
         if ticket is None:
             return CARRY
         status = ticket.get("status")
+        if status is None:
+            raise BoardError(
+                f"board.py {verb} {key}: refused: the --input file names no status for {key}: "
+                f'read the ticket and add "tickets": {{"{key}": {{"status": "<its status>", …}}}}'
+            )
         found = state_of_status(crew, status)
         if found is None:
             raise BoardError(
@@ -3744,6 +3794,9 @@ def move_done(
                 "--comment-file <the receipt comment> --input FILE`"
             )
     m.source = source
+    already = _ticket_already(crew, source, "done")
+    if already:
+        m.extra["ticket_already"] = source
     for _group, rule in ENTRY_RULES["done"]:
         lines = rule(m)
         if lines:
@@ -3763,7 +3816,10 @@ def move_done(
         "ticket": adapter.name,
     }
     state.record_transition(key, lambda _last: row)
-    ops = adapter.move(key, status) + adapter.comment(key, m.comment)
+    ops = [] if already else adapter.move(key, status)
+    if already:
+        print(f"ticket already {source}: no transition")
+    ops += adapter.comment(key, m.comment)
     sample = _sample(state, crew, key, now) if row["via"] == "receipt" else None
     return row, ops, sample
 

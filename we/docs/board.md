@@ -342,7 +342,7 @@ minutes. Per line it writes one row per recipient to
 | Recipient (`role`) | When | Carrier | Delivered when |
 |---|---|---|---|
 | `coordinator` (the orchestrator) | always, unless the line came from its own chat (`via: chat`, `session` = the orchestrator) | a prompt as if typed: `<id>: proposal accepted` (an Accept on a one-way `merge-go` with its PR, **Yes, I'll do it**: `<id>: the owner approves or merges <pr_url> by hand — do not merge or arm it; the question stays open until the PR is merged`; **Taken** on a task: `<id>: taken — the owner does this task; do not do it yourself`), `<id>: proposal denied`, `<id>: let's talk about it`, `<id>: I need more information` or `<id>: please check whether this question is still current and correctly worded (goal still active? needs an update?)`, then where it was written (`(answered from the board pane in <session>)`, `(answered in the chat of <session>)` or `(answered on ticket <KEY> (<human>))` after a space: transparency, no check), then on lines of their own the question (`The question: "<ask>"`), its recommendation (`The recommendation accepted: "…"`, `denied` on a Deny) and the owner's words when the line has a `quote` | the session stored the prompt as a user row |
-| `asker` (`owner_queue[].session`) | unless the line was written in the asker's own session; a question no longer on the board has none | a message to that session: the same text, for **Update** `check whether <id> is still current and well worded; re-ask it with a new id or withdraw it` | the engine queued it there |
+| `asker` (`owner_queue[].session`) | unless the line was written in the asker's own session, or the asker is the coordinator (its `coordinator` prompt carries the answer, and its delivered row lets `prune` drop the question); a question no longer on the board has none | a message to that session: the same text, for **Update** `check whether <id> is still current and well worded; re-ask it with a new id or withdraw it` | the engine queued it there |
 | `owner` (`owner_queue[].owner`) | unless it is the coordinator, the asker or the session that wrote the line | a message to that session: the coordinator's text plus `(copy for the owner of this subject)`; a refusal is a ledger row only, no routing line | the engine queued it there |
 | `starter` (`owner_queue[].starter`) | only on a question with `answer_to: asker`, once the asker refused or was not reached | a message to the asker's starter: the asker's text plus `(for <asker>, which did not take it: carry it on or act on it)` | the engine queued it there |
 | `route` (the orchestrator) | the asker was not reached (with `answer_to: asker` and a starter: the starter was not reached either) | a prompt: `<id>: the owner's answer (<kind>) did not reach <asker> (<reason>); wake that session or route the answer` | as `coordinator` |
@@ -370,7 +370,7 @@ Outcomes, each a row (readers fold the rows of one `id`, `answer_ts` and `role` 
 | both reached | `delivered: true` per recipient | `→ delivered to <asker> 16:08 UTC` |
 | the asker is unknown by that name, carried by two sessions, or stopped | asker `delivered: false` with the engine's reason; the routing prompt | `not delivered, with <orchestrator> (not reachable)`, `(name not unique)` or `(gone)` |
 | the asker's session holds the message (a `[Cross-session delivery notice]` naming it, usually another permission mode) | asker `delivered: false, reason: held`; the routing prompt | `not delivered, with <orchestrator> (held)` |
-| the orchestrator's prompt is never stored (a turn that started after it ended without it, or 30 s idle) | `reason: resubmitted`, the prompt once more; still none after the next turn: `delivered: false` and a toast there | `not delivered, with <orchestrator> (not stored after a resubmit)` |
+| the orchestrator's prompt is never stored (30 s idle after it; a turn that ends meanwhile is no miss, the prompt may be queued behind it) | `reason: resubmitted`, the prompt once more; still none after another 30 s idle: `delivered: false` and a toast there | `not delivered, with <orchestrator> (not stored after a resubmit)` |
 | the orchestrator's session is not running | a pane whose live column names it gone writes `delivered: false, reason: coordinator not running` for an answer a minute old with no row; the deliverer delivers it once it runs, its newer row replacing the marker | `not delivered, with <orchestrator> (not running)` |
 
 On start the deliverer reads the ledger first: a key with a verdict is never sent again, a key with
@@ -817,7 +817,11 @@ share. Only a human who owns the state a story leaves (`owns_states`; several hu
 state) moves it on; a refusal out of a running state (In Progress and later, `crew.RUNNING_STATES`)
 names the question to its owner, `board.py ask --to <owner>`, instead of the move. A status no
 `board.states` entry maps (a Jira "Blocked") has no known owner: with a ticketing system the move is
-refused, never decided by the local row. With an owner of `in_test`, Done comes only from In Test.
+refused, never decided by the local row; a `tickets` entry without `status` is refused as a form
+error. With an owner of `in_test`, Done comes only from In Test. A ticket that already stands at the
+target (a session moved it first), or past Selected when `select` comes late, gets its row and no
+transition (`ticket already <state>: no transition`), and no owner is asked: the ticket leaves no state; `select` then comments that the ticket stays.
+`board.select_unlabel` names labels `select` removes in its carry (an owner's release label).
 
 | Verb | What it does | Refusal |
 |---|---|---|

@@ -2467,6 +2467,18 @@ class TestJiraTransport:
         assert len(carried) == 2
         assert transitions(moving)[-1]["ticket"] == "pending"
 
+    def test_select_removes_the_crews_select_labels(self, moving, capsys):
+        """Red arm: every select needed the owner's release label removed by hand."""
+        with_jira(moving)
+        path = moving / "work" / ".weside" / "crew.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["board"]["select_unlabel"] = ["READY"]
+        path.write_text(json.dumps(data), encoding="utf-8")
+        green_lenses(moving)
+        assert act(moving, "select", KEY) == 0
+        carried = carry_of(capsys.readouterr().out)
+        assert carried[-1] == {"op": "unlabel", "key": KEY, "remove": "READY"}
+
     def test_a_refused_move_carries_nothing(self, moving, capsys):
         with_jira(moving)
         assert act(moving, "move", KEY, "in_progress") == 1
@@ -3447,6 +3459,22 @@ class TestPrune:
     def test_an_answer_from_the_askers_own_session_owes_it_nothing(self, crewless):
         epoch_row(crewless)
         answered(crewless, "Q7", "accept", "2026-11-03T09:59:00.000Z", session="asker")
+        go(crewless, "prune")
+        assert board_of(crewless)["owner_queue"] == []
+
+    def test_a_question_the_coordinator_asked_goes_once_its_prompt_is_delivered(self, crewless):
+        """Red arm: the coordinator as asker gets no asker row (deliver.ts `recipientsOf`); its
+        delivered coordinator row carries the answer, or the question stays on the queue."""
+        path = crewless / "board.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        next(q for q in data["owner_queue"] if q["id"] == "Q7")["session"] = "coord"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        epoch_row(crewless)
+        ts = "2026-11-03T09:59:00.000Z"
+        answered(crewless, "Q7", "accept", ts, session="foxy")
+        go(crewless, "prune")
+        assert [q["id"] for q in board_of(crewless)["owner_queue"]] == ["Q7"]
+        delivered_row(crewless, "Q7", ts, "2026-11-03T09:59:03.000Z")
         go(crewless, "prune")
         assert board_of(crewless)["owner_queue"] == []
 
