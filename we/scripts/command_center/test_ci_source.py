@@ -220,6 +220,9 @@ def test_queue_and_run_per_head(tmp_path, monkeypatch, gh):
     assert built["ci_line"] == f"CI wait: gh check runs, fetched_at {doc['fetched_at']}"
     page = fi.page_data(built)
     assert page["header"][2].startswith("CI wait: gh check runs, fetched_at ")
+    # the legend names only the reserved kinds without rows: waiting:ci has a swatch now
+    assert page["reserved"] == ["waiting:lock"]
+    assert "'waiting: CI'" in fi.render_page(page)
 
 
 def test_ttl_cache_and_gap_without_gh(tmp_path, monkeypatch, gh, capsys):
@@ -261,6 +264,7 @@ def test_ttl_cache_and_gap_without_gh(tmp_path, monkeypatch, gh, capsys):
     built = fi.build(board, mdir, log_dir, "UTC", crew, T0, until, ci=gone)
     assert not any(r["kind"] == "waiting:ci" for r in built["intervals"])
     assert "no data: ci (gh not found)" in [g["reason"] for g in built["gaps"]]
+    assert fi.page_data(built)["reserved"] == ["waiting:ci", "waiting:lock"]
     doc = fi.json_doc(built)
     assert doc["ci"]["gap"] == "no data: ci (gh not found)"
     calls = gh()

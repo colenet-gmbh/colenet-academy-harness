@@ -15,7 +15,8 @@ end). ``--snapshot [DIR]`` writes that document and the page as ``flow-<project>
 ``.html`` into DIR (default ``snapshot_dir()``: ``~/.claude/we-state/flow``) through a temp file and
 ``os.replace``, the JSON naming the page as ``page``; ``--snapshot-path`` prints the JSON's path
 and reads nothing else (the ``/flow`` pane's section Crew flow reads it from there). No verb writes
-anywhere else.
+anywhere else but the CI read's cache (``command_center/ci_source.py``, default
+``/tmp/we-ci-cache-<uid>``; none with ``--no-ci``).
 Write the file; publishing it is the caller's step. ``--since`` and ``--until`` take the forms of
 ``flow_report.py``. ``--board`` names the board whose logs to read (default: the crew's board,
 ``crew.resolve_board``); the sampler directory and the day zone come from the crew
@@ -49,7 +50,7 @@ is a stable hash of ``who, start, kind``; ``source`` names the file stem the row
 here: ``working``, ``waiting:human``, ``waiting:<role key>``, ``waiting:ci``, ``blocked``,
 ``idle-after-end``, ``idle``, ``parked``, ``no-data``, the overlay ``holding:<lock>`` (it may overlap
 the lane's other kinds) and ``stage:<to>`` on a story lane. ``RESERVED`` kinds are named in the
-tables when no row has them: ``waiting:lock`` has no producer (it needs a lock-wait event in the
+tables and the legend when no row has them: ``waiting:lock`` has no producer (it needs a lock-wait event in the
 flow log), ``waiting:ci`` has none on a run without CI rows (``--no-ci``, a gap, no session on a key). A
 ``--from`` file brings rows of any writer: a row without a required field or with an unparseable
 time is refused on stderr (``<file>:<line>: <reason>``) and becomes a gap; an unknown kind keeps its
@@ -1391,7 +1392,8 @@ def format_summary(s: dict) -> dict:
 
 
 def page_data(built: dict, notes=()) -> dict:
-    fmt = format_summary(summary(built))
+    raw = summary(built)
+    fmt = format_summary(raw)
     lanes = built["lanes"]
     intervals = []
     for r in built["intervals"]:
@@ -1412,7 +1414,7 @@ def page_data(built: dict, notes=()) -> dict:
         "gap_rows": built["gaps"],
         "lanes": [lanes[k] for k in sorted(lanes)],
         "intervals": intervals,
-        "reserved": list(RESERVED),
+        "reserved": [k for k in RESERVED if raw["waiting"].get(k, {}).get("no_source")],
         "summary": fmt,
     }
 
@@ -1525,7 +1527,7 @@ PAGE = """<!doctype html>
 
 CSS = """
 :root{--bg:#fbfbf9;--fg:#1d1d1b;--mut:#6b6b66;--line:#e2e2dc;--card:#fff;
---working:#2f9e5b;--human:#d1453b;--coord:#e08a1e;--role:#c9a227;--blocked:#8a4fc7;
+--working:#2f9e5b;--human:#d1453b;--coord:#e08a1e;--role:#c9a227;--ci:#2a8fa8;--blocked:#8a4fc7;
 --iae:#8c2f2f;--idle:#cfcfc8;--parked:#ececE6;--unknown:#9a9a9a;--hold:#3b6fd1;--gap:#f3e3c3}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#151514;--fg:#ececea;
 --mut:#9b9b95;--line:#30302d;--card:#1d1d1b;--idle:#45453f;--parked:#2a2a27;--gap:#4a3d22}}
@@ -1554,7 +1556,7 @@ h1{font-size:20px;margin:4px 0}h2{font-size:16px;margin:20px 0 6px}
 .axis{height:20px;position:relative;border-bottom:1px solid var(--line);font-size:11px;color:var(--mut)}
 .tick{position:absolute;top:2px;padding-left:3px;border-left:1px solid var(--line);height:18px;white-space:nowrap}
 .k-working{background:var(--working)}.k-waiting-human{background:var(--human)}
-.k-waiting-coordinator{background:var(--coord)}.k-waiting-role{background:var(--role)}
+.k-waiting-coordinator{background:var(--coord)}.k-waiting-role{background:var(--role)}.k-waiting-ci{background:var(--ci)}
 .k-blocked{background:var(--blocked)}.k-idle-after-end{background:var(--iae)}
 .k-idle{background:var(--idle)}.k-parked{background:var(--parked);border:1px dashed var(--line)}
 .k-unknown{background:var(--unknown)}
@@ -1581,7 +1583,7 @@ var T0=t(D.window.since),T1=t(D.window.until),SPAN=Math.max(1,T1-T0);
 function fmtT(ms){var d=new Date(ms);return d.toISOString().slice(5,16).replace('T',' ');}
 function dur(ms){var m=Math.round(ms/60000);return m>=60?(Math.floor(m/60)+' h '+(m%60)+' min'):(m+' min');}
 function kcls(k){if(k==='working'||k==='blocked'||k==='idle-after-end'||k==='idle'||k==='parked')return 'k-'+k;
- if(k==='waiting:human')return 'k-waiting-human';if(k==='waiting:coordinator')return 'k-waiting-coordinator';
+ if(k==='waiting:human')return 'k-waiting-human';if(k==='waiting:coordinator')return 'k-waiting-coordinator';if(k==='waiting:ci')return 'k-waiting-ci';
  if(k.indexOf('waiting:')===0)return 'k-waiting-role';if(k==='stage:in_review')return 'k-stage-review';
  if(k.indexOf('stage:')===0)return 'k-stage';return 'k-unknown';}
 var hdr=add(app,el('div','hdr'));
@@ -1606,7 +1608,7 @@ var ctl=add(app,el('div','ctl'));
 [['day',86400000],['3 days',3*86400000],['14 days',14*86400000]].forEach(function(z){var b=add(ctl,el('button',null,z[0]));
  b.type='button';b.onclick=function(){zoom=z[1];draw();};b.dataset.z=z[1];});
 var legend=add(app,el('div','legend'));
-[['working','working'],['waiting:human','waiting: human'],['waiting:coordinator','waiting: coordinator'],['waiting:product','waiting: other role'],
+[['working','working'],['waiting:human','waiting: human'],['waiting:coordinator','waiting: coordinator'],['waiting:product','waiting: other role'],['waiting:ci','waiting: CI'],
  ['blocked','blocked'],['idle-after-end','idle after end'],['idle','idle'],['parked','parked'],['stage:in_progress','story stage'],
  ['stage:in_review','waits on acceptance'],['x','other kind']].forEach(function(k){
  var s=add(legend,el('span'));add(s,el('i','sw '+kcls(k[0])));add(s,document.createTextNode(k[1]));});
