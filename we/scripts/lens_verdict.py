@@ -28,9 +28,9 @@ Usage:
                                                  panel above the round cap (see Round cap)
   lens_verdict.py check ID                       one line per lens and the panel; exit 0 only green
                                                  (a Ready plan neither here nor on origin/main
-                                                 is read in the worktree that holds it, else
-                                                 judged as its stored bound blob, else red:
-                                                 ``binding_elsewhere``)
+                                                 is read on its plan branch, else, with no
+                                                 branch holding it, judged as its stored bound
+                                                 blob, else red: ``binding_elsewhere``)
   lens_verdict.py post t2-prN                    post the panel comment on the PR's head (PASS or
                                                  FAIL); exit 0 only for a posted PASS
   lens_verdict.py samples [--keeper SLUG]        the sampled green verdicts nobody has read
@@ -464,43 +464,75 @@ def current_binding(
     return {"head": head}
 
 
-def _worktrees(root: Path) -> list[Path]:
-    """The other worktrees of ``root``'s repository (``git worktree list``), ``root`` left out."""
-    out = subprocess.run(
-        ["git", "-C", str(root), "worktree", "list", "--porcelain"],
+def _plan_on_branches(root: Path, rel: str, bound_blob: str | None) -> tuple[str, str] | None:
+    """(the branch, its blob of ``rel``) for the local or remote branch whose last commit to
+    ``rel`` is the newest, or None when no branch holds the file: a plan pushed on its plan branch
+    is read there, and an older copy on another branch never wins over it. A tie goes to a blob
+    other than ``bound_blob``, so an ambiguous read makes the panel stale, never green."""
+    refs = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/heads",
+            "refs/remotes",
+        ],
         capture_output=True,
         text=True,
         check=False,
-    )
-    here = root.resolve()
-    trees = [Path(line[9:]) for line in out.stdout.splitlines() if line.startswith("worktree ")]
-    return [t for t in trees if t.resolve() != here]
+    ).stdout.split()
+    best: tuple[tuple[int, bool], str, str] | None = None
+    for ref in refs:
+        if ref.endswith("/HEAD"):
+            continue
+        got = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--verify", "-q", f"{ref}:{rel}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        blob = got.stdout.strip()
+        if got.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40,64}", blob):
+            continue
+        ts = subprocess.run(
+            ["git", "-C", str(root), "log", "-1", "--format=%ct", ref, "--", rel],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        rank = (int(ts) if ts.isdigit() else 0, blob != bound_blob)
+        if best is None or rank > best[0]:
+            best = (rank, ref, blob)
+    return (best[1], best[2]) if best else None
 
 
 def binding_elsewhere(
     root: Path, vid: str, subject: str, plan: str | None, bound: dict[str, str]
 ) -> tuple[dict[str, str] | None, str]:
     """A Ready check where the plan is neither in this checkout nor on ``origin/main`` (it lives
-    only on its plan branch): (the binding, the line that says where it came from). First another
-    worktree of the repo that holds the plan file (its edits count, so a stale panel stays red),
-    else the bound blob when the object store or the copy beside the verdicts still holds it (the
-    panel is judged as bound; an edit made only on a branch without a worktree is not seen here);
-    (None, the refusal) when neither exists."""
+    only on its plan branch): (the binding, the line that says where it came from). First the plan
+    on its branch (``_plan_on_branches``; an edit pushed after the verdict makes the panel stale),
+    else, when no branch is reachable that holds it, the bound blob from the object store or the
+    copy beside the verdicts (the panel is judged as bound); (None, the refusal) when neither
+    exists."""
     rel = plan_path(root, subject, plan).relative_to(root).as_posix()
-    for tree in _worktrees(root):
-        if (tree / rel).is_file():
-            try:
-                found = current_binding(tree, "ready", subject, plan)
-            except (RefusedError, UnusableError):
-                continue
-            return found, f"panel {vid}: plan not in this checkout, read in the worktree {tree}"
+    found = _plan_on_branches(root, rel, bound.get("plan_blob"))
+    if found:
+        ref, blob = found
+        text = _blob_text(root, blob)
+        if text is not None:
+            return {"plan_blob": blob, "plan_subject": subject_hash(text)}, (
+                f"panel {vid}: plan not in this checkout nor on {PLAN_FALLBACK_REF}, read on {ref}"
+            )
     blob = bound.get("plan_blob")
     if blob and _blob_text(root, blob) is not None:
         return dict(bound), (
-            f"panel {vid}: plan not in this checkout nor on {PLAN_FALLBACK_REF} nor in a worktree;"
+            f"panel {vid}: plan not in this checkout nor on any branch;"
             f" checked against its bound blob {blob[:8]}"
         )
-    return None, f"plan {rel}: missing (here, on {PLAN_FALLBACK_REF} and in every worktree)"
+    return None, f"plan {rel}: missing (here, on {PLAN_FALLBACK_REF} and on every branch)"
 
 
 # --- crew ------------------------------------------------------------------------------------
