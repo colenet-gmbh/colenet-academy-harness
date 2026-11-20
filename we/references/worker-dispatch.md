@@ -92,7 +92,8 @@ template in force; the master's boot check and `/we:accept` read it there.
 `we-worker` and `worker_launch.py launch` refuse a start (exit 2, before any file or session) whose
 name does not start with the story key (crew `naming.key`, `<KEY>-<chunk>`; `worker_launch.py check`,
 its docstring owns the grammar), and a start without a brief (the last argument; a `--resume` needs
-none), window starts included. The brief's shape is not checked. A brief carries four Markdown
+none), with `--bg` or `--queue`, where nobody hands the task in later; a window worker may
+start empty. The brief's shape is not checked. A brief carries four Markdown
 headings, each with a body: `Ziel`/`Goal`, `Ausgabe`/`Output`, `Werkzeuge und Quellen`/`Tools and
 sources`, `Grenzen und wann stoppen`/`Limits and when to stop`.
 

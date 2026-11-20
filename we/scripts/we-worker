@@ -83,8 +83,8 @@
 # A flag before the claude args that neither we-worker nor `claude --help` knows refuses (a typo like
 # `--cwd` would otherwise reach claude as a prompt): run `we-worker <name> --tree <tree> …` instead.
 # A start refuses (exit 2, before any claude call) a name that does not start with the story key (crew
-# `naming.key`, `<key>-<chunk>`; `worker_launch.py check`). The brief is the last argument; a start
-# without one (none, or a flag last) refuses (exit 2), so does a last argument that is blank (`"$(cat <brief>)"` of an empty or unwritten
+# `naming.key`, `<key>-<chunk>`; `worker_launch.py check`). The brief is the last argument; a --bg
+# start without one (none, or a flag last) refuses (exit 2; a window start may be empty), so does a last argument that is blank (`"$(cat <brief>)"` of an empty or unwritten
 # file); a --resume needs none, its prompt is the brief when given. The brief also lands in
 # <state dir>/<name>.brief.md, which the worker's SessionStart hook names (`worker_launch.py
 # settings`): a SendMessage that reaches the new session before its start prompt pushes that prompt
