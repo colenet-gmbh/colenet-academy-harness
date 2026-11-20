@@ -23,6 +23,24 @@ step, refreshed from git and GitHub, with buttons for the next command.
 
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE) · Tour: [plugin.weside.ai/tour](https://plugin.weside.ai/tour/) · Docs: [docs/README.md](docs/README.md)
 
+## colenet-academy fork
+
+This repository is Colenet GmbH's fork of [weside-ai/claude-code-plugin](https://github.com/weside-ai/claude-code-plugin)
+for [colenet-academy](https://github.com/colenet-gmbh/colenet-academy). The marketplace is named `colenet-academy`; the
+plugin keeps its name `we`, so commands stay `/we:*` and the install id is `we@colenet-academy`. colenet-academy pins
+this fork to an annotated tag `academy-<we version>-<n>` (first: `academy-9.13.1-1`); the pin and how it moves are
+described in colenet-academy's `docs/operations/plugin-pin.md`.
+
+The flow is one-way, from weside to this fork:
+
+- **Pull upstream:** `git remote add upstream https://github.com/weside-ai/claude-code-plugin.git` (once), then on a
+  branch `git fetch upstream && git merge upstream/main` (a merge commit, never a rebase of `main`), resolve the
+  marketplace name in `.claude-plugin/marketplace.json` in favour of `colenet-academy`, PR into this fork's `main`,
+  merge, then an annotated tag `academy-<we version>-<n>` on the merge commit. colenet-academy moves its pin in one PR.
+- **Never push from here upstream:** this fork's `main` carries the rename and must not reach weside.
+- **An improvement for weside** goes as a PR to `weside-ai/claude-code-plugin` from a branch cut from `upstream/main`
+  (not from this fork's `main`); once weside merges it, it reaches this fork with the next upstream pull.
+
 ## Install
 
 ```text
