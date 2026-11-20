@@ -1,9 +1,8 @@
 {
-  "name": "weside-ai",
-  "description": "weside.ai — Agentic Product Ownership for development teams",
+  "name": "colenet-academy",
+  "description": "Colenet GmbH fork of the weside.ai we plugin, pinned for colenet-academy",
   "owner": {
-    "name": "weside.ai",
-    "email": "info@weside.ai"
+    "name": "Colenet GmbH"
   },
   "plugins": [
     {
