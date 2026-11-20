@@ -280,7 +280,9 @@ def of(rows, who, kind=None):
 
 
 def run_cli(root, capsys, *argv):
-    code = fi.main(list(argv), cwd=root)
+    """`main` without gh: `--no-ci` unless the test hands its own CI flags."""
+    extra = [] if "--ci-fake" in argv else ["--no-ci"]
+    code = fi.main([a for a in argv if a != "--ci-fake"] + extra, cwd=root)
     out = capsys.readouterr()
     return code, out.out, out.err
 
@@ -313,7 +315,7 @@ def test_intervals_from_fixture_sources(tmp_path, monkeypatch, capsys):
         "holding:gates",
         "holding:tests",
     }
-    assert {r["kind"] for r in rows} <= known
+    assert {r["kind"] for r in rows if not r["kind"].startswith("stage:")} <= known
     a7 = of(rows, "alpha-7")
     # a busy probe beats an open wait; the idle rest of that wait is the wait
     assert [(r["start"], r["end"]) for r in of(a7, "alpha-7", "working")] == [
@@ -344,6 +346,13 @@ def test_intervals_from_fixture_sources(tmp_path, monkeypatch, capsys):
     # stderr names every source with its rows and intervals, and the skipped waits row
     for source in ("sampler", "waits", "blocked", "questions", "answers", "transitions", "marker"):
         assert re.search(rf"flow_intervals: {source}: \d+ rows read.*, \d+ intervals", err), source
+    # AC3: answers count the question waits an answer ended, transitions the story stages
+    answered = re.search(r"flow_intervals: answers: (\d+) rows read.*, (\d+) intervals", err)
+    staged = re.search(r"flow_intervals: transitions: (\d+) rows read.*, (\d+) intervals", err)
+    assert int(answered.group(1)) > 0 and int(answered.group(2)) > 0, err
+    assert int(staged.group(1)) > 0 and int(staged.group(2)) > 0, err
+    stage_rows = [r for r in rows if r["kind"].startswith("stage:")]
+    assert int(staged.group(2)) == len(stage_rows)
     assert "waits row skipped" in err and "'garbage'" in err
 
 
@@ -703,7 +712,7 @@ def test_page_self_contained_and_escaped(tmp_path, monkeypatch):
     assert data["header"][:3] == [
         "one probe every 300 s: each bar edge ±5 min",
         "Not counted: waiting that only transcripts show; this page has no such source.",
-        "CI wait: no source yet",
+        "CI wait: off (--no-ci)",
     ]
     assert data["header"][3] == "see <b>this</b>" and "<b>" not in text
     # control: without the escaping the key closes the data block early
@@ -889,9 +898,11 @@ def test_one_project_per_page_and_table(tmp_path, monkeypatch, capsys):
     assert "'Project: '+D.project" in text
     data = page_json(text)
     assert data["project"] == PROJECT
-    lanes = {lane["name"] for lane in data["lanes"]}
+    lanes = {lane["name"] for lane in data["lanes"] if lane["group"] != "stories"}
     assert lanes == {"alpha-7", "ABC-1-build", "ABC-7-late", "ext-mine", "ext-plain"}
-    assert {r["who"] for r in data["intervals"]} == lanes
+    stories = {lane["name"] for lane in data["lanes"] if lane["group"] == "stories"}
+    assert stories == {"ABC-7"}  # its transitions draw the story's stage lane
+    assert {r["who"] for r in data["intervals"]} == lanes | stories
     assert not any(r["kind"].startswith("holding:") for r in data["intervals"])
     att = data["attribution"]
     # 145 probes: alpha-7 every probe, ABC-1-build to 06:00; other-1, stray-9, XYZ-1-build dropped

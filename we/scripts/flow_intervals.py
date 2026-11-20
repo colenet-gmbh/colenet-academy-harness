@@ -95,6 +95,7 @@ import hashlib
 import html
 import json
 import math
+import os
 import re
 import statistics
 import sys
@@ -111,11 +112,19 @@ import crew as crew_mod  # noqa: E402
 import flow_log  # noqa: E402
 import worker_supervisor  # noqa: E402
 
+if str(HERE / "command_center") not in sys.path:
+    sys.path.insert(0, str(HERE / "command_center"))
+
 ISO = "%Y-%m-%dT%H:%M:%SZ"
 REQUIRED = ("id", "start", "end", "kind", "who", "source")
 NO_PROJECT = "none (no crew stamp, no crew, no --project)"
 RESERVED = ("waiting:ci", "waiting:lock")
 OVERLAY = "holding:"
+STAGE = "stage:"
+ASIDE = (OVERLAY, STAGE)  # kinds beside the session lanes: counted in no ratio, no wait
+ACCEPTANCE = "waits on acceptance"
+TERMINAL = {"done"}
+SCHEMA_VERSION = 1
 NOT_WAITING = {"working", "no-data"}
 FIXED_SENTENCE = "Not counted: waiting that only transcripts show; this page has no such source."
 CI_LINE = "CI wait: no source yet"
@@ -639,10 +648,40 @@ def _question_rows(src, questions, answers, out) -> None:
         if not isinstance(q.get("session"), str):
             continue
         end = answered
+        if answered is not None:
+            src.counts["answers"]["intervals"] += 1
         if end is None:
             shut = closed.get(q.get("id"))
             end = shut if shut is not None and shut >= ts else src.until
         out[q["session"]].append((ts, end, 0, "waiting:human", "human", "questions", q.get("key")))
+
+
+def _stage_rows(src, transitions, since, until, lanes: dict) -> list:
+    """The stage rows; per story key one lane in group `stories` (added to `lanes`), one `stage:<to>` interval per
+    move from that move to the next (the last open to the window end), clipped to the window; a
+    terminal stage (`done`) draws none. `in_review` carries `label` "waits on acceptance"."""
+    by_key: dict = defaultdict(list)
+    for t in transitions:
+        ts = parse_ts(t.get("ts"))
+        if isinstance(t.get("key"), str) and ts and isinstance(t.get("to"), str) and t["to"]:
+            by_key[t["key"]].append((ts, t["to"]))
+    rows = []
+    for key, items in sorted(by_key.items()):
+        items.sort(key=lambda x: x[0])
+        for i, (ts, to) in enumerate(items):
+            end = items[i + 1][0] if i + 1 < len(items) else until
+            start, end = max(ts, since), min(end, until)
+            if to in TERMINAL or start >= end:
+                continue
+            extra = {"label": ACCEPTANCE} if to == "in_review" else {}
+            rows.append(row(start, end, f"{STAGE}{to}", key, "transitions", key=key, **extra))
+            src.counts["transitions"]["intervals"] += 1
+            lanes.setdefault(key, _bare_lane(key, "stories"))
+    return rows
+
+
+def _aside(kind: str) -> bool:
+    return kind.startswith(ASIDE)
 
 
 def _classify(a, b, waits, tail, starter):
@@ -650,10 +689,10 @@ def _classify(a, b, waits, tail, starter):
     active = [w for w in waits if w[0] <= a and w[1] >= b]
     if active:
         w = min(active, key=lambda w: (w[2], w[0]))
-        return w[3], w[4], w[5], w[6]
+        return w[3], w[4], w[5], w[6], (w[7] if len(w) > 7 else {})
     if tail:
-        return "idle-after-end", starter, "sampler", None
-    return "idle", None, "sampler", None
+        return "idle-after-end", starter, "sampler", None, {}
+    return "idle", None, "sampler", None, {}
 
 
 def _merge(rows: list) -> list:
@@ -664,7 +703,8 @@ def _merge(rows: list) -> list:
             last
             and last["who"] == r["who"]
             and last["end"] == r["start"]
-            and all(last.get(k) == r.get(k) for k in ("kind", "waiting_on", "key", "source"))
+            and all(last.get(k) == r.get(k) for k in ("kind", "waiting_on", "key", "source", "pr"))
+            and last.get("queue_s") == r.get("queue_s")
         ):
             last["end"] = r["end"]
             continue
@@ -758,7 +798,7 @@ def _run_rows(name: str, run: list, role, starter, ctx: dict) -> list:
         tail = role == "worker" and ended and last_busy is not None and k > last_busy
         cuts = sorted({a, b} | {t for w in lane_waits for t in (w[0], w[1]) if a < t < b})
         for x, y in zip(cuts, cuts[1:]):
-            kind, raw, source, wkey = _classify(x, y, lane_waits, tail, starter)
+            kind, raw, source, wkey, extra = _classify(x, y, lane_waits, tail, starter)
             target = resolve(raw, ctx["lanes_cf"], ctx["crew"])
             rows.append(
                 row(
@@ -770,12 +810,48 @@ def _run_rows(name: str, run: list, role, starter, ctx: dict) -> list:
                     key=wkey or p.get("key"),
                     role=role,
                     waiting_on=target,
+                    **extra,
                 )
             )
     return rows
 
 
-def build(board, state_dir, log_dir, tz, crew, since, until, foreign=(), project=None) -> dict:
+CI_PRIO = 9  # below every recorded wait; a busy probe beats it anyway
+
+
+def _ci_waits(src, ci: dict | None, transitions, probes, crew, explicit) -> str:
+    """Lay each PR head's `waiting:ci` on the lanes whose probes carry its key inside the head's
+    span (lowest priority: only an idle stretch shows it); returns the page's CI line."""
+    src.counts.setdefault("ci", {"rows": 0, "bad": 0, "intervals": 0})
+    if ci is None:  # chosen, not missing: named in the header and the JSON's `ci`, no gap row
+        return "CI wait: off (--no-ci)"
+    if ci.get("state") == "gap":
+        src.gap("ci", ci.get("gap") or "no data: ci")
+        return f"CI wait: {ci.get('gap') or 'no data: ci'}"
+    import ci_source  # noqa: PLC0415 (command_center/, on sys.path below)
+
+    pattern = (crew.get("naming") or {}).get("key") or r"[A-Z]+-\d+"
+    for key, heads in ci_source.by_key(ci, transitions, pattern).items():
+        for h in heads:
+            a, b = parse_ts(h["start"]), parse_ts(h["end"])
+            if not (a and b and a < b):
+                continue
+            src.counts["ci"]["rows"] += 1
+            extra = {
+                "pr": h["pr"],
+                "queue_s": h["queue_s"],
+                "run_s": h["run_s"],
+                "checks": h["checks"],
+            }
+            for name, plist in probes.items():
+                if any(p.get("key") == key and a <= p["ts"] <= b for p in plist):
+                    explicit[name].append((a, b, CI_PRIO, "waiting:ci", "ci", "ci", key, extra))
+    return f"CI wait: gh check runs, fetched_at {ci.get('fetched_at')}"
+
+
+def build(
+    board, state_dir, log_dir, tz, crew, since, until, foreign=(), project=None, ci=None
+) -> dict:
     """The one builder both readers call: `{intervals, gaps, counts, lanes, transitions, markers,
     interval_s, missing_started, project, attribution}`; only rows of `project` (module docstring
     § Project)."""
@@ -822,6 +898,7 @@ def build(board, state_dir, log_dir, tz, crew, since, until, foreign=(), project
             if isinstance(entry, dict) and isinstance(entry.get("name"), str) and entry["name"]:
                 probes[entry["name"]].append({"ts": ts, **entry})
     lanes_cf = _lane_lookup(probes)
+    ci_line = _ci_waits(src, ci, transitions, probes, crew, explicit)
     member_cf = set()
     for slug, entry in (crew.get("members") or {}).items():
         member_cf.add(str(slug).casefold())
@@ -856,13 +933,14 @@ def build(board, state_dir, log_dir, tz, crew, since, until, foreign=(), project
 
     rows += _holding(samples, gapmax, lanes_cf, lanes)
     rows = _merge(rows)
+    rows += _stage_rows(src, transitions, since, until, lanes)
     rows += rows_from
     for r in rows_from:
         lanes.setdefault(r["who"], _bare_lane(r["who"], "foreign", r.get("role")))
     rows = _cut(rows, src.cuts)
     for r in rows:
         key = r["source"] if r["source"] in src.counts else None
-        if key:
+        if key and key != "transitions":  # `_stage_rows` counts its own
             src.counts[key]["intervals"] += 1
     return {
         "intervals": rows,
@@ -878,6 +956,8 @@ def build(board, state_dir, log_dir, tz, crew, since, until, foreign=(), project
         "until": until,
         "project": project,
         "attribution": attribution,
+        "ci": ci,
+        "ci_line": ci_line,
     }
 
 
@@ -987,7 +1067,7 @@ def _unsampled_waits(explicit: dict, lanes: dict, ctx: dict, since) -> list:
     for name, lw in explicit.items():
         if name in lanes:
             continue
-        for w_start, w_end, _prio, kind, raw, source, key in lw:
+        for w_start, w_end, _prio, kind, raw, source, key, *_extra in lw:
             start, end = max(w_start, since), min(w_end, ctx["until"])
             target = resolve(raw, ctx["lanes_cf"], ctx["crew"])
             if start < end:
@@ -1075,7 +1155,7 @@ def _waiting(rows) -> dict:
     waiting: dict = {}
     by_kind: dict = defaultdict(list)
     for r in rows:
-        if r["kind"] in NOT_WAITING or r["kind"].startswith(OVERLAY):
+        if r["kind"] in NOT_WAITING or _aside(r["kind"]):
             continue
         by_kind[r["kind"]].append(_h(r))
     for kind in sorted(set(by_kind) | set(RESERVED)):
@@ -1103,15 +1183,11 @@ def summary(built: dict) -> dict:
 
     waited_on: dict = defaultdict(float)
     for r in rows:
-        if (
-            r.get("waiting_on")
-            and r["waiting_on"] != r["who"]
-            and not r["kind"].startswith(OVERLAY)
-        ):
+        if r.get("waiting_on") and r["waiting_on"] != r["who"] and not _aside(r["kind"]):
             waited_on[r["waiting_on"]] += _h(r)
 
     masters, workers = [], []
-    alive_kinds = lambda k: k not in ("parked", "no-data") and not k.startswith(OVERLAY)  # noqa: E731
+    alive_kinds = lambda k: k not in ("parked", "no-data") and not _aside(k)  # noqa: E731
     for name in sorted(lanes):
         lane = lanes[name]
         mine = by_who.get(name, [])
@@ -1160,12 +1236,12 @@ def summary(built: dict) -> dict:
         for r in rows
         if r.get("waiting_on") or r["kind"].startswith("waiting:") or r["kind"] == "blocked"
     ]
-    waits = [r for r in waits if not r["kind"].startswith(OVERLAY)]
+    waits = [r for r in waits if not _aside(r["kind"])]
     top = sorted(waits, key=lambda r: (-_h(r), r["start"], r["who"]))[:10]
 
     matrix: dict = defaultdict(lambda: defaultdict(float))
     for r in rows:
-        if r.get("waiting_on") and not r["kind"].startswith(OVERLAY):
+        if r.get("waiting_on") and not _aside(r["kind"]):
             matrix[r["who"]][r["waiting_on"]] += _h(r)
 
     return {
@@ -1314,7 +1390,7 @@ def page_data(built: dict, notes=()) -> dict:
         "attribution": built.get("attribution"),
         "window": {"since": iso(built["since"]), "until": iso(built["until"])},
         "interval_s": built["interval_s"],
-        "header": [fmt["sample_error"], FIXED_SENTENCE, CI_LINE, *notes],
+        "header": [fmt["sample_error"], FIXED_SENTENCE, built.get("ci_line") or CI_LINE, *notes],
         "gaps": [
             {"reason": g["reason"], "start": g["start"], "end": g["end"], "source": g["source"]}
             for g in built["gaps"]
@@ -1325,6 +1401,77 @@ def page_data(built: dict, notes=()) -> dict:
         "reserved": list(RESERVED),
         "summary": fmt,
     }
+
+
+def now_rows(built: dict) -> list:
+    """Per lane its interval that is still open at the window's end: who works and who waits now,
+    since when and on whom; story lanes give their stage. Overlays left out."""
+    until = iso(built["until"])
+    out = []
+    for r in built["intervals"]:
+        if r["end"] != until or r["kind"].startswith(OVERLAY) or r["who"] == "-":
+            continue
+        lane = built["lanes"].get(r["who"]) or {}
+        out.append(
+            {
+                "who": r["who"],
+                "group": lane.get("group"),
+                "starter": lane.get("starter"),
+                "kind": r["kind"],
+                "since": r["start"],
+                "waiting_on": r.get("waiting_on"),
+                "key": r.get("key"),
+                "label": r.get("label"),
+            }
+        )
+    return sorted(out, key=lambda x: (str(x["group"]), x["since"], x["who"]))
+
+
+def json_doc(built: dict, notes=(), generated_at: datetime | None = None) -> dict:
+    """`--json`: one document, its field list pinned by `test_flow_intervals_json_snapshot`."""
+    data = page_data(built, notes)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": iso(generated_at or datetime.now(timezone.utc)),
+        "project": data["project"],
+        "window": data["window"],
+        "header": data["header"],
+        "sources": built["counts"],
+        "ci": built.get("ci")
+        or {"state": "off", "gap": "ci: off (--no-ci)", "fetched_at": None, "prs": []},
+        "lanes": data["lanes"],
+        "now": now_rows(built),
+        "intervals": sorted(built["intervals"], key=lambda r: (r["who"], r["start"], r["kind"])),
+        "gaps": built["gaps"],
+        "summary": data["summary"],
+    }
+
+
+def snapshot_dir() -> Path:
+    """Where the `/flow` pane reads the last snapshot: `~/.claude/we-state/flow`."""
+    return Path.home() / ".claude" / "we-state" / "flow"
+
+
+def snapshot_paths(directory: Path, project: str | None) -> tuple:
+    """`(json, html)` of the snapshot of `project` in `directory`."""
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", project or "none").strip("-.") or "none"
+    return directory / f"flow-{slug}.json", directory / f"flow-{slug}.html"
+
+
+def write_snapshot(directory: Path, built: dict, notes=()) -> tuple:
+    """Both snapshot files through a temp file and `os.replace`: a reader never sees half."""
+    directory.mkdir(parents=True, exist_ok=True)
+    js, page = snapshot_paths(directory, built.get("project"))
+    doc = json_doc(built, notes)
+    doc["page"] = str(page)
+    for path, text in (
+        (page, render_page(page_data(built, notes))),
+        (js, json.dumps(doc, ensure_ascii=False, indent=1)),
+    ):
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    return js, page
 
 
 def embed_json(data: dict, escape: bool = True) -> str:
@@ -1392,6 +1539,7 @@ h1{font-size:20px;margin:4px 0}h2{font-size:16px;margin:20px 0 6px}
 .k-blocked{background:var(--blocked)}.k-idle-after-end{background:var(--iae)}
 .k-idle{background:var(--idle)}.k-parked{background:var(--parked);border:1px dashed var(--line)}
 .k-unknown{background:var(--unknown)}
+.k-stage{background:var(--idle);border:1px solid var(--working)}.k-stage-review{background:var(--human);opacity:.6}
 .legend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12px;margin:8px 0}
 .legend span{display:inline-flex;align-items:center;gap:4px}.sw{width:12px;height:10px;display:inline-block;border-radius:2px}
 .tip{position:fixed;left:8px;right:8px;bottom:8px;background:var(--card);border:1px solid var(--fg);border-radius:8px;
@@ -1415,7 +1563,8 @@ function fmtT(ms){var d=new Date(ms);return d.toISOString().slice(5,16).replace(
 function dur(ms){var m=Math.round(ms/60000);return m>=60?(Math.floor(m/60)+' h '+(m%60)+' min'):(m+' min');}
 function kcls(k){if(k==='working'||k==='blocked'||k==='idle-after-end'||k==='idle'||k==='parked')return 'k-'+k;
  if(k==='waiting:human')return 'k-waiting-human';if(k==='waiting:coordinator')return 'k-waiting-coordinator';
- if(k.indexOf('waiting:')===0)return 'k-waiting-role';return 'k-unknown';}
+ if(k.indexOf('waiting:')===0)return 'k-waiting-role';if(k==='stage:in_review')return 'k-stage-review';
+ if(k.indexOf('stage:')===0)return 'k-stage';return 'k-unknown';}
 var hdr=add(app,el('div','hdr'));
 add(hdr,el('h1',null,'Crew flow \u00b7 '+D.project));
 add(hdr,el('p',null,'Project: '+D.project));
@@ -1426,7 +1575,7 @@ var byWho={};D.intervals.forEach(function(r){(byWho[r.who]=byWho[r.who]||[]).pus
 var lanes={};D.lanes.forEach(function(l){lanes[l.name]=l;});
 var open={};
 function order(){var out=[];var groups=[['masters','Masters'],['companions','Companions'],['other','Other sessions'],
- ['workers','Workers without a master on the page'],['lock holders','Lock holders'],['foreign','Foreign rows']];
+ ['workers','Workers without a master on the page'],['stories','Stories (stage)'],['lock holders','Lock holders'],['foreign','Foreign rows']];
  var kids={};D.lanes.forEach(function(l){if(l.group==='workers'&&l.parent&&lanes[l.parent])(kids[l.parent]=kids[l.parent]||[]).push(l.name);});
  groups.forEach(function(g){var names=D.lanes.filter(function(l){return l.group===g[0]&&byWho[l.name]&&!(g[0]==='workers'&&l.parent&&lanes[l.parent]);}).map(function(l){return l.name;});
   if(!names.length)return;out.push({grp:g[1]});
@@ -1439,7 +1588,8 @@ var ctl=add(app,el('div','ctl'));
  b.type='button';b.onclick=function(){zoom=z[1];draw();};b.dataset.z=z[1];});
 var legend=add(app,el('div','legend'));
 [['working','working'],['waiting:human','waiting: human'],['waiting:coordinator','waiting: coordinator'],['waiting:product','waiting: other role'],
- ['blocked','blocked'],['idle-after-end','idle after end'],['idle','idle'],['parked','parked'],['x','other kind']].forEach(function(k){
+ ['blocked','blocked'],['idle-after-end','idle after end'],['idle','idle'],['parked','parked'],['stage:in_progress','story stage'],
+ ['stage:in_review','waits on acceptance'],['x','other kind']].forEach(function(k){
  var s=add(legend,el('span'));add(s,el('i','sw '+kcls(k[0])));add(s,document.createTextNode(k[1]));});
 var hs=add(legend,el('span'));add(hs,el('i','sw hold'));hs.firstChild.style.position='static';add(hs,document.createTextNode('holding a lock'));
 D.reserved.forEach(function(k){add(legend,el('span','mut',k+': no source yet'));});
@@ -1447,7 +1597,7 @@ var chart=add(app,el('div','chart'));var labels=add(chart,el('div','labels'));va
 var tip=add(document.body,el('div','tip'));
 function show(r){tip.textContent='';var a=t(r.start),b=t(r.end);
  [['kind',r.kind],['who',r.who],['from',fmtT(a)+' \u2192 '+fmtT(b)],['duration',dur(b-a)],['key',r.key||'-'],
-  ['waiting on',r.waiting_on||'-'],['source',r.source]].forEach(function(p){var d=add(tip,el('div'));add(d,el('b',null,p[0]+': '));add(d,document.createTextNode(p[1]));});
+  ['waiting on',r.waiting_on||r.label||'-'],['source',r.source]].forEach(function(p){var d=add(tip,el('div'));add(d,el('b',null,p[0]+': '));add(d,document.createTextNode(p[1]));});
  tip.style.display='block';}
 document.addEventListener('click',function(e){if(!e.target.classList||!e.target.classList.contains('bar'))tip.style.display='none';});
 function draw(){Array.prototype.forEach.call(ctl.children,function(b){b.className=(+b.dataset.z===zoom)?'on':'';});
@@ -1536,6 +1686,16 @@ def starterless(built: dict) -> list:
     )
 
 
+def ci_doc(cwd: Path, since: datetime, until: datetime) -> dict:
+    """The CI source's document for the repo at `cwd` (`command_center/ci_source.py`)."""
+    import ci_source  # noqa: PLC0415
+
+    fr = ci_source.fr
+    return ci_source.collect(
+        fr.norm_slug(fr.git(cwd, "remote", "get-url", "origin")), since, until
+    )
+
+
 def report_sources(built: dict, out=None) -> None:
     out = out or sys.stderr
     for name, c in sorted(built["counts"].items()):
@@ -1575,6 +1735,18 @@ def main(argv=None, now: datetime | None = None, cwd: Path | None = None) -> int
     fmt = p.add_mutually_exclusive_group()
     fmt.add_argument("--jsonl", action="store_true")
     fmt.add_argument("--html", metavar="FILE")
+    fmt.add_argument("--json", action="store_true", help="one document (schema_version)")
+    fmt.add_argument(
+        "--snapshot",
+        nargs="?",
+        const="",
+        metavar="DIR",
+        help="write flow-<project>.json and .html to DIR (default: snapshot_dir())",
+    )
+    fmt.add_argument(
+        "--snapshot-path", action="store_true", help="print the snapshot's JSON path and stop"
+    )
+    p.add_argument("--no-ci", action="store_true", help="read no CI source (no gh call)")
     args = p.parse_args(argv)
     if args.until:
         now = parse_ts(args.until if args.until.endswith("Z") else args.until + "Z")
@@ -1597,11 +1769,39 @@ def main(argv=None, now: datetime | None = None, cwd: Path | None = None) -> int
         if stamp and stamp != args.project:
             p.error(f"--project {args.project!r}: the board {board} belongs to {stamp!r}")
         project = args.project
+    if args.snapshot_path:
+        print(snapshot_paths(snapshot_dir(), project)[0])
+        return 0
     log_dir, tz = settings_for(crew)
+    ci = None if args.no_ci else ci_doc(cwd, since, now)
     built = build(
-        board, worker_supervisor.state_dir(), log_dir, tz, crew, since, now, args.from_, project
+        board,
+        worker_supervisor.state_dir(),
+        log_dir,
+        tz,
+        crew,
+        since,
+        now,
+        args.from_,
+        project,
+        ci,
     )
     report_sources(built)
+    return _emit(args, built)
+
+
+def _emit(args, built: dict) -> int:
+    """Print or write `built` in the form the flags chose."""
+    if args.snapshot is not None:
+        js, page = write_snapshot(
+            Path(args.snapshot).expanduser() if args.snapshot else snapshot_dir(), built, args.note
+        )
+        print(f"flow_intervals: wrote {js} and {page}", file=sys.stderr)
+        print(js)
+        return 0
+    if args.json:
+        print(json.dumps(json_doc(built, args.note), ensure_ascii=False, indent=1))
+        return 0
     if args.html:
         Path(args.html).write_text(render_page(page_data(built, args.note)), encoding="utf-8")
         print(f"flow_intervals: wrote {args.html}", file=sys.stderr)
