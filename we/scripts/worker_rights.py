@@ -28,6 +28,8 @@ of `worker_rights.repos`, a worker with a story key, on a branch that is not the
 carries that key, may run without asking
   `gh pr ready` (`pr_ready`) and `gh pr comment` (`pr_comment`), with no selector or one naming the PR
   whose head is its branch in its repo (`gh pr view --json` resolves it; a `gh` failure denies);
+  `pr_ready.sh <PR> ready|undo` is a form of `pr_ready` and must name that own PR (its `gh pr edit`
+  of the `**Draft:**` line rides along);
   the crew's `branch_rc` command prefix (a branch RC: the repo's pre-push guard holds the receipt).
 PR owner rights (`build.pr_owner: worker` of `.weside/config.json`, read from the default branch of
 origin like the crew; `pr_owner_on_default`): the worker carries its own PR, so under the same key and
@@ -552,6 +554,8 @@ def right_of(argv: list[str], rights: dict, owner: str = "master") -> str | None
             and "resolveReviewThread" in " ".join(args)
         ):
             return "resolve_thread"
+    if _script_argv(argv, "pr_ready.sh"):
+        return "pr_ready"
     if owner == "worker":
         if name == "git" and _git_split(argv)[0][:1] == ["push"]:
             return "push"
@@ -742,14 +746,38 @@ def _merge_refusal(args: list[str], cwd: str | None) -> str | None:
     return None
 
 
-def _arm_argv(argv: list[str]) -> list[str]:
-    """`arm_pr.sh` and its arguments, run directly or by a shell (`bash arm_pr.sh 7`), else []."""
+def _script_argv(argv: list[str], script: str) -> list[str]:
+    """`script` and its arguments, run directly or by a shell (`bash arm_pr.sh 7`), else []."""
     for k, tok in enumerate(argv[:2]):
-        if os.path.basename(tok) == "arm_pr.sh" and (
-            k == 0 or os.path.basename(argv[0]) in SHELLS
-        ):
+        if os.path.basename(tok) == script and (k == 0 or os.path.basename(argv[0]) in SHELLS):
             return argv[k:]
     return []
+
+
+def _arm_argv(argv: list[str]) -> list[str]:
+    """`arm_pr.sh` and its arguments, run directly or by a shell, else []."""
+    return _script_argv(argv, "arm_pr.sh")
+
+
+def _ready_script_refusal(
+    run: list[str], slug: str | None, branch: str, cwd: str | None, deadline: float | None = None
+) -> str | None:
+    """Why `pr_ready.sh <PR> …` (`run`) does not name this branch's own PR in `slug`, else None."""
+    repo = _flag_value(run[1:], "--repo", "-R")
+    if repo and slug_of(repo) != slug:
+        return f"{repo} is another repo than {slug}"
+    selector, k = None, 1
+    while k < len(run):
+        if run[k] in ("--sha", "--repo", "-R"):
+            k += 2
+            continue
+        if not run[k].startswith("-"):
+            selector = run[k]
+            break
+        k += 1
+    if selector is None:
+        return "pr_ready.sh without a PR"
+    return _own_pr_refusal(selector, slug, branch, cwd, deadline)
 
 
 def _arm_refusal(
@@ -825,6 +853,9 @@ def right_refusal(  # noqa: PLR0911, PLR0912
         return _push_refusal(argv, key, cwd)
     if right == "arm":
         return _arm_refusal(argv, slug, branch, cwd, deadline)
+    ready_run = _script_argv(argv, "pr_ready.sh")
+    if right == "pr_ready" and ready_run:
+        return _ready_script_refusal(ready_run, slug, branch, cwd, deadline)
     args, global_repo = _gh_split(argv)
     named = global_repo or _repo_flag(args)
     if named and slug_of(named) != slug:
@@ -1115,6 +1146,8 @@ def settings(repo: str | Path, key: str, starter: str | None = None) -> dict:
     if opted_in(rights, origin_slug(repo)):
         if rights.get("pr_ready"):
             allow.append("Bash(gh pr ready*)")
+            script = Path(__file__).resolve().with_name("pr_ready.sh")
+            allow += [f"Bash({script} *)", f"Bash(bash {script} *)"]
         if rights.get("pr_comment"):
             allow.append("Bash(gh pr comment*)")
         if rights.get("branch_rc"):
