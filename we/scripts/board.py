@@ -114,7 +114,8 @@ prune    drops what is handled from board.json (docs/board.md § Pruning) and pr
          a question or item an Accept or Deny closed once nothing is owed to its asker any more
          (the deliverer finds the asker only on the board): every answer line on it is older than
          the ledger's epoch, written in the asker's own session, or the asker's row in
-         board-deliveries.jsonl is `delivered: true` (refused, or not taken within PRUNE_AFTER_H:
+         board-deliveries.jsonl is `delivered: true` (the coordinator's row when the coordinator
+         asked it itself; refused, or not taken within PRUNE_AFTER_H:
          the starter's or the route row is), except a one-way merge-go accepted, which `close-merged` takes, and a
          `window-go` accepted, which stays until its asker runs `withdraw` once the go is typed; an
          unanswered `withdrawn` or `superseded` one; a news item the
@@ -595,16 +596,20 @@ def _parse_ts(text):
 
 
 def _ledger(state):
-    """The deliverer's first start (`epoch`, None without one) and every (id, answer_ts, role)
-    with a `delivered: true` row in board-deliveries.jsonl."""
-    epoch, delivered = None, set()
+    """The deliverer's first start (`epoch`, None without one), every (id, answer_ts, role)
+    with a `delivered: true` row in board-deliveries.jsonl, and every (id, answer_ts, to) of a
+    delivered `coordinator` row (the coordinator as asker gets no asker row: deliver.ts
+    `recipientsOf`)."""
+    epoch, delivered, to_coordinator = None, set(), set()
     for row in state.deliveries():
         if set(row) == {"epoch"}:
             ts = _parse_ts(row["epoch"])
             epoch = ts if epoch is None or (ts and ts < epoch) else epoch
         elif row.get("delivered") is True:  # a later refusal never follows a delivery
             delivered.add((row.get("id"), row.get("answer_ts"), row.get("role")))
-    return epoch, delivered
+            if row.get("role") == "coordinator":
+                to_coordinator.add((row.get("id"), row.get("answer_ts"), row.get("to")))
+    return epoch, delivered, to_coordinator
 
 
 def prune(board, state, now):
@@ -621,7 +626,7 @@ def prune(board, state, now):
         if a.get("answer") in CLOSING:
             closing[qid] = a
         last[qid] = a.get("answer")
-    epoch, delivered = _ledger(state)
+    epoch, delivered, to_coordinator = _ledger(state)
     gone = {q.get("id") for q in state.questions() if q.get("outcome") in GONE}
 
     def asker_carried(item, line):
@@ -631,6 +636,8 @@ def prune(board, state, now):
         if not asker or line.get("session") == asker or epoch is None or (at and at <= epoch):
             return True
         key = (line.get("id"), line.get("ts"))
+        if (*key, asker) in to_coordinator:
+            return True  # the coordinator asked it itself: its prompt was the asker's copy
         return any((*key, role) in delivered for role in ("asker", "starter", "route"))
 
     def answered(item, qid, close):

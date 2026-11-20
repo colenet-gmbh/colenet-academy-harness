@@ -3450,6 +3450,22 @@ class TestPrune:
         go(crewless, "prune")
         assert board_of(crewless)["owner_queue"] == []
 
+    def test_a_question_the_coordinator_asked_goes_once_its_prompt_is_delivered(self, crewless):
+        """Red arm: the coordinator as asker gets no asker row (deliver.ts `recipientsOf`); its
+        delivered coordinator row carries the answer, or the question stays on the queue."""
+        path = crewless / "board.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        next(q for q in data["owner_queue"] if q["id"] == "Q7")["session"] = "coord"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        epoch_row(crewless)
+        ts = "2026-11-03T09:59:00.000Z"
+        answered(crewless, "Q7", "accept", ts, session="foxy")
+        go(crewless, "prune")
+        assert [q["id"] for q in board_of(crewless)["owner_queue"]] == ["Q7"]
+        delivered_row(crewless, "Q7", ts, "2026-11-03T09:59:03.000Z")
+        go(crewless, "prune")
+        assert board_of(crewless)["owner_queue"] == []
+
     def test_discuss_and_update_keep_the_question(self, crewless):
         answered(crewless, "Q7", "discuss", "2026-11-01T09:00:00.000Z")
         answered(crewless, "Q7", "update", "2026-11-01T10:00:00.000Z")
