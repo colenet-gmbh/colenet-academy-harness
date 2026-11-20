@@ -33,11 +33,13 @@ if args[:2] == ["pr", "view"]:
 if args[:2] == ["pr", "edit"]:
     src = args[args.index("--body-file") + 1]
     open(os.path.join(d, "body.out"), "w").write(open(src).read())
+if args[:2] == ["pr", "ready"] and os.environ.get("FAKE_READY_FAIL"):
+    sys.exit(1)
 sys.exit(0)
 """
 
 
-def run(tmp_path, pr, *args):
+def run(tmp_path, pr, *args, **extra):
     (tmp_path / "pr.json").write_text(json.dumps(pr))
     gh = tmp_path / "gh"
     gh.write_text(f'#!/bin/sh\nexec {sys.executable} {tmp_path / "fake.py"} "$@"\n')
@@ -48,6 +50,7 @@ def run(tmp_path, pr, *args):
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "FAKE_DIR": str(tmp_path),
         "PR_READY_WAIT": "0",
+        **extra,
     }
     res = subprocess.run(
         ["bash", str(SCRIPT), "7", *args, "-R", "o/r"],
@@ -100,6 +103,18 @@ def test_a_refused_ready_never_touches_the_body(tmp_path, patch, args, code, lin
     got, out, calls, body = run(tmp_path, pr(**patch), "ready", *args)
     assert (got, out) == (code, line)
     assert body is None and verbs(calls) == []
+
+
+@pytest.mark.parametrize(
+    "start, args",
+    [(pr(), ("ready",)), (pr(isDraft=False), ("undo", "open question — ready when answered"))],
+    ids=["ready", "undo"],
+)
+def test_a_failed_flip_puts_the_body_back(tmp_path, start, args):
+    code, _out, calls, body = run(tmp_path, start, *args, FAKE_READY_FAIL="1")
+    assert code == 2
+    assert body == start["body"] + "\n"
+    assert [v[:2] for v in verbs(calls)] == [["pr", "edit"], ["pr", "ready"], ["pr", "edit"]]
 
 
 def test_undo_puts_the_reason_first_and_replaces_an_old_line(tmp_path):

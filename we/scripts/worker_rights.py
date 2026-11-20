@@ -1146,7 +1146,8 @@ def settings(repo: str | Path, key: str) -> dict:
     if opted_in(rights, origin_slug(repo)):
         if rights.get("pr_ready"):
             allow.append("Bash(gh pr ready*)")
-            allow.append("Bash(*pr_ready.sh *)")
+            script = Path(__file__).resolve().with_name("pr_ready.sh")
+            allow += [f"Bash({script} *)", f"Bash(bash {script} *)"]
         if rights.get("pr_comment"):
             allow.append("Bash(gh pr comment*)")
         if rights.get("branch_rc"):

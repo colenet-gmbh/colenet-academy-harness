@@ -702,7 +702,8 @@ def test_settings_grant_exactly_the_repos_rights_and_deny_the_never_list(world):
     doc = wr.settings(world["repo"], KEY)
     assert doc["permissions"]["allow"] == [
         "Bash(gh pr ready*)",
-        "Bash(*pr_ready.sh *)",
+        f"Bash({SCRIPTS / 'pr_ready.sh'} *)",
+        f"Bash(bash {SCRIPTS / 'pr_ready.sh'} *)",
         "Bash(gh pr comment*)",
         "Bash(a release staging*)",
     ]

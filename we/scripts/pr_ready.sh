@@ -16,7 +16,7 @@
 #   refused: <PR> is <state>                           8
 #   refused: <PR> conflicts with its base — merge it   12 (GitHub starts no CI for a ready event
 #       on a conflicting PR: draft_reason_gate.py)
-#   usage, a <placeholder> reason or a gh error        2
+#   usage, a <placeholder> reason or a gh error        2  (a failed flip puts the body back)
 # Env: PR_READY_REPO (the repo, else `gh repo view`), PR_READY_WAIT (s between mergeable reads,
 # default 3; tests only).
 set -uo pipefail
@@ -82,6 +82,13 @@ edit_body() {
   gh pr edit "$PR" -R "$REPO" --body-file "$1" >/dev/null \
     || { echo "pr_ready.sh: gh pr edit $PR failed" >&2; exit 2; }
 }
+# The flip failed after the edit: the body goes back, so the PR's draft state and its line agree.
+restore() {
+  gh pr edit "$PR" -R "$REPO" --body-file "$RAW_FILE" >/dev/null \
+    || echo "pr_ready.sh: restoring the body of $PR failed too" >&2
+  echo "pr_ready.sh: $1 $PR failed, body restored" >&2
+  exit 2
+}
 
 BODY_FILE=$(mktemp) && RAW_FILE=$(mktemp) || exit 2
 trap 'rm -f "$BODY_FILE" "$RAW_FILE"' EXIT
@@ -97,13 +104,13 @@ if [ "$VERB" = ready ]; then
   body
   strip_draft <"$RAW_FILE" >"$BODY_FILE"
   edit_body "$BODY_FILE"
-  gh pr ready "$PR" -R "$REPO" >/dev/null || { echo "pr_ready.sh: ready $PR failed" >&2; exit 2; }
+  gh pr ready "$PR" -R "$REPO" >/dev/null || restore ready
   echo "ready $PR $HEAD"
 else
   [ "$DRAFT" = false ] || { echo "$PR is already a draft"; exit 0; }
   body
   { printf '**Draft:** %s\n\n' "$REASON"; strip_draft <"$RAW_FILE"; } >"$BODY_FILE"
   edit_body "$BODY_FILE"
-  gh pr ready "$PR" -R "$REPO" --undo >/dev/null || { echo "pr_ready.sh: undo $PR failed" >&2; exit 2; }
+  gh pr ready "$PR" -R "$REPO" --undo >/dev/null || restore undo
   echo "draft $PR: $REASON"
 fi
