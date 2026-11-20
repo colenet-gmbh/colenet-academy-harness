@@ -305,7 +305,6 @@ def test_a_name_without_the_story_key_refuses_before_claude(tmp_path, name):
     "args",
     [
         ("--bg", "fix it"),
-        ("--bg",),
         ("--bg", "--agent", "we:dev-medium"),
         ("--bg", "## Goal\nx\n## Output\n"),
     ],
@@ -1211,3 +1210,76 @@ def test_without_account_the_command_is_never_asked(tmp_path):
     assert not [c for c in calls(tmp_path) if "accounts" in c]
     doc = settings_of(tmp_path)
     assert "apiKeyHelper" not in doc and "ANTHROPIC_BASE_URL" not in doc["env"]
+
+
+# --- the brief survives queue and resume -------------------------------------------------------
+
+
+def _hook_brief(call, tmp_path):
+    """The brief file the worker's SessionStart hook names, run as the hook runs it."""
+    doc = json.loads(Path(call["argv"][call["argv"].index("--settings") + 1]).read_text())
+    commands = [h["command"] for g in doc["hooks"]["SessionStart"] for h in g["hooks"]]
+    out = [
+        subprocess.run(["sh", "-c", c], capture_output=True, text=True, check=True).stdout
+        for c in commands
+    ]
+    texts = [json.loads(o)["hookSpecificOutput"]["additionalContext"] for o in out if o.strip()]
+    (named,) = [t for t in texts if "your brief is the file" in t]
+    path = Path(named.split("your brief is the file ")[1].split(". If")[0])
+    return path.read_text()
+
+
+@pytest.mark.parametrize("args", [("--bg",), ()])
+def test_a_start_without_a_brief_refuses_before_claude(tmp_path, args):
+    """A worker without a task idles until someone notices. Red arm: it started."""
+    project, env = setup(tmp_path)
+    proc = run(project, env, "AC-12-impl", *args)
+    assert proc.returncode == 2 and "no brief" in proc.stderr, proc.stderr
+    assert not started(tmp_path)
+
+
+def test_a_queued_start_hands_its_brief_to_claude_and_to_the_start_hook(tmp_path, monkeypatch):
+    """Measured 20.11.: a queued start ran without its brief; the waiter told the starter at once
+    and the starter's SendMessage reached the new session before its start prompt. Red arm: the
+    brief existed only as the prompt argument, the hook named no file."""
+    import worker_supervisor as sup  # noqa: PLC0415 (beside the script, as the waiter runs it)
+
+    busy = [{"id": f"b{i}", "name": f"S{i}", "status": "busy", "pid": 1} for i in range(10)]
+    project, env = setup(tmp_path, rows=busy)
+    brief = "# Brief\n\nDo the cswap thing.\n"
+    proc = run(project, env, "AC-12-impl", "--bg", "--queue", brief)
+    assert proc.returncode == 0, proc.stderr
+    state = tmp_path / "home/.claude/we-state/workers"
+    doc = json.loads((state / "queue/AC-12-impl.json").read_text())
+    Path(env["STUB_STATE"]).write_text("[]")  # room now
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    code, out = sup.start_queued(doc)
+    assert code == 0, out
+    (call,) = started(tmp_path)
+    assert call["argv"][-1] == brief
+    assert _hook_brief(call, tmp_path) == brief
+
+
+def test_a_resume_passes_its_prompt_and_the_start_hook_names_it(tmp_path):
+    """Measured 20.11.: `we-worker <n> --tree … --bg --resume <id> "<prompt>"` started without the
+    prompt. Red arm: the prompt lived only in the argument."""
+    project, env = setup(tmp_path)
+    sid = "0123abcd-0000-0000-0000-000000000000"
+    proc = run(project, env, "AC-12-impl", "--bg", "--resume", sid, "go on with phase 2")
+    assert proc.returncode == 0, proc.stderr
+    (call,) = started(tmp_path)
+    assert call["argv"][-3:] == ["--resume", sid, "go on with phase 2"]
+    assert _hook_brief(call, tmp_path) == "go on with phase 2\n"
+
+
+def test_every_start_lands_in_the_starter_log(tmp_path):
+    """A start without a marker (the caller's tree) still leaves its line with the starter."""
+    project, env = setup(tmp_path)
+    env["WE_WORKER_STARTER"] = "EPIC-1-master"
+    env["CLAUDE_CODE_SESSION_ID"] = "sess-starter"
+    assert run(project, env, "AC-12-impl", "--bg", GO).returncode == 0
+    log = tmp_path / "home/.claude/we-state/workers/launched.jsonl"
+    (line,) = [json.loads(x) for x in log.read_text().splitlines()]
+    assert line["name"] == "AC-12-impl" and line["key"] == "AC-12"
+    assert line["starter"] == "EPIC-1-master" and line["starter_session"] == "sess-starter"

@@ -63,8 +63,10 @@ Sources, per session lane (``who`` = the sampler's ``name``):
 - worker markers ``<name>.json``: the lane is a worker, its ``starter`` and ``started_at``
   (optional: without it the worker starts at its first probe); a lane without a sampled role that
   starts workers is a master. A marker goes when its worker ends, so an ended worker is known by
-  its probes' ``role: worker`` and its starter by its ``blocked`` events; an ended worker with
-  neither has no starter (the page lists it without a master; stderr counts it).
+  its probes' ``role: worker`` and its starter by the launcher's line in ``launched.jsonl``
+  (``worker_launch.record_launch``; it never goes), else by its ``blocked`` events; an ended
+  worker with none of them has no starter (the page lists it without a master; stderr counts it,
+  ``worker_launch.py backfill-starters`` recovers it).
 
 Precedence inside a candidate idle stretch, top wins: an explicit wait (waits row, ``blocked`` event
 with ``waiting_on``, open question) → ``waiting:<role key or human>``; a ``blocked`` event without
@@ -117,6 +119,7 @@ OVERLAY = "holding:"
 NOT_WAITING = {"working", "no-data"}
 FIXED_SENTENCE = "Not counted: waiting that only transcripts show; this page has no such source."
 CI_LINE = "CI wait: no source yet"
+LAUNCHED = "launched.jsonl"
 
 
 # --- helpers (one home; flow_report imports them) ------------------------------------------------
@@ -218,7 +221,15 @@ def board_sessions(src, board: Path | None) -> list:
 class Attribution:
     """Which sessions belong to the project (module docstring § Project)."""
 
-    def __init__(self, lines: list, crew: dict, markers: dict, events: list, transitions: list):
+    def __init__(
+        self,
+        lines: list,
+        crew: dict,
+        markers: dict,
+        events: list,
+        transitions: list,
+        launched: dict | None = None,
+    ):
         self.sids = {x["session_id"] for x in lines if isinstance(x.get("session_id"), str)}
         self.names = {x["name"].casefold() for x in lines if isinstance(x.get("name"), str)}
         for slug, entry in (crew.get("members") or {}).items():
@@ -231,11 +242,20 @@ class Attribution:
         for x in lines:
             for field in ("key", "keys", "epic"):
                 self.keys.update(self.key_rx.findall(str(x.get(field) or "")))
-        # a worker's starter: its marker, else the last `blocked` event naming one
+        # a worker's starter: its marker, else its launcher's line, else the last `blocked` event
         self.starter: dict = {}
         for e in sorted(events, key=lambda e: str(e.get("ts"))):
             if isinstance(e.get("name"), str) and isinstance(e.get("starter"), str):
                 self.starter[e["name"].casefold()] = (None, e["starter"])
+        for name, line in (launched or {}).items():
+            sid = (
+                line.get("starter_session")
+                if isinstance(line.get("starter_session"), str)
+                else None
+            )
+            who = line.get("starter") if isinstance(line.get("starter"), str) else None
+            if sid or who:
+                self.starter[name.casefold()] = (sid or None, who or None)
         for name, m in markers.items():
             sid = m.get("starter_session") if isinstance(m.get("starter_session"), str) else None
             who = m.get("starter") if isinstance(m.get("starter"), str) else None
@@ -454,6 +474,31 @@ def read_markers(src: Sources, state_dir: Path | None) -> dict:
         if not parse_ts(doc.get("started_at")):
             missing += 1
     src.missing_started = missing
+    return out
+
+
+def read_launched(src: Sources, state_dir: Path | None) -> dict:
+    """`{name: line}` of the launcher's append-only `<state_dir>/launched.jsonl` (owner:
+    `worker_launch.record_launch`), the newest line per name; it outlives the marker."""
+    src.counts.setdefault("launched", {"rows": 0, "bad": 0, "intervals": 0})
+    if state_dir is None:
+        return {}
+    path = Path(state_dir) / LAUNCHED
+    try:
+        rows, bad = read_jsonl_counted(path)
+    except FileNotFoundError:
+        return {}
+    except (OSError, UnicodeDecodeError):
+        src.gap("launched", "source unreadable: launched.jsonl")
+        return {}
+    src.counts["launched"]["bad"] += bad
+    out: dict = {}
+    for line in sorted(rows, key=lambda x: str(x.get("ts"))):
+        if isinstance(line.get("name"), str) and line["name"]:
+            out[line["name"]] = line
+            src.counts["launched"]["rows"] += 1
+        else:
+            src.counts["launched"]["bad"] += 1
     return out
 
 
@@ -689,6 +734,9 @@ def _lane(name: str, plist: list, ctx: dict) -> tuple:
         "group": group,
         "starter": starter,
         "parent": resolve(starter, ctx["lanes_cf"], ctx["crew"]) if starter else None,
+        "session_id": next(
+            (p["session_id"] for p in plist if isinstance(p.get("session_id"), str)), None
+        ),
         "first": iso(plist[0]["ts"]),
         "last": iso(plist[-1]["ts"]),
         "started_at": started if parse_ts(started) else None,
@@ -744,20 +792,25 @@ def build(board, state_dir, log_dir, tz, crew, since, until, foreign=(), project
     questions = src.log(beside("questions"), "questions log", "questions")
     answers = src.log(beside("answers"), "answers log", "answers")
     markers = read_markers(src, state_dir)
+    launched = read_launched(src, state_dir)
     rows_from = read_foreign(src, list(foreign))
     samples, events, markers, keep, attribution = attribute(
-        src, board, crew, samples, events, markers, transitions
+        src, board, crew, samples, events, markers, transitions, launched
     )
     rows_from, foreign_dropped = _drop_foreign(rows_from, project, attribution)
     explicit = _explicit_waits(src, waits, events, questions, answers)
     _drop_logs(explicit, keep, attribution)
     _drop_gaps(src, attribution, foreign_dropped, project)
-    # a marker goes when its worker ends; the flow log's `blocked` events keep the starter
+    # a marker goes when its worker ends; the launcher's line, else the flow log's `blocked`
+    # events keep the starter
     event_starters = {
         e["name"]: e["starter"]
         for e in sorted(events, key=lambda e: str(e.get("ts")))
         if isinstance(e.get("name"), str) and isinstance(e.get("starter"), str) and e["starter"]
     }
+    for name, line in launched.items():
+        if isinstance(line.get("starter"), str) and line["starter"] and keep(name):
+            event_starters[name] = line["starter"]
 
     interval = Counter(int(s.get("interval_s") or 300) for _, s in samples).most_common(1)
     interval_s = interval[0][0] if interval else 300
@@ -828,11 +881,11 @@ def build(board, state_dir, log_dir, tz, crew, since, until, foreign=(), project
     }
 
 
-def attribute(src, board, crew, samples, events, markers, transitions) -> tuple:
+def attribute(src, board, crew, samples, events, markers, transitions, launched=None) -> tuple:
     """`(samples, events, markers, keep, counts)` with every sampled row of another
     project or of none dropped (module docstring § Project); `keep(name, keys)` judges the lanes
     of the board logs."""
-    att = Attribution(board_sessions(src, board), crew, markers, events, transitions)
+    att = Attribution(board_sessions(src, board), crew, markers, events, transitions, launched)
     for _ts, s in samples:
         for e in s.get("sessions") or []:
             if isinstance(e, dict) and isinstance(e.get("name"), str) and e["name"]:
@@ -1457,6 +1510,30 @@ def settings_for(crew: dict | None) -> tuple:
     """`(log_dir, tz)` from the crew in force (`flow_log.settings`, defaults without a crew)."""
     log_dir, tz, _flow = flow_log.settings(crew or crew_mod.DEFAULTS)
     return log_dir, tz
+
+
+def load(cwd: Path, since_text: str, now: datetime, board_arg=None, project=None) -> dict:
+    """`build` over the crew in force at `cwd` (its board, sampler and the workers' state dir), as
+    `main` runs it; `worker_launch.py backfill-starters` reads its worker lanes."""
+    try:
+        crew_path, crew = crew_mod.find_and_load(cwd)
+    except crew_mod.CrewError:
+        crew_path, crew = None, None
+    args = argparse.Namespace(board=board_arg)
+    board, _state = locate_board(args, cwd, crew_path, crew)
+    project = project or resolve_project(board, crew_path)
+    log_dir, tz = settings_for(crew)
+    since = parse_since(since_text, now)
+    return build(board, worker_supervisor.state_dir(), log_dir, tz, crew, since, now, (), project)
+
+
+def starterless(built: dict) -> list:
+    """`[(name, session_id)]` of the worker lanes that name no starter."""
+    return sorted(
+        (n, lane.get("session_id"))
+        for n, lane in built["lanes"].items()
+        if lane["role"] == "worker" and not lane["starter"]
+    )
 
 
 def report_sources(built: dict, out=None) -> None:

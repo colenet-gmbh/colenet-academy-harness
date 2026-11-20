@@ -1283,3 +1283,113 @@ class TestAccountAnswer:
     )
     def test_the_brief_names_the_need(self, brief, need):
         assert wl.brief_account_need(brief) == need
+
+
+# --- the starter log -------------------------------------------------------
+
+
+def _append_many(args):
+    state, i = args
+    for j in range(5):
+        wl.record_launch(f"AC-{i}-w{j}", f"AC-{i}", "m-1", "sid-m", Path(state), pad="x" * 30000)
+
+
+def test_launched_log_survives_marker_and_parallel_writers(tmp_path, monkeypatch):
+    """AC1: the marker goes when its worker ends, the starter stays in `launched.jsonl`; 20
+    launchers at once leave whole lines. Red arm: a split write interleaves the 30 kB lines."""
+    import multiprocessing  # noqa: PLC0415
+
+    import flow_intervals as fi  # noqa: PLC0415
+    import worker_supervisor as sup  # noqa: PLC0415
+
+    state = tmp_path / "state"
+    monkeypatch.setenv("WE_WORKER_STATE_DIR", str(state))
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    _git(tree, "init", "-q")
+    wl.write_marker(
+        tree, name="AC-9-build", key="AC-9", role="worker", starter="m-1", starter_session="sid-m"
+    )
+    (state / "AC-9-build.json").write_text('{"name": "AC-9-build", "starter": "m-1"}')
+    sup._remove_files(state, "AC-9-build")
+    assert not (state / "AC-9-build.json").exists()
+    src = fi.Sources(None, None)
+    line = fi.read_launched(src, state)["AC-9-build"]
+    assert (line["starter"], line["starter_session"], line["key"]) == ("m-1", "sid-m", "AC-9")
+    assert set(line) == {"name", "key", "starter", "starter_session", "ts"}
+
+    with multiprocessing.get_context("fork").Pool(20) as pool:
+        pool.map(_append_many, [(str(state), i) for i in range(20)])
+    rows, bad = wl.read_launched(state)
+    assert bad == 0 and len(rows) == 1 + 100
+    assert all(r["pad"] == "x" * 30000 for r in rows[1:])
+
+
+def test_backfill_starters_dry_apply_and_no_transcript_text(tmp_path, capsys):
+    """AC2: timing line first, then the transcript's starter line (only its name), else
+    `unrecoverable`; dry writes nothing. Red arm: a transcript line reaches stdout or the log."""
+    state, timing, projects = tmp_path / "state", tmp_path / "timing", tmp_path / "projects"
+    timing.mkdir()
+    (timing / "sid-master.jsonl").write_text(
+        json.dumps({"ts": 1, "event": "WorkerLaunch", "name": "AC-1-a", "cwd": "/x"}) + "\n"
+    )
+    (projects / "p").mkdir(parents=True)
+    secret = "ghp_" + "S3cr3tT0k3n" * 3
+    (projects / "p" / "sid-b.jsonl").write_text(
+        json.dumps({"type": "user", "message": {"content": f"token {secret}"}})
+        + "\n"
+        + json.dumps(
+            {"type": "attachment", "content": f"we-worker: Dein Starter ist Kiska. {secret}"}
+        )
+        + "\n"
+    )
+    (projects / "p" / "sid-c.jsonl").write_text(
+        json.dumps({"type": "user", "content": secret}) + "\n"
+    )
+    workers = [("AC-1-a", "sid-a"), ("AC-2-b", "sid-b"), ("AC-3-c", "sid-c"), ("AC-4-d", None)]
+    kw = {
+        "state": state,
+        "timing": timing,
+        "projects": projects,
+        "session_names": {"sid-master": "m-1"},
+    }
+    dry = wl.backfill_starters(workers, False, **kw)
+    assert dry == [
+        "AC-1-a: would use timing -> m-1",
+        "AC-2-b: would use transcript -> Kiska",
+        "AC-3-c: unrecoverable",
+        "AC-4-d: unrecoverable",
+    ]
+    assert not (state / wl.LAUNCHED).exists()
+    done = wl.backfill_starters(workers, True, **kw)
+    rows, bad = wl.read_launched(state)
+    assert bad == 0
+    assert [(r["name"], r["starter"], r["backfill"]) for r in rows] == [
+        ("AC-1-a", "m-1", "timing"),
+        ("AC-2-b", "Kiska", "transcript"),
+    ]
+    assert rows[0]["starter_session"] == "sid-master" and rows[1]["starter_session"] is None
+    text = "\n".join(dry + done) + capsys.readouterr().out + (state / wl.LAUNCHED).read_text()
+    assert secret not in text and "token" not in text
+
+
+def test_starters_json_snapshot(tmp_path):
+    """AC7: `starters --json` carries `schema_version` and `generated_at`; its field list is pinned."""
+    state = tmp_path / "state"
+    wl.record_launch("AC-1-a", "AC-1", "m-1", "sid-m", state)
+    wl.record_launch("AC-1-a", "AC-1", "m-2", None, state)
+    (state / wl.LAUNCHED).open("a").write("not json\n")
+    out = subprocess.run(
+        [sys.executable, str(SCRIPT), "starters", "--json"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**os.environ, "WE_WORKER_STATE_DIR": str(state)},
+    ).stdout
+    doc = json.loads(out)
+    assert sorted(doc) == ["generated_at", "path", "schema_version", "starters", "unreadable"]
+    assert doc["schema_version"] == 1 and doc["unreadable"] == 1
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", doc["generated_at"])
+    (only,) = doc["starters"]
+    assert sorted(only) == ["key", "name", "starter", "starter_session", "ts"]
+    assert only["starter"] == "m-2"
