@@ -817,7 +817,11 @@ share. Only a human who owns the state a story leaves (`owns_states`; several hu
 state) moves it on; a refusal out of a running state (In Progress and later, `crew.RUNNING_STATES`)
 names the question to its owner, `board.py ask --to <owner>`, instead of the move. A status no
 `board.states` entry maps (a Jira "Blocked") has no known owner: with a ticketing system the move is
-refused, never decided by the local row. With an owner of `in_test`, Done comes only from In Test.
+refused, never decided by the local row; a `tickets` entry without `status` is refused as a form
+error. With an owner of `in_test`, Done comes only from In Test. A ticket that already stands at the
+target (a session moved it first), or past Selected when `select` comes late, gets its row and no
+transition (`ticket already <state>: no transition`); `select` then comments that the ticket stays.
+`board.select_unlabel` names labels `select` removes in its carry (an owner's release label).
 
 | Verb | What it does | Refusal |
 |---|---|---|

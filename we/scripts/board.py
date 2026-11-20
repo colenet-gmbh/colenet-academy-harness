@@ -1900,8 +1900,8 @@ def _carry_reads(verb, searches, keys):
     _print_carry(ticket_adapter.read_ops(searches, keys))
     print(
         f"board.py {verb}: carry the reads with your ticketing tool, then run it again with "
-        '--input FILE ({"hits": {state: [key or {key, changed}]}, "tickets": {key: {labels, '
-        "comments}}})",
+        '--input FILE ({"hits": {state: [key or {key, changed}]}, "tickets": {key: {status, '
+        "labels, comments}}})",
         file=sys.stderr,
     )
     return 0
@@ -3207,6 +3207,8 @@ def rule_pulled(m):
             ]
         m.extra["reopen"] = reason
         return []
+    if m.extra.get("ticket_already"):
+        return []
     if m.source != "selected":
         was = "no row" if m.source is None else f"its last row is {m.source}"
         return [
@@ -3526,6 +3528,9 @@ def _transition(state, args, crew, now, target, head):
     )
     m = Move(state, key, target, root, plan, crew, args)
     m.source = source
+    already = _ticket_already(crew, source, target)
+    if already:
+        m.extra["ticket_already"] = source
     for group, rule in ENTRY_RULES[target]:
         lines = rule(m)
         if lines:
@@ -3551,9 +3556,7 @@ def _transition(state, args, crew, now, target, head):
             "ticket": adapter.name,
         },
     )
-    ops = adapter.move(key, status)
-    if target == "selected":
-        ops += adapter.comment(key, _select_comment(m))
+    ops = _transition_ops(adapter, m, status, already)
     if "tier" in m.extra:
         print(f"tier: {m.extra['tier']}")
     if "round" in m.extra:
@@ -3612,6 +3615,36 @@ def _status_bus(crew):
     return crew_mod.several_humans(crew) and ticketing != "none"
 
 
+def _transition_ops(adapter, m, status, already):
+    """The carry of a written row: the transition (none when the ticket already stands there),
+    and for `selected` the select comment and the crew's `board.select_unlabel` labels."""
+    ops = [] if already else adapter.move(m.key, status)
+    if already:
+        print(f"ticket already {m.source}: no transition")
+    if m.target == "selected":
+        comment = _select_comment(m)
+        if already and m.source != m.target:
+            comment += f"\nThe ticket stays {m.source}."
+        ops += adapter.comment(m.key, comment)
+        for label in (m.crew.get("board") or {}).get("select_unlabel") or []:
+            ops += adapter.unlabel(m.key, label)
+    return ops
+
+
+FORWARD = ("backlog", "selected", "in_progress", "in_review", "in_test", "done")
+
+
+def _ticket_already(crew, source, target):
+    """With the ticket's status as the shared state: the ticket already stands at the target (a
+    human or a session moved it first), or past Selected when the story is selected late. The
+    row is still written; the ticket gets no transition back."""
+    if not _status_bus(crew) or source not in FORWARD or target not in FORWARD:
+        return False
+    if source == target:
+        return True
+    return target == "selected" and FORWARD.index(source) > FORWARD.index(target)
+
+
 def _source_state(state, adapter, crew, key, verb="move"):
     """The state a story leaves: with several humans the ticket's status (every machine moves
     the ticket, each keeps its own rows), `CARRY` while the session has to read it, refused
@@ -3622,6 +3655,11 @@ def _source_state(state, adapter, crew, key, verb="move"):
         if ticket is None:
             return CARRY
         status = ticket.get("status")
+        if status is None:
+            raise BoardError(
+                f"board.py {verb} {key}: refused: the --input file names no status for {key}: "
+                f'read the ticket and add "tickets": {{"{key}": {{"status": "<its status>", …}}}}'
+            )
         found = state_of_status(crew, status)
         if found is None:
             raise BoardError(

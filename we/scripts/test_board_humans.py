@@ -706,6 +706,28 @@ class TestOwners:
         assert adapter.calls == [("ticket", KEY)] or all(c[0] != "move" for c in adapter.calls)
         assert transitions(moving) == []
 
+    def test_a_move_to_the_status_the_ticket_already_has_writes_the_row_only(
+        self, moving, monkeypatch, capsys
+    ):
+        """Red arm: after the session moved the ticket first, `move in_progress` was refused
+        ("its last row is in_progress") and the board never got its row."""
+        shared(moving)
+        as_(monkeypatch, "alice", "Otto")
+        adapter = ticket_adapter.FakeAdapter({KEY: "In Progress"})
+        assert act(moving, "move", KEY, "in_progress", adapter=adapter) == 0
+        assert "ticket already in_progress: no transition" in capsys.readouterr().out
+        assert transitions(moving)[-1]["to"] == "in_progress"
+        assert all(c[0] != "move" for c in adapter.calls)
+
+    def test_an_input_without_status_is_named_a_form_error(self, moving, monkeypatch, capsys):
+        shared(moving)
+        as_(monkeypatch, "alice", "Otto")
+        adapter = ticket_adapter.FakeAdapter(tickets={KEY: {"labels": [], "comments": []}})
+        assert act(moving, "move", KEY, "in_progress", adapter=adapter) == 1
+        err = capsys.readouterr().err
+        assert f"the --input file names no status for {KEY}" in err
+        assert "maps to no board state" not in err
+
     def test_jira_carries_the_status_read_before_a_move(self, moving, monkeypatch, capsys):
         shared(moving, ticketing="jira")
         as_(monkeypatch, "alice", "Otto")

@@ -81,7 +81,8 @@ role select every story of the crew, ``board.py select --refiner`` refuses), ``t
 a JQL clause every signal query starts with, null = signals refused; ``claim_hours``: how long a ticket claim
 lives; ``shared_accounts``: ticketing accounts several humans write from (email or account id); a
 comment signed ``<role>@<human>`` speaks for that human only from that human's own account or one
-of these, ``board_humans.py``), ``sla``, ``limits``, ``naming``, ``launch`` (``worker``: the command template that
+of these, ``board_humans.py``; ``select_unlabel``: labels ``board.py select`` removes from the ticket
+in its carry, e.g. the owner's release label once the story is Selected), ``sla``, ``limits``, ``naming``, ``launch`` (``worker``: the command template that
 starts a process worker, the one owner of it in a repo with a crew (``worker_launch.backend``);
 ``subagent_fallback``; ``allow_bypass``: true makes ``wclaude``, ``pin.sh`` and ``we-worker`` add
 ``--allow-dangerously-skip-permissions``, so bypass is one Shift+Tab away while the start mode stays
@@ -305,6 +306,7 @@ DEFAULTS: dict[str, Any] = {
         "jql_scope": None,
         "claim_hours": 4,
         "shared_accounts": [],
+        "select_unlabel": [],
     },
     "sla": {"hours": 4, "daytime": "08-20", "tz": "UTC", "t2_second_reviewer": None},
     "limits": {
@@ -703,6 +705,17 @@ def _check_signals(path: Path, value: Any) -> None:
             raise _fail(path, f"{dotted}.jql_window must be a number with m, h or d, like 35m")
 
 
+def _validate_board_lists(path, data):
+    """`board.shared_accounts` and `board.select_unlabel`: each a list of non-empty strings."""
+    board = data.get("board") if isinstance(data.get("board"), dict) else {}
+    for key, what in (("shared_accounts", "account"), ("select_unlabel", "label")):
+        found = board.get(key)
+        if found is not None and not (
+            isinstance(found, list) and all(isinstance(a, str) and a.strip() for a in found)
+        ):
+            raise _fail(path, f"board.{key} must be a list of {what} strings")
+
+
 def _validate(path: Path, data: dict[str, Any], *, paths: bool) -> None:
     """The hard checks, on ``data`` without its unknown keys."""
     for key in ("roles", "members"):
@@ -712,15 +725,7 @@ def _validate(path: Path, data: dict[str, Any], *, paths: bool) -> None:
     _validate_roles(path, data["roles"], slugs)
     if "humans" in data:
         _validate_humans(path, data, slugs)
-    shared = (
-        (data.get("board") or {}).get("shared_accounts")
-        if isinstance(data.get("board"), dict)
-        else None
-    )
-    if shared is not None and not (
-        isinstance(shared, list) and all(isinstance(a, str) and a.strip() for a in shared)
-    ):
-        raise _fail(path, "board.shared_accounts must be a list of account strings")
+    _validate_board_lists(path, data)
     for key, value in data.items():
         if key in ("lenses", "fallback") or key not in DEFAULTS:
             continue

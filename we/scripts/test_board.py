@@ -2467,6 +2467,18 @@ class TestJiraTransport:
         assert len(carried) == 2
         assert transitions(moving)[-1]["ticket"] == "pending"
 
+    def test_select_removes_the_crews_select_labels(self, moving, capsys):
+        """Red arm: every select needed the owner's release label removed by hand."""
+        with_jira(moving)
+        path = moving / "work" / ".weside" / "crew.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["board"]["select_unlabel"] = ["READY"]
+        path.write_text(json.dumps(data), encoding="utf-8")
+        green_lenses(moving)
+        assert act(moving, "select", KEY) == 0
+        carried = carry_of(capsys.readouterr().out)
+        assert carried[-1] == {"op": "unlabel", "key": KEY, "remove": "READY"}
+
     def test_a_refused_move_carries_nothing(self, moving, capsys):
         with_jira(moving)
         assert act(moving, "move", KEY, "in_progress") == 1
