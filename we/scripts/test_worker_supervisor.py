@@ -57,9 +57,10 @@ def _feed(*frames):
 
 
 @pytest.fixture
-def box(tmp_path):
+def box(tmp_path, monkeypatch):
     state, projects = tmp_path / "state", tmp_path / "projects"
     state.mkdir()
+    monkeypatch.setenv("WE_WORKER_STATE_DIR", str(state))  # write_marker's launched.jsonl
     (state / f"{NAME}.settings.json").write_text("{}")
     (state / f"{NAME}.json").write_text(json.dumps({"deadline": "2999-01-01T00:00:00Z"}))
     sent, items = [], []

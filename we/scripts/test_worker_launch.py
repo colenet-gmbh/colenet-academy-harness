@@ -90,6 +90,7 @@ def env(tmp_path, monkeypatch):
     log = tmp_path / "log.jsonl"
     log.touch()
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("WE_WORKER_STATE_DIR", str(tmp_path / "state"))  # launched.jsonl
     monkeypatch.setenv("STUB_STATE", str(state))
     monkeypatch.setenv("STUB_LOG", str(log))
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "s-lead")

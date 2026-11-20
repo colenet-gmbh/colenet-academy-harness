@@ -1273,6 +1273,20 @@ def test_a_resume_passes_its_prompt_and_the_start_hook_names_it(tmp_path):
     assert _hook_brief(call, tmp_path) == "go on with phase 2\n"
 
 
+def test_a_resume_without_a_prompt_writes_no_brief(tmp_path):
+    """The resume id is the session, not a task: no brief file, no brief hook."""
+    project, env = setup(tmp_path)
+    sid = "0123abcd-0000-0000-0000-000000000000"
+    assert run(project, env, "AC-12-impl", "--bg", "--resume", sid).returncode == 0
+    (call,) = started(tmp_path)
+    doc = json.loads(Path(call["argv"][call["argv"].index("--settings") + 1]).read_text())
+    hooks = [
+        h["command"] for g in (doc.get("hooks") or {}).get("SessionStart", []) for h in g["hooks"]
+    ]
+    assert not any("your brief is the file" in c for c in hooks)
+    assert not (tmp_path / "home/.claude/we-state/workers/AC-12-impl.brief.md").exists()
+
+
 def test_every_start_lands_in_the_starter_log(tmp_path):
     """A start without a marker (the caller's tree) still leaves its line with the starter."""
     project, env = setup(tmp_path)
