@@ -221,6 +221,7 @@ def test_a_claude_bg_template_states_the_worker_env_as_settings(env, monkeypatch
             "WE_ROLE_ID": "",
             "WE_START": "",
             "WE_WORKER_STARTER": "",
+            "WE_STARTER": "LEAD-1",
             "WE_HUMAN": "ana",
         }
     }
@@ -692,6 +693,7 @@ class TestSettings:
             "WE_ROLE_ID": "",
             "WE_START": "",
             "WE_WORKER_STARTER": "",
+            "WE_STARTER": "",
         }
         assert doc["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "timer arm x"
         assert not {"enabledPlugins", "autoMemoryDirectory", "autoCompactWindow"} & set(doc)

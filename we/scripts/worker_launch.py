@@ -1082,6 +1082,7 @@ def write_settings(
     name: str | None = None,
     account: dict | None = None,
     brief: str | None = None,
+    starter: str | None = None,
 ) -> dict:
     """The worker's `--settings` file (`worker_rights.settings`), with the timer's hook, the
     lean context of `workers.context` (`apply_context`), the chosen account (`apply_account`)
@@ -1089,7 +1090,7 @@ def write_settings(
     (`ticketing_unneeded`)."""
     import worker_rights  # noqa: PLC0415
 
-    doc = apply_context(worker_rights.settings(repo, key), repo, name, out.parent)
+    doc = apply_context(worker_rights.settings(repo, key, starter), repo, name, out.parent)
     if account:
         apply_account(doc, account)
     if brief:
@@ -1147,7 +1148,9 @@ def launch(worktree: Path, name: str, brief_file: Path, agent: str | None = None
         settings_path = gd / SETTINGS
         off = ticketing_unneeded(brief, worktree)  # read on the worker's login, as `claude_env`
         doc = turn_off(
-            {"env": worker_rights.worker_env(key)}, off, installed_plugin_ids(claude_env())
+            {"env": worker_rights.worker_env(key, starter=lead)},
+            off,
+            installed_plugin_ids(claude_env()),
         )
         settings_path.write_text(json.dumps(doc, indent=2) + "\n")
         argv[1:1] = ["--settings", str(settings_path)]
@@ -1415,6 +1418,7 @@ def _settings_parsers(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--name")
     p.add_argument("--account-file", type=Path)
     p.add_argument("--brief-stdin", action="store_true")
+    p.add_argument("--starter")
     p = sub.add_parser("account")
     p.add_argument("--repo", type=Path, default=Path.cwd())
     p.add_argument("--account", required=True)
@@ -1441,7 +1445,14 @@ def _settings_verbs(args: argparse.Namespace) -> None:
                 raise LaunchError(f"--account-file: {exc}", 2) from exc
         brief = sys.stdin.read() if args.brief_stdin else None
         write_settings(
-            args.repo.resolve(), args.key, args.out, args.session_start, args.name, chosen, brief
+            args.repo.resolve(),
+            args.key,
+            args.out,
+            args.session_start,
+            args.name,
+            chosen,
+            brief,
+            args.starter,
         )
         print(args.out)
 

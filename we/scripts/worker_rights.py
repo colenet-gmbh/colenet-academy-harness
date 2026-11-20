@@ -1106,7 +1106,7 @@ PR_OWNER_ALLOW = (
 )
 
 
-def settings(repo: str | Path, key: str) -> dict:
+def settings(repo: str | Path, key: str, starter: str | None = None) -> dict:
     """The `--settings` document of a worker with `key` in `repo`: allow = the granted rights
     (with `build.pr_owner: worker` also `PR_OWNER_ALLOW`), deny = the never-list (and the crew's `deny_commands`, `deny_text`; a `deny_text` path also as a
     Read rule)."""
@@ -1128,10 +1128,10 @@ def settings(repo: str | Path, key: str) -> dict:
             deny.append(f"Bash(*{text}*)")
             if text.startswith("/"):
                 deny.append(f"Read(/{text}**)")
-    return {"permissions": {"allow": allow, "deny": deny}, "env": worker_env(key)}
+    return {"permissions": {"allow": allow, "deny": deny}, "env": worker_env(key, starter=starter)}
 
 
-def worker_env(key: str, environ: Any = None) -> dict:
+def worker_env(key: str, environ: Any = None, starter: str | None = None) -> dict:
     """The `env` block of a worker's `--settings`: what `we-worker` sets and clears at its start.
 
     A `claude --bg` session runs in the daemon's environment, not the launcher's (the daemon may
@@ -1140,8 +1140,10 @@ def worker_env(key: str, environ: Any = None) -> dict:
     also marks a deliberate worker (`materialize_on_start.py` skips its user warning). The
     launcher's own start variables (`WE_START`, `WE_WORKER_STARTER`) are cleared the same way: a
     worker never runs its starter's start check, and its own workers name it, not its starter, as
-    theirs. `WE_HUMAN` passes on when the launcher has it. Never a credential: this block is
-    written to a file."""
+    theirs. `WE_STARTER` is the starter's session name, the address a worker's question names for
+    its answer (`process/L0-worker.md`): the starter outlives the worker, so an answer that arrives
+    after the worker ended still lands; "" when the launcher knows no name. `WE_HUMAN` passes on
+    when the launcher has it. Never a credential: this block is written to a file."""
     env = os.environ if environ is None else environ
     doc = {
         "WE_ROLE": "worker",
@@ -1150,6 +1152,7 @@ def worker_env(key: str, environ: Any = None) -> dict:
         "WE_ROLE_ID": "",
         "WE_START": "",
         "WE_WORKER_STARTER": "",
+        "WE_STARTER": starter or "",
     }
     if env.get("WE_HUMAN"):
         doc["WE_HUMAN"] = env["WE_HUMAN"]
