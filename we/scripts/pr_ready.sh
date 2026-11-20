@@ -17,8 +17,9 @@
 #   refused: <PR> conflicts with its base — merge it   12 (GitHub starts no CI for a ready event
 #       on a conflicting PR: draft_reason_gate.py)
 #   usage, a <placeholder> reason or a gh error        2  (a failed flip puts the body back)
-# Env: PR_READY_REPO (the repo, else `gh repo view`), PR_READY_WAIT (s between mergeable reads,
-# default 3; tests only).
+# The repo comes from -R or `gh repo view`, never from the environment: worker_rights_gate reads
+# the command line, and an exported selector would point the call at a PR it never sees.
+# Env: PR_READY_WAIT (s between mergeable reads, default 3; tests only).
 set -uo pipefail
 
 USAGE='usage: pr_ready.sh <PR> ready [--sha <head>] [-R <owner/repo>] | pr_ready.sh <PR> undo "<reason> — ready when <condition>" [-R <owner/repo>]'
@@ -26,7 +27,7 @@ PR=""
 VERB=""
 REASON=""
 EXPECT=""
-REPO=${PR_READY_REPO:-}
+REPO=""
 usage() { echo "$USAGE" >&2; exit 2; }
 while [ $# -gt 0 ]; do
   case "$1" in

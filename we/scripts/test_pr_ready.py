@@ -27,6 +27,9 @@ args = sys.argv[1:]
 with open(os.path.join(d, "calls.log"), "a") as f:
     f.write(json.dumps(args) + "\n")
 pr = json.load(open(os.path.join(d, "pr.json")))
+if args[:2] == ["repo", "view"]:
+    print("o/home")
+    sys.exit(0)
 if args[:2] == ["pr", "view"]:
     jq = args[args.index("--jq") + 1]
     sys.exit(subprocess.run(["jq", "-r", jq], input=json.dumps(pr), text=True).returncode)
@@ -39,7 +42,7 @@ sys.exit(0)
 """
 
 
-def run(tmp_path, pr, *args, **extra):
+def run(tmp_path, pr, *args, repo=("-R", "o/r"), **extra):
     (tmp_path / "pr.json").write_text(json.dumps(pr))
     gh = tmp_path / "gh"
     gh.write_text(f'#!/bin/sh\nexec {sys.executable} {tmp_path / "fake.py"} "$@"\n')
@@ -53,7 +56,7 @@ def run(tmp_path, pr, *args, **extra):
         **extra,
     }
     res = subprocess.run(
-        ["bash", str(SCRIPT), "7", *args, "-R", "o/r"],
+        ["bash", str(SCRIPT), "7", *args, *repo],
         capture_output=True,
         text=True,
         env=env,
@@ -134,3 +137,10 @@ def test_nothing_to_do_changes_nothing(tmp_path):
     code, out, calls, _ = run(tmp_path, pr(isDraft=False), "ready")
     assert (code, out) == (0, "7 is already ready")
     assert verbs(calls) == []
+
+
+def test_an_exported_repo_selector_reaches_no_call(tmp_path):
+    code, _, calls, _ = run(tmp_path, pr(), "ready", repo=(), PR_READY_REPO="acme/other")
+    assert code == 0
+    repos = {c[c.index("-R") + 1] for c in calls if "-R" in c}
+    assert repos == {"o/home"}
