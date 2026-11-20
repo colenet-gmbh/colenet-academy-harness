@@ -15,7 +15,7 @@
 #                                  stops a worker (a background session with `claude stop`, a window
 #                                  worker with SIGTERM to its pid) and waits until it is gone (30 s);
 #                                  then ends what it left running (watchers, dev servers: its process
-#                                  tree) and names each one; removes its settings file; prints the
+#                                  tree) and names each one; removes its settings and brief files; prints the
 #                                  full session id and the resume command, and keeps them in
 #                                  <state dir>/<name>.resume.json. A session that is no worker (no background,
 #                                  no launcher marker, no WE_ROLE=worker: a master, a companion) refuses
@@ -495,11 +495,17 @@ if [[ -z "$wl" || ! -f "$wl" ]]; then
   exit 2
 fi
 resuming=0
+resume_at=0 # the position of --resume/-r: its value is the session, never a brief
+i=0
 for a in "$@"; do
-  case $a in --resume | -r | --resume=* | --continue | -c) resuming=1 ;; esac
+  i=$((i + 1))
+  case $a in
+    --resume | -r) resuming=1; resume_at=$i ;;
+    --resume=* | --continue | -c) resuming=1 ;;
+  esac
 done
 brief=""
-[[ $# -gt 0 && "${!#}" != -* ]] && brief=${!#}
+[[ $# -gt 0 && "${!#}" != -* && ($resume_at -eq 0 || $# -gt $((resume_at + 1))) ]] && brief=${!#}
 # A last argument that is there but blank is a brief that failed to arrive (`"$(cat brief)"` of a file
 # a refused command never wrote): the worker would run without a task, so nothing starts.
 if [[ $resuming -eq 0 && $# -gt 0 && -z "${brief//[[:space:]]/}" && "${!#}" != -* ]]; then
