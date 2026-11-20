@@ -36,6 +36,41 @@ export type FlowView = {
   isLoading: boolean
 }
 
+// /flow's section Crew flow: the fields of `flow_intervals.py --snapshot` it shows (the script owns them).
+export type CrewFlowNow = {
+  who: string
+  group?: string | null
+  starter?: string | null
+  kind: string
+  since: string
+  waiting_on?: string | null
+  key?: string | null
+  label?: string | null
+}
+
+export type CrewFlowHead = {
+  pr: number
+  start: string
+  end: string
+  queue_s: number
+  run_s: number
+  open: boolean
+}
+
+export type CrewFlowView = {
+  path?: string
+  project?: string
+  generatedAt?: string
+  // `CI wait: …`, the snapshot's own header line
+  ciLine?: string
+  now: CrewFlowNow[]
+  ci: { number: number; title?: string; heads: CrewFlowHead[] }[]
+  gaps: string[]
+  page?: string
+  error?: string
+  isRefreshing: boolean
+}
+
 // /board: the file an orchestrator session keeps (docs/board.md), as the pane reads it.
 export type BoardQueueItem = {
   id?: string
@@ -294,6 +329,7 @@ declare module 'claude-code' {
   interface PluginState {
     we: {
       flowBoard: FlowView | null
+      flowCrew: CrewFlowView | null
       boardView: Shaped<BoardView | null>
       boardLive: Shaped<LiveView | null>
       boardAnswers: Shaped<BoardAnswersView | null>

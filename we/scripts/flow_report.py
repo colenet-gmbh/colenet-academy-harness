@@ -71,6 +71,7 @@ import re
 import statistics
 import subprocess
 import sys
+import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -135,7 +136,8 @@ CHECKS_QUERY = """
 query($ids: [ID!]!) {
   nodes(ids: $ids) { ... on Commit { oid
     checkSuites(first: 30) { nodes {
-      checkRuns(first: 50, filterBy: {checkType: ALL}) { nodes { name status conclusion completedAt } }
+      createdAt
+      checkRuns(first: 50, filterBy: {checkType: ALL}) { nodes { name status conclusion startedAt completedAt } }
     } }
     status { contexts { context state createdAt } }
   } }
@@ -185,7 +187,9 @@ def gh_runner(cache: Path | None, window: str = "") -> Runner:
     """`body -> response` through `gh api graphql --input -`; with `cache`, answers are kept there
     by a hash of the body and the `window` (`<since>..<until>`) and read back instead of asked
     again: the open-PR search and the suites carry no window of their own, so another window
-    asks GitHub afresh."""
+    asks GitHub afresh. `run.fetched` collects each answer's fetch time (the cached file's mtime on
+    a hit), read by `command_center/ci_source.py` as its `fetched_at`."""
+    fetched: list = []
 
     def run(body: dict) -> dict:
         text = json.dumps(body, sort_keys=True)
@@ -194,6 +198,7 @@ def gh_runner(cache: Path | None, window: str = "") -> Runner:
             digest = hashlib.sha256((window + "\n" + text).encode()).hexdigest()[:20]
             hit = cache / (digest + ".json")
             if hit.is_file():
+                fetched.append(hit.stat().st_mtime)
                 return json.loads(hit.read_text(encoding="utf-8"))
         try:
             out = subprocess.run(
@@ -217,8 +222,10 @@ def gh_runner(cache: Path | None, window: str = "") -> Runner:
         if hit is not None:
             hit.parent.mkdir(parents=True, exist_ok=True)
             hit.write_text(out.stdout, encoding="utf-8")
+        fetched.append(time.time())
         return data
 
+    run.fetched = fetched  # type: ignore[attr-defined]
     return run
 
 
@@ -272,7 +279,7 @@ def fetch_prs(
         for node in data["data"]["nodes"]:
             if node and node.get("oid"):
                 suites[node["oid"]] = node["checkSuites"]["nodes"]
-    shaped = [shape_pr(pr, suites) for pr in prs]
+    shaped = [shape_pr(pr, suites, node_id) for pr in prs]
     if checks:
         heads = [h for p in shaped for h in p["heads"]]
         found = head_checks(run, [node_id[h["oid"]] for h in heads if h["oid"] in node_id])
@@ -329,7 +336,7 @@ def required_checks(repo: str) -> list:
     return lines
 
 
-def shape_pr(pr: dict, suites: dict) -> dict:
+def shape_pr(pr: dict, suites: dict, node_ids: dict | None = None) -> dict:
     """The fields the rows read: times, docs-only, labels and the heads with their runs."""
     files = pr.get("files") or {}
     paths = [f["path"] for f in files.get("nodes") or []]
@@ -353,7 +360,9 @@ def shape_pr(pr: dict, suites: dict) -> dict:
                 parse_ts(s.get("createdAt")) or datetime.max.replace(tzinfo=timezone.utc)
                 for s in runs
             )
-            heads.append({"oid": oid, "first": first, "runs": runs})
+            heads.append(
+                {"oid": oid, "first": first, "runs": runs, "node_id": (node_ids or {}).get(oid)}
+            )
     heads.sort(key=lambda h: h["first"])
     return {
         "number": pr["number"],
