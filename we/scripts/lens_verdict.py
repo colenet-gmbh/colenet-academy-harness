@@ -16,6 +16,9 @@ Usage:
                                                  too on the same subject while the panel has
                                                  some but not every lens (no restart mid-round),
                                                  and above the round cap (see Round cap)
+                                                 (``ready_panel.lenses_when_t2`` joins the
+                                                 lenses when a plan file is on a risk path:
+                                                 ``ready_lenses_for``, the hit as ``t2_hit``)
   lens_verdict.py plan t2 PR                     start a T2 panel on the PR's head (``gh``)
   lens_verdict.py arm [COMMAND]                  exit 0 when COMMAND (else stdin) is a red arm in
                                                  test form (the skill may run it), else 1 with why
@@ -713,7 +716,12 @@ def plan(root: Path, kind: str, subject: str, plan_arg: str | None = None) -> di
         raise UnusableError(f"crew: {exc}") from exc
     bound = current_binding(root, kind, subject, rel)
     path = verdict_dir(root) / f"{vid}.json"
+    t2 = None
     if kind == "ready":
+        text = _blob_text(root, bound["plan_blob"])
+        if text is None:
+            text = plan_path(root, subject, rel).read_text(encoding="utf-8")
+        chosen, t2 = ready_lenses_for(root, crew_path, crew, text)
         _no_restart_mid_round(root, path, vid, bound)
         _ready_gate_first(root, subject, rel, bound["plan_blob"])
         _depends_on_main(root, subject, rel, bound["plan_blob"])
@@ -751,7 +759,55 @@ def plan(root: Path, kind: str, subject: str, plan_arg: str | None = None) -> di
             entry["pr"] = int(subject)
             entry["head"] = bound["head"]
         entries.append(entry)
-    return {"id": vid, "kind": kind, "bound_to": bound, "entries": entries}
+    out: dict[str, Any] = {"id": vid, "kind": kind, "bound_to": bound, "entries": entries}
+    if t2 is not None:
+        out["t2_hit"] = {"path": t2[0], "rule": t2[1]}
+    return out
+
+
+def t2_hit(root: Path, crew: dict[str, Any], text: str) -> tuple[str, str] | None:
+    """(path, glob) of the first file the plan names (every phase's ``**Files:**``, the short
+    form's ``## Files``; another repo's paths left out) that lies on a ``path`` rule of
+    ``.weside/risk-paths`` on ``risk.rules_from``, read like the Ready gate's short-form check;
+    None when no file hits or the ref holds no rules file."""
+    ref = str((crew.get("risk") or {}).get("rules_from") or PLAN_FALLBACK_REF)
+    done = subprocess.run(
+        ["git", "-C", str(root), "show", f"{ref}:{ready_gate.RISK_RULES}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if done.returncode != 0:
+        return None
+    globs = ready_gate.risk_globs(done.stdout)
+    named = [*ready_gate.phases(text), ready_gate.short_files(text)]
+    for phase in named:
+        for path, other in phase.paths:
+            hit = None if other else next((g for g, rx in globs if rx.match(path)), None)
+            if hit is not None:
+                return path, hit
+    return None
+
+
+def ready_lenses_for(
+    root: Path, crew_path: Path, crew: dict[str, Any], text: str
+) -> tuple[list[dict[str, Any]], tuple[str, str] | None]:
+    """The Ready panel's lenses: ``ready_lenses``, plus ``ready_panel.lenses_when_t2`` (in its
+    order, each once) when ``t2_hit`` finds a plan file on a risk path; and that hit."""
+    chosen = crew_mod.lenses(crew_path, crew, "ready")
+    extra = (crew.get("ready_panel") or {}).get("lenses_when_t2") or []
+    if not extra:
+        return chosen, None
+    hit = t2_hit(root, crew, text)
+    if hit is None:
+        return chosen, None
+    have = {lens["lens"] for lens in chosen}
+    every = {lens["lens"]: lens for lens in crew_mod.lenses(crew_path, crew)}
+    for key in extra:
+        if key not in have and key in every:
+            chosen.append(every[key])
+            have.add(key)
+    return chosen, hit
 
 
 def _no_restart_mid_round(root: Path, path: Path, vid: str, bound: dict[str, str]) -> None:

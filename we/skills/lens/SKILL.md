@@ -29,6 +29,9 @@ bound to that file) or `LV plan t2 <PR>`. It writes a fresh verdict file bound t
 `comments_read_through`: an edit there keeps the panel) or PR head and prints the dispatch entries as JSON
 (`id`, `lens`, `agent`, `questions`, `registry`, and `plan` plus `plan_blob`, or `pr` plus `head`). Exit 1 (no plan file here nor on `origin/main`, the Ready gate refuses the plan, a Ready panel on the same subject still missing lenses: finish that round, head unknown) or 2 (crew file, verdict
 directory): relay the line and stop.
+A crew that wants a lens only on risky plans names it in `ready_panel.lenses_when_t2` (e.g. `["security"]`):
+when a file the plan names lies on a `path` rule of `.weside/risk-paths`, the entries carry it after the
+default lenses and the JSON names the hit as `t2_hit`; dispatch it like every other entry.
 
 **Round cap.** Above `ready_panel.max_rounds` (default 2) `plan ready` starts no lens: it prints the standing
 findings and `round cap: the lens holder decides` (or `… one holder confirms` when the last round was green)

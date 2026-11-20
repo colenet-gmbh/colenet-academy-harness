@@ -537,6 +537,19 @@ def test_ten_rules_of_160_characters_pass(tmp_path):
     assert run(core, "show").returncode == 0
 
 
+def test_lenses_when_t2_takes_a_list_of_lens_keys(tmp_path):
+    core, _ = workspace(tmp_path, with_(ready_panel__lenses_when_t2=["product"]))
+    out = run(core, "show")
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout)["ready_panel"]["lenses_when_t2"] == ["product"]
+    for bad, says in (("product", "must be a list"), (["nonesuch"], "'nonesuch' is no lens")):
+        core.joinpath(".weside", "crew.json").write_text(
+            json.dumps(with_(ready_panel__lenses_when_t2=bad))
+        )
+        out = run(core, "show")
+        assert out.returncode == 1 and says in out.stderr, (bad, out.stderr)
+
+
 def test_a_value_of_the_wrong_type_is_refused(tmp_path):
     core, _ = workspace(tmp_path, with_(limits__masters="five"))
     out = run(core, "show")
@@ -549,7 +562,7 @@ def test_the_ready_panel_keys_default_and_take_a_number_of_at_least_one(tmp_path
     minimal = {"version": 2, "roles": CREW["roles"], "members": CREW["members"]}
     core, _ = workspace(tmp_path, minimal)
     shown = json.loads(run(core, "show").stdout)["ready_panel"]
-    assert shown == {"warning_ok_after_rounds": None, "max_rounds": 2}
+    assert shown == {"warning_ok_after_rounds": None, "max_rounds": 2, "lenses_when_t2": []}
     for good in (1, 3, None):
         core.joinpath(".weside", "crew.json").write_text(
             json.dumps(with_(**{f"ready_panel__{key}": good}))

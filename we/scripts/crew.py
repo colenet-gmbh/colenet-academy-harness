@@ -70,7 +70,9 @@ or later whose red lenses stand on WARNINGs alone count green with those warning
 Selected row; a BLOCKING stays red, and a T2 panel never reads it; ``lens_verdict.py`` owns the
 round, and every new plan subject is one: pick N with that in mind; ``max_rounds``: 2, the
 default, is the last round lenses run in, above it the lens holder decides, null turns the cap
-off; a ``warning_ok_after_rounds`` above it never carries), ``select`` (``refiner``: true, the
+off; a ``warning_ok_after_rounds`` above it never carries; ``lenses_when_t2``: [], the default,
+lenses ``lens_verdict.py plan ready`` adds after ``ready_lenses`` when a file the plan names is on a
+``path`` rule of ``.weside/risk-paths`` on ``risk.rules_from``, e.g. ``["security"]``), ``select`` (``refiner``: true, the
 default, lets a refiner select its own story where its epic plan allows; false makes the product
 role select every story of the crew, ``board.py select --refiner`` refuses), ``t2_panel``, ``risk``,
 ``fallback`` (role key -> role key or ``human_bundle``), ``local_rules``, ``acceptance``,
@@ -259,7 +261,7 @@ DEFAULTS: dict[str, Any] = {
         "acceptance": _lens("acceptance", 5),
     },
     "ready_lenses": ["product", "architecture", "acceptance"],
-    "ready_panel": {"warning_ok_after_rounds": None, "max_rounds": 2},
+    "ready_panel": {"warning_ok_after_rounds": None, "max_rounds": 2, "lenses_when_t2": []},
     # refiner: false — no refiner selects its own story in this crew, whatever an epic plan says
     # (the product role selects every story, e.g. after a ticket owner's yes)
     "select": {"refiner": True},
@@ -776,6 +778,9 @@ def _validate_lenses(path: Path, data: dict[str, Any], slugs: set[str]) -> None:
         for lens in data.get(key, []):
             if lens not in lens_keys and lens not in FORMER_DEFAULT_LENSES:
                 raise _fail(path, f"{key}: {lens!r} is no lens")
+    for lens in (data.get("ready_panel") or {}).get("lenses_when_t2") or []:
+        if lens not in lens_keys:
+            raise _fail(path, f"ready_panel.lenses_when_t2: {lens!r} is no lens")
 
 
 def _validate_urgent_commands(path: Path, patterns: list[str]) -> None:
