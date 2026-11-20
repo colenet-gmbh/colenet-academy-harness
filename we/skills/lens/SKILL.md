@@ -35,6 +35,9 @@ findings and `round cap: the lens holder decides` (or `… one holder confirms` 
 and exits 1. Relay the lines to the holder of each red lens (the role named like the lens); the holder runs
 `LV decide <id> <lens> --by <role> "<one sentence>"`, which makes that lens green for today's subject only.
 A capped panel is green once at least one decision names today's subject; the next plan change asks again.
+On `… one holder confirms` (no red lens), the holder of the lens whose area the change touches confirms: an
+AC or scope change → the product lens, a schema, seam or endpoint change → architecture, an oracle-only change
+→ acceptance. The runner names that holder and hands them the `decide` line; it never decides itself.
 
 An entry whose `agent` is not one this plugin ships (`we:lens-product`, `we:lens-architecture`,
 `we:lens-acceptance`, `we:lens-security`) is not dispatched: record it with `LV write <id> <lens> --failed "no agent <agent>"`.
