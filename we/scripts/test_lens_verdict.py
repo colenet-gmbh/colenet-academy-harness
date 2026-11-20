@@ -1540,3 +1540,64 @@ def test_without_the_cap_a_third_round_runs_its_lenses(repo):
     vid = capped_panel(repo)
     assert red_round(repo, "v3")[0] == 0
     assert "capped_from" not in json.loads(verdict_file(repo, vid).read_text())
+
+
+# --- ready_panel.lenses_when_t2 -----------------------------------------------------------------
+
+T2_PLAN = """# Plan
+
+## Acceptance Criteria
+
+1. **Given** a **When** b **Then** c [ci: test_x]
+
+### Phase 1: the door
+
+- **Files:** `src/auth/door.py`, `src/other.py`
+"""
+
+
+def _t2_crew(repo: Path, rules: str | None, extra: list) -> None:
+    crew = json.loads(json.dumps(CREW))
+    crew["lenses"]["security"] = {}
+    crew["ready_panel"] = {"lenses_when_t2": extra}
+    (repo / ".weside" / "crew.json").write_text(json.dumps(crew))
+    if rules is not None:
+        (repo / ".weside" / "risk-paths").write_text(rules)
+    commit_plan(repo)
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+
+@pytest.mark.parametrize(
+    "rules, extra, lenses, hit",
+    [
+        ("[t2]\npath src/auth/**\n", ["security"], ["security"], "src/auth/**"),
+        ("[t2]\npath src/billing/**\n", ["security"], [], None),  # no file on a risk path
+        (None, ["security"], [], None),  # no rules file on the ref
+        ("[t2]\npath src/auth/**\n", [], [], None),  # the default: no extra lens
+    ],
+)
+def test_a_t2_plan_adds_the_lenses_when_t2(repo, rules, extra, lenses, hit):
+    """Red arm: without `lenses_when_t2` support a plan touching a risk path gets the three
+    default lenses only."""
+    write_plan(repo, T2_PLAN)
+    _t2_crew(repo, rules, extra)
+    code, out, err = run("plan", "ready", KEY)
+    assert code == 0, err
+    shown = json.loads(out)
+    assert [e["lens"] for e in shown["entries"]] == [
+        "product",
+        "architecture",
+        "acceptance",
+        *lenses,
+    ]
+    assert shown.get("t2_hit", {}).get("rule") == hit
+    doc = json.loads(verdict_file(repo, f"ready-{KEY}").read_text())
+    assert doc["expected"][3:] == lenses
+
+
+def test_lenses_when_t2_names_only_defined_lenses(repo):
+    crew = json.loads(json.dumps(CREW))
+    crew["ready_panel"] = {"lenses_when_t2": ["nonesuch"]}
+    (repo / ".weside" / "crew.json").write_text(json.dumps(crew))
+    code, _out, err = run("plan", "ready", KEY)
+    assert code == 2 and "ready_panel.lenses_when_t2: 'nonesuch' is no lens" in err
