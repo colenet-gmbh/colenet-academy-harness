@@ -116,7 +116,10 @@ command centre reads beside the crew repo's ``origin``, without loading them int
 process worker may do without asking and what it never does, all off by default: ``repos`` the
 ``owner/name`` slugs whose ``origin`` grants the rights, ``pr_ready``, ``pr_comment``, ``branch_rc``
 (a command prefix or null), ``deny_commands`` (command prefixes added to the never-list),
-``deny_text`` (strings no worker command may contain); ``worker_rights.py`` owns the rules). A key of ``RETIRED_KEYS`` (no reader left) is skipped with one line on
+``deny_text`` (strings no worker command may contain); ``worker_rights.py`` owns the rules). ``zentrale`` (the command centre's web view, ``command_center/crewd.py``: ``web_url`` the https URL
+the Zentrale pane links to, null = no link; ``link_hosts`` the hosts with an optional path prefix a
+link on the page may point to, e.g. ``github.com/acme``; ``peers`` the IP networks the server
+answers besides its own address: the proxy in front of it). A key of ``RETIRED_KEYS`` (no reader left) is skipped with one line on
 stderr naming the file, never a ``CrewError``, so a crew file written for an older release loads.
 
 ``load`` reads an unknown key (a key the schema does not name, a ``roles`` or ``fallback`` key
@@ -167,6 +170,7 @@ holding several roles is the one ``WE_ROLE_ID`` names (``role_of_session``).
 from __future__ import annotations
 
 import copy
+import ipaddress
 import json
 import os
 import re
@@ -376,6 +380,8 @@ DEFAULTS: dict[str, Any] = {
         "deny_commands": [],
         "deny_text": [],
     },
+    # the web view of the command centre (command_center/crewd.py)
+    "zentrale": {"web_url": None, "link_hosts": [], "peers": []},
 }
 # a null default takes a string or null; these take a number or null
 NUMBER_OR_NULL = (
@@ -721,14 +727,48 @@ def _check_signals(path: Path, value: Any) -> None:
 
 
 def _validate_board_lists(path, data):
-    """`board.shared_accounts` and `board.select_unlabel`: each a list of non-empty strings."""
-    board = data.get("board") if isinstance(data.get("board"), dict) else {}
-    for key, what in (("shared_accounts", "account"), ("select_unlabel", "label")):
-        found = board.get(key)
+    """`board.shared_accounts`, `board.select_unlabel` and `merge.hold_labels`: each a list of
+    non-empty strings."""
+    for section, key, what in (
+        ("board", "shared_accounts", "account"),
+        ("board", "select_unlabel", "label"),
+        ("merge", "hold_labels", "label"),
+    ):
+        block = data.get(section) if isinstance(data.get(section), dict) else {}
+        found = block.get(key)
         if found is not None and not (
             isinstance(found, list) and all(isinstance(a, str) and a.strip() for a in found)
         ):
-            raise _fail(path, f"board.{key} must be a list of {what} strings")
+            raise _fail(path, f"{section}.{key} must be a list of {what} strings")
+
+
+def _validate_zentrale(path, data):
+    """`zentrale.web_url` an https URL or null; `zentrale.link_hosts` hosts with an optional path
+    (`github.com/acme`), no scheme; `zentrale.peers` IP networks (`10.0.0.0/16`)."""
+    block = data.get("zentrale") if isinstance(data.get("zentrale"), dict) else {}
+    url = block.get("web_url")
+    if url is not None and not (
+        isinstance(url, str) and re.fullmatch(r"https://[A-Za-z0-9.-]+(?::\d+)?/[^\s<>\"']*", url)
+    ):
+        raise _fail(path, "zentrale.web_url must be an https URL with a path, or null")
+    hosts = block.get("link_hosts", [])
+    if not (
+        isinstance(hosts, list)
+        and all(
+            isinstance(h, str)
+            and re.fullmatch(r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?:/[A-Za-z0-9._-]+)*", h)
+            for h in hosts
+        )
+    ):
+        raise _fail(path, "zentrale.link_hosts must be a list of hosts like github.com/acme")
+    peers = block.get("peers", [])
+    if not isinstance(peers, list):
+        raise _fail(path, "zentrale.peers must be a list of IP networks")
+    for peer in peers:
+        try:
+            ipaddress.ip_network(peer)
+        except (TypeError, ValueError):
+            raise _fail(path, f"zentrale.peers: {peer!r} is no IP network") from None
 
 
 def _validate(path: Path, data: dict[str, Any], *, paths: bool) -> None:
@@ -741,6 +781,7 @@ def _validate(path: Path, data: dict[str, Any], *, paths: bool) -> None:
     if "humans" in data:
         _validate_humans(path, data, slugs)
     _validate_board_lists(path, data)
+    _validate_zentrale(path, data)
     for key, value in data.items():
         if key in ("lenses", "fallback") or key not in DEFAULTS:
             continue

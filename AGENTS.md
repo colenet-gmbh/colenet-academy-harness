@@ -71,6 +71,9 @@ we/                               plugin root
                                   checks, locks), accounts.py (cswap --store-only through an allowlist),
                                   gh_source.py (open PRs per repo through flow_report's gh cache),
                                   ticket_snapshot.py (the ticket snapshot's one atomic writer and its reader)
+                                  command_center/crewd.py (we-crewd: the Zentrale as a read-only web page, bound
+                                  to the host's own address, its port and the pane's probe), redaction.py (the one
+                                  list of secret patterns: conversation hook and web view)
     PR and plan                   pr-body-receipt.py, plan_push.py (plans land by push), arm_pr.sh (arms
                                   auto-merge, never merges), required_checks.sh (a branch's required checks,
                                   read by arm_pr.sh and flow_report.py), test-delta.py,

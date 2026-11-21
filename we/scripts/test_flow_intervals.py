@@ -593,6 +593,18 @@ def test_page_and_table_agree(tmp_path, monkeypatch, capsys):
         )
 
 
+def test_page_data_is_the_html_pages_data_byte_for_byte(tmp_path, monkeypatch, capsys):
+    """`--page-data` (the web view's source) carries the data `--html` embeds: the page rendered
+    from it equals the `--html` file byte for byte, so the web view adds no field of its own."""
+    _built, root, board = build_hand(tmp_path, monkeypatch)
+    window = ("--since", "2026-04-01", "--until", "2026-04-02T00:00", "--board", str(board))
+    page = tmp_path / "flow.html"
+    assert run_cli(root, capsys, *window, "--html", str(page))[0] == 0
+    code, out, _err = run_cli(root, capsys, *window, "--page-data")
+    assert code == 0
+    assert fi.render_page(json.loads(out)).encode() == page.read_bytes()
+
+
 def test_no_silent_gap(tmp_path, monkeypatch, capsys):
     root, board, log_dir, _m = make_state(tmp_path, monkeypatch=monkeypatch, **MAIN)
     argv = [

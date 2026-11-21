@@ -4,7 +4,7 @@
 Usage:
   flow_intervals.py [--since 14d] [--until UTC] [--board FILE] [--project NAME] [--from FILE]…
                     [--note TEXT]… [--no-ci]
-                    [--jsonl | --html FILE | --json | --snapshot [DIR] | --snapshot-path]
+                    [--jsonl | --html FILE | --json | --page-data | --snapshot [DIR] | --snapshot-path]
 
 Prints one JSON object per interval (JSON Lines, the default) or writes one self-contained HTML
 page (``--html``); stderr names every source with the rows it read and the intervals written
@@ -1771,6 +1771,9 @@ def main(argv=None, now: datetime | None = None, cwd: Path | None = None) -> int
     fmt.add_argument("--html", metavar="FILE")
     fmt.add_argument("--json", action="store_true", help="one document (schema_version)")
     fmt.add_argument(
+        "--page-data", action="store_true", help="the --html page's data block as JSON (crewd.py)"
+    )
+    fmt.add_argument(
         "--snapshot",
         nargs="?",
         const="",
@@ -1835,6 +1838,9 @@ def _emit(args, built: dict) -> int:
         return 0
     if args.json:
         print(json.dumps(json_doc(built, args.note), ensure_ascii=False, indent=1))
+        return 0
+    if args.page_data:
+        print(json.dumps(page_data(built, args.note), ensure_ascii=False, sort_keys=True))
         return 0
     if args.html:
         Path(args.html).write_text(render_page(page_data(built, args.note)), encoding="utf-8")
