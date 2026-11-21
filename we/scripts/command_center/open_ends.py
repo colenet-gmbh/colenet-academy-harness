@@ -476,6 +476,8 @@ def build(
             continue
         prs = pr_rows(repo, who, merge_go, until)
         header.append(f"open PRs {repo['repo']}: {len(repo['prs'])}, waiting: {len(prs)}")
+        if repo.get("more"):
+            gaps.append(f"PRs {repo['repo']}: only the oldest {len(repo['prs'])} open PRs read")
         rows += prs
     if attribution is not None:
         rows, dropped = attributed_rows(rows, attribution)

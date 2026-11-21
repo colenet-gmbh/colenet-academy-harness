@@ -370,6 +370,7 @@ query($owner: String!, $name: String!) {
         ... on StatusContext { context state createdAt }
       } } } } } }
     pullRequests(states: OPEN, first: 50, orderBy: {field: CREATED_AT, direction: ASC}) {
+      pageInfo { hasNextPage }
       nodes { number }
     }
   }

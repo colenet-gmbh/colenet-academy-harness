@@ -310,3 +310,10 @@ def test_unread_board_and_repo_are_gaps(tmp_path):
     doc = build(tmp_path / "missing.json", repos=[{"repo": "acme/app", "gap": "gh: down"}])
     assert doc["gaps"] == ["board: not found", "PRs acme/app: not read (gh: down)"]
     assert doc["rows"] == []
+
+
+def test_more_open_prs_than_read_is_a_gap(tmp_path):
+    doc = repo_doc([pr(50, [ctx("test", done=at(5))], armed=True)])
+    doc["more"] = True
+    out = build(make_board(tmp_path), repos=[doc])
+    assert "PRs acme/app: only the oldest 1 open PRs read" in out["gaps"]

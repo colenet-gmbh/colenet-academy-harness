@@ -59,7 +59,8 @@ def main_state(
     """`{state: green|red|unknown|unread, line, fetched_at}` (module docstring § Main verdict)."""
     if not command:
         return {"state": "unread", "line": "main state: not read (no source)", "fetched_at": None}
-    digest = hashlib.sha256(command.encode()).hexdigest()[:16]
+    # the repo it runs in belongs to the key: two crews with one relative command differ
+    digest = hashlib.sha256(f"{cwd}\n{command}".encode()).hexdigest()[:16]
     path = cache / f"main-state-{digest}-{int(now.timestamp()) // MAIN_TTL_S}.json"
     try:
         ci_source.own_cache(cache)
