@@ -2,8 +2,9 @@
 """The crew view: who of the crew runs, on what, since when, waiting on whom, with which plugin.
 
 Read-only, one verb: this script reads `claude agents --json`, the board file and the plugin
-installs, and prints; it writes no file and sends nothing. The /board pane's **Crew** button
-renders its `--json`; a later web front reads the same document.
+installs, and prints; it writes no file and sends nothing. The Zentrale (`command_center/zentrale.py`,
+the /board pane's **Zentrale** button) shows its sessions as section Working; a later web front
+reads the same document.
 
 Usage: crew_view.py [--json] [--board FILE]
 
