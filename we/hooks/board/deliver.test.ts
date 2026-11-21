@@ -803,7 +803,7 @@ test('a reply read from a ticket names the ticket as where it was written', asyn
   expect(writerNote(line)).toBe(' (answered from the board pane in ticket PROJ-12 (bob))')
 })
 
-test('a one-way "Yes, I\'ll do it" tells coordinator and asker the owner merges by hand, never "proposal accepted"', async ($, on) => {
+test('a one-way Go tells coordinator and asker the asking session arms on the go, never "proposal accepted"', async ($, on) => {
   const pr = 'https://github.com/acme/shop/pull/7'
   const board = boardOf({
     owner_queue: [
@@ -813,7 +813,7 @@ test('a one-way "Yes, I\'ll do it" tells coordinator and asker the owner merges 
   const { clock, h } = await coordinator($, on, { board })
   await h.click({ id: 'Q1', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
   await clock.advance(3_000)
-  const text = `Q1: the owner approves or merges ${pr} by hand — do not merge or arm it; the question stays open until the PR is merged (answered from the board pane in foxy)\nThe question: "Merge it?"\nThe recommendation accepted: "yes"`
+  const text = `Q1: the owner's go on ${pr} — the asking session arms it with \`arm_pr.sh --go Q1\`; the question stays open until the PR is merged (answered from the board pane in foxy)\nThe question: "Merge it?"\nThe recommendation accepted: "yes"`
   expect(h.submitted).toEqual([text])
   expect(h.sent).toEqual([{ to: 'asker', text }])
   expect([...h.submitted, ...h.sent.map(s => s.text)].some(t => t.includes('proposal accepted'))).toBe(false)
@@ -822,7 +822,7 @@ test('a one-way "Yes, I\'ll do it" tells coordinator and asker the owner merges 
 test('Taken on a task says the owner does it; an accept_hand wording leaves the task text alone', async ($, on) => {
   const board = boardOf({
     owner_queue: [{ id: 'Q1', session: 'asker', key: 'PROJ-40', ask: 'Rotate the key', since: '2026-11-03', recommendation: 'today', kind: 'task' }],
-    answer_prompts: { accept_hand: '{id}: ich merge {pr} selbst' },
+    answer_prompts: { accept_hand: '{id}: Go für {pr}' },
   })
   const { clock, h } = await coordinator($, on, { board })
   await h.click({ id: 'Q1', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })

@@ -283,7 +283,7 @@ names are those of the default board.
 | `owner_queue[].session`, `.key`, `.ask`, `.recommendation` | who asks, the ticket, the question, the asker's recommendation; **Accept** shows only with a recommendation, **Deny** always |
 | `owner_queue[].to`, `.to_name`, `.label` | optional: a question `board.py ask --to` sent to a human on another machine, that human's name and the ticket label it carries (§ Several humans); its answer comes from the ticket, so the card shows `waiting on <to_name> (label <label>)` and only **Withdraw** |
 | `owner_queue[].key_title`, `.cause`, `.ts` | the ticket's title, why the owner is asked (`merge-go`, `plan`, `prod`, `cut-fence`, `access-click`, `window-go`, `info`; a `window-go` is a go the owner must type in the asking session's own window, its `ask` naming that window and the exact sentence) and when it was posted (ISO UTC); `board.py ask` writes all three |
-| `owner_queue[].pr_url`, `.one_way` | the open PR a `merge-go` question is about and its one-way class (`board.py ask --pr`, `--one-way`); with both, the card shows `approve or merge (<class>): <url>` and names **Accept** **Yes, I'll do it** (it writes `accept`: the owner approves where the repo's one-way gate takes an approve as the go, else merges by hand, and the deliverer sends `accept_hand`, § Answers), and `board.py close-merged` drops the question once the PR is merged or closed |
+| `owner_queue[].pr_url`, `.one_way` | the open PR a `merge-go` question is about and its one-way class (`board.py ask --pr`, `--one-way`); with both, the card shows `merge go (<class>): <url>` and names **Accept** **Go** (it writes `accept`, the owner's go: the deliverer sends `accept_hand`, § Answers, and the asking session arms the PR with `arm_pr.sh --go <id>`), and `board.py close-merged` drops the question once the PR is merged or closed |
 | `owner_queue[].kind`, `.source`, `.owner` | `task` (`board.py ask --kind task`: the card offers **Taken** in place of **Accept** and stamps `taken`; the deliverer sends `accept_task`, § Answers); where the ask's fact comes from (`--source`, shown dimmed under the ask); the member who owns the subject (`--owner`, or `--component` resolved through the crew's `members.*.components`): the deliverer sends that session a copy of every answer (§ Answers) |
 | `owner_queue[].urgent`, `.obsolete` | `true` for a question asked `--urgent` (listed first in the bundle); the reason a question became moot (`board.py blocked --clear`, § Blocked workers) |
 | `sessions[].name` | the session's name as `claude agents` lists it; the live column matches on it |
@@ -304,8 +304,8 @@ Every field but `sessions[].name` may be missing or `null`; the pane leaves it o
 
 ## Answers
 
-Each question with an `id` carries the buttons **Accept** (only with a `recommendation`; **Yes, I'll
-do it** on a one-way merge question), **Deny**, **Discuss**, **More info** and **Update**; a question
+Each question with an `id` carries the buttons **Accept** (only with a `recommendation`; **Go** on a
+one-way merge question), **Deny**, **Discuss**, **More info** and **Update**; a question
 sent to a human on another machine (`to`) carries only **Withdraw**; each news item carries **Read**. A press appends one line to `board-answers.jsonl` in the board
 file's folder (default `~/.claude/we-state/board-answers.jsonl`) and never writes `board.json`, so
 an `owner_queue` item keeps no answer: `board.py show <Q>` prints the question with its answer lines
@@ -355,7 +355,7 @@ minutes. Per line it writes one row per recipient to
 
 | Recipient (`role`) | When | Carrier | Delivered when |
 |---|---|---|---|
-| `coordinator` (the orchestrator) | always, unless the line came from its own chat (`via: chat`, `session` = the orchestrator) | a prompt as if typed: `<id>: proposal accepted` (an Accept on a one-way `merge-go` with its PR, **Yes, I'll do it**: `<id>: the owner approves or merges <pr_url> by hand — do not merge or arm it; the question stays open until the PR is merged`; **Taken** on a task: `<id>: taken — the owner does this task; do not do it yourself`), `<id>: proposal denied`, `<id>: let's talk about it`, `<id>: I need more information` or `<id>: please check whether this question is still current and correctly worded (goal still active? needs an update?)`, then where it was written (`(answered from the board pane in <session>)`, `(answered in the chat of <session>)` or `(answered on ticket <KEY> (<human>))` after a space: transparency, no check), then on lines of their own the question (`The question: "<ask>"`), its recommendation (`The recommendation accepted: "…"`, `denied` on a Deny) and the owner's words when the line has a `quote` | the session stored the prompt as a user row |
+| `coordinator` (the orchestrator) | always, unless the line came from its own chat (`via: chat`, `session` = the orchestrator) | a prompt as if typed: `<id>: proposal accepted` (an Accept on a one-way `merge-go` with its PR, **Go**: ``<id>: the owner's go on <pr_url> — the asking session arms it with `arm_pr.sh --go <id>`; the question stays open until the PR is merged``; **Taken** on a task: `<id>: taken — the owner does this task; do not do it yourself`), `<id>: proposal denied`, `<id>: let's talk about it`, `<id>: I need more information` or `<id>: please check whether this question is still current and correctly worded (goal still active? needs an update?)`, then where it was written (`(answered from the board pane in <session>)`, `(answered in the chat of <session>)` or `(answered on ticket <KEY> (<human>))` after a space: transparency, no check), then on lines of their own the question (`The question: "<ask>"`), its recommendation (`The recommendation accepted: "…"`, `denied` on a Deny) and the owner's words when the line has a `quote` | the session stored the prompt as a user row |
 | `asker` (`owner_queue[].session`) | unless the line was written in the asker's own session, or the asker is the coordinator (its `coordinator` prompt carries the answer, and its delivered row lets `prune` drop the question); a question no longer on the board has none | a message to that session: the same text, for **Update** `check whether <id> is still current and well worded; re-ask it with a new id or withdraw it` | the engine queued it there |
 | `owner` (`owner_queue[].owner`) | unless it is the coordinator, the asker or the session that wrote the line | a message to that session: the coordinator's text plus `(copy for the owner of this subject)`; a refusal is a ledger row only, no routing line | the engine queued it there |
 | `starter` (`owner_queue[].starter`) | only on a question with `answer_to: asker`, once the asker refused or was not reached | a message to the asker's starter: the asker's text plus `(for <asker>, which did not take it: carry it on or act on it)` | the engine queued it there |
@@ -373,9 +373,9 @@ coordinator's full text.
 
 The board's optional `answer_prompts` words these texts in the orchestrator's own language, `{id}`
 standing for the question's id and `{pr}` for its PR link: `{"accept": "{id}: Vorschlag angenommen"}`;
-`update_asker` is the asker's Update text, `accept_hand` and `accept_task` the two Accepts that mean
-"I do it myself" (never `accept`'s text, which a coordinator reads as a go); a kind it leaves out
-keeps the default.
+`update_asker` is the asker's Update text, `accept_hand` (the go on a one-way PR, armed by the
+asking session) and `accept_task` (the owner does it) the two Accepts with a meaning of their own
+(never `accept`'s text); a kind it leaves out keeps the default.
 
 Outcomes, each a row (readers fold the rows of one `id`, `answer_ts` and `role` to the newest `ts`):
 
@@ -451,10 +451,12 @@ crew's `naming.key` or a cause outside the six is refused, one line each, before
 A `merge-go` question also needs `--pr <ref>` (a URL, `<owner>/<repo>#<n>` or a number) on a PR
 `gh pr view` reads as `OPEN`; a merged or closed one is refused before the reader, so no question
 asks about a merge that already happened. `--one-way <class>` (merge-go only) marks a one-way PR:
-the owner approves it where the repo's one-way gate takes an approve as the go, else merges it
-by hand, so the card offers the link and no **Accept**. `board.py close-merged`
+the card offers the link and **Go**: an Accept is the owner's go, and the asking session arms the
+PR with `arm_pr.sh --go <id>` (no approve on GitHub is the go); the helper reads `board.py show <id>`
+and arms only a `merge-go` on that PR with `status: answered: accept`, fail closed on any other
+answer, PR or an unreadable board. `board.py close-merged`
 (also run by `bundle` and `/we:merged`) removes every merge question still in `owner_queue` whose
-PR merged or closed, whatever its answer (an Accept, the owner's hand merge) and in whichever repo
+PR merged or closed, whatever its answer (a Go, the owner's hand merge) and in whichever repo
 its `pr_url` points, logs one `closed` line each in `board-questions.jsonl` and prints
 `closed <id>: PR <state> <url>` per question.
 Then a cold reader judges the question: one `claude -p` run (the prompt, model and effort of
@@ -517,7 +519,7 @@ the board lock (`prune` in `board.py`), and `board.py prune` runs it alone and p
 
 | Entry | Leaves when |
 |---|---|
-| a question (or item) an Accept or Deny closed | nothing is owed to its asker any more, since the deliverer finds the asker only on the board: each answer line on the id is older than the ledger's `epoch`, written in the asker's own session, or has an asker row `delivered: true` in `board-deliveries.jsonl` (refused, or not taken 24 h after the answer: a delivered `starter` or `route` row, which the deliverer writes to the coordinator then, `ROUTE_AFTER_MS` in `deliver.ts`). A close no one carried stays however old, a `duplicate-answer` line changes nothing, an Accept ("Yes, I'll do it") on a one-way merge-go stays until `close-merged` sees its PR merged or closed, and an Accept on a `window-go` stays until its asker runs `board.py withdraw <id> --reason done` once the go is typed |
+| a question (or item) an Accept or Deny closed | nothing is owed to its asker any more, since the deliverer finds the asker only on the board: each answer line on the id is older than the ledger's `epoch`, written in the asker's own session, or has an asker row `delivered: true` in `board-deliveries.jsonl` (refused, or not taken 24 h after the answer: a delivered `starter` or `route` row, which the deliverer writes to the coordinator then, `ROUTE_AFTER_MS` in `deliver.ts`). A close no one carried stays however old, a `duplicate-answer` line changes nothing, an Accept (**Go**) on a one-way merge-go stays until `close-merged` sees its PR merged or closed, and an Accept on a `window-go` stays until its asker runs `board.py withdraw <id> --reason done` once the go is typed |
 | a question its asker took back, unanswered | a `withdrawn` or `superseded` line names it (`board.py withdraw`, `supersede`; § Several humans) |
 | a news item | its newest answer line is `read` |
 | a `returned` item | at once (reason `returned`): its asker has it |

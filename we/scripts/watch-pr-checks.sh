@@ -16,8 +16,8 @@
 #                     BLOCKED past WATCH_BLOCKED_GRACE still ends it, armed or not), and a
 #                     moved head prints `head moved <old> -> <new> — watching it` and is followed: a
 #                     watcher that ended there left its master sitting next to a PR that merged later.
-#   --human-merge     for a PR only a human merges (one-way, never armed): --until-merged that
-#                     waits past `auto-merge off` and BLOCKED (the approve) until MERGED or CLOSED;
+#   --human-merge     for a one-way PR waiting for the human's go (not armed yet): --until-merged that
+#                     waits past `auto-merge off` and BLOCKED (no go yet) until MERGED or CLOSED;
 #                     only a conflict or a stale base (DIRTY, BEHIND) still ends it with exit 0 (as
 #                     does the merge: `final … merged`).
 #   --max-hours <h>   lifetime cap, default 6.

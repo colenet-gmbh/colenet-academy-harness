@@ -832,6 +832,7 @@ def test_under_worker_the_ready_merge_line_on_the_own_head_is_allowed(world):
         ("gh pr merge 8 --disable-auto", "not this branch's PR"),
         ("bash arm_pr.sh 8", "not this branch's PR"),
         ("arm_pr.sh --repo other/app 7", "another repo"),
+        ("arm_pr.sh 7 --go Q812", "arm_pr.sh --go"),
         ("git push origin HEAD:feat/ABC-99-other", "pushes only branches carrying ABC-12"),
         ("gh pr create --head feat/ABC-99-other", "its own branch"),
         ("gh pr edit 8 --title x", "not this branch's PR"),

@@ -810,13 +810,13 @@ export const registerBoard = (on: On, options: PluginOptions) => {
         q.session ? [{ text: q.session, dim: struck }] : [],
         q.key ? [{ text: q.key, dim: true }] : [],
       ]
-      // A one-way merge waits for the owner's approve (repo with an approve gate) or hand merge: the PR link, and
-      // Accept as "Yes, I'll do it" (board.py close-merged drops the question once the PR merged).
-      const handMerge = q.one_way && q.pr_url ? `approve or merge (${q.one_way}): ${q.pr_url}` : undefined
+      // A one-way merge waits for the owner's go: the PR link, and Accept as Go (the asking session arms
+      // with `arm_pr.sh --go <id>`; board.py close-merged drops the question once the PR merged).
+      const handMerge = q.one_way && q.pr_url ? `merge go (${q.one_way}): ${q.pr_url}` : undefined
       // A question sent to a human on another machine (board.py ask --to): its answer comes from the ticket, so
       // the local human only withdraws it.
       const remote = q.to ? `waiting on ${q.to_name || q.to}${q.label ? ` (label ${q.label})` : ''}` : undefined
-      const acceptLabel = handMerge ? "Yes, I'll do it" : q.kind === 'task' ? 'Taken' : 'Accept'
+      const acceptLabel = handMerge ? 'Go' : q.kind === 'task' ? 'Taken' : 'Accept'
       const buttons = q.id && !struck
         ? remote
           ? [{ key: `withdraw-${q.id}`, label: 'Withdraw', on: press('withdraw') }]
