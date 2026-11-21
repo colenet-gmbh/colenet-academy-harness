@@ -1,6 +1,6 @@
 # Risk rules of this repo, read by we/scripts/risk_paths.py from origin/main only.
-# A PR touching a [brake-change] path is `T2 one-way brake-change`: the owner merges it
-# by hand (code owner review per .github/CODEOWNERS).
+# A PR touching a [brake-change] path is `T2 one-way brake-change`: it merges on the owner's go,
+# asked as a question; the asking session arms it with `arm_pr.sh <PR> --go Q<nr>`.
 # Grammar: `[section]`, `path <glob>` and `json <file> <key>` lines (risk_paths.py's docstring).
 
 [brake-change]

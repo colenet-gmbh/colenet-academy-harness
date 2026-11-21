@@ -78,9 +78,28 @@ GREEN = [check("lint"), check("Claude Review")]
 PENDING = [check("lint"), check("Claude Review", "IN_PROGRESS", None)]
 
 
+def plain_checkout(tmp_path):
+    """A git checkout whose origin/main carries no risk rules: every head classifies T0."""
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(
+        tmp_path,
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "i",
+    )
+    _git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+
 def run(tmp_path, reads, arms, required=REQUIRED, merge=None, extra=(), env_extra=None):
-    if merge is not None:  # a crew with a `merge` block; `.git` bounds the crew lookup at tmp_path
-        (tmp_path / ".git").mkdir()
+    if not (tmp_path / ".git").exists():  # the arm classifies fail-closed: it needs a clone
+        plain_checkout(tmp_path)
+    if merge is not None:  # a crew with a `merge` block in the checkout; the base has none
         (tmp_path / ".weside").mkdir()
         crew = {"version": 2, "roles": {}, "members": {}, "merge": merge}
         (tmp_path / ".weside" / "crew.json").write_text(json.dumps(crew))
@@ -103,7 +122,7 @@ def run(tmp_path, reads, arms, required=REQUIRED, merge=None, extra=(), env_extr
         capture_output=True,
         text=True,
         env=env,
-        cwd=tmp_path,  # no git checkout: the one-way classifier stays silent
+        cwd=tmp_path,
         timeout=30,
         check=False,
     )
@@ -415,13 +434,92 @@ def test_check_refuses_another_head(tmp_path):
     assert arm_calls(calls) == []
 
 
-def test_check_refuses_a_checkout_that_is_not_the_pr_head(tmp_path):
-    checkout(tmp_path)
-    got, out, calls = run(tmp_path, [{"head": NEW, "checks": GREEN}], ["ok"], extra=("--check",))
+def one_way_head(tmp_path, path="we/scripts/arm_pr.sh"):
+    """The plugin's risk rules on origin/main; the PR head, a commit on a side branch touching a
+    brake path, is not checked out: HEAD stays origin/main."""
+    risk_checkout(tmp_path)
+    _git(tmp_path, "checkout", "-q", "-b", "pr")
+    (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / path).write_text("x\n")
+    _git(tmp_path, "add", path)
+    _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "brake")
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    _git(tmp_path, "checkout", "-q", "main")
+    return sha
+
+
+def comment_calls(calls):
+    return [c for c in calls if c[:2] == ["pr", "comment"]]
+
+
+@pytest.mark.parametrize("extra", [(), ("--check",)], ids=["arm", "check"])
+def test_a_one_way_head_is_classified_from_another_checkout(tmp_path, extra):
+    """Red arm: a checkout that is not the PR head left the class to the caller (a stderr note),
+    so a one-way PR armed from the master's main checkout."""
+    sha = one_way_head(tmp_path)
+    got, out, calls = run(tmp_path, [{"head": sha, "checks": PENDING}], ["ok"], extra=extra)
     assert (got, out) == (
         6,
-        ["refused: one-way not classified (this checkout is not the PR head)"],
+        [
+            "refused: one-way brake-change — ask the human (merge question), then arm with --go Q<nr>"
+        ],
     )
+    assert arm_calls(calls) == [] and comment_calls(calls) == []
+
+
+def test_a_two_way_head_from_another_checkout_still_arms(tmp_path):
+    sha = one_way_head(tmp_path, "docs/notes.md")
+    code, out, calls = run(tmp_path, [{"head": sha, "checks": PENDING}], ["ok"])
+    assert (code, out[0]) == (0, f"armed: auto-merge on {sha} (merge)")
+    assert len(arm_calls(calls)) == 1 and comment_calls(calls) == []
+
+
+def test_a_head_missing_from_the_clone_is_not_classified(tmp_path):
+    risk_checkout(tmp_path)
+    got, out, calls = run(tmp_path, [{"head": NEW, "checks": PENDING}], ["ok"])
+    assert (got, out) == (
+        6,
+        [f"refused: one-way not classified (head {NEW[:12]} not here (fetch it))"],
+    )
+    assert arm_calls(calls) == []
+
+
+def test_the_humans_go_arms_a_one_way_pr_and_says_so_on_it(tmp_path):
+    sha = one_way_head(tmp_path)
+    code, out, calls = run(
+        tmp_path, [{"head": sha, "checks": PENDING}], ["ok"], extra=("--go", "Q812")
+    )
+    assert (code, out) == (0, [f"armed: auto-merge on {sha} (merge)", "pending: Claude Review"])
+    assert len(arm_calls(calls)) == 1
+    assert comment_calls(calls) == [
+        ["pr", "comment", "7", "--repo", "o/r", "--body", "one-way armed on the human's go Q812"]
+    ]
+
+
+def test_go_on_a_two_way_pr_arms_without_a_comment(tmp_path):
+    code, out, calls = run(
+        tmp_path, [{"head": NEW, "checks": PENDING}], ["ok"], extra=("--go", "Q812")
+    )
+    assert (code, out[0]) == (0, f"armed: auto-merge on {NEW} (merge)")
+    assert comment_calls(calls) == []
+
+
+@pytest.mark.parametrize("go", ["812", "q812", "Q", "Q81x", "--check"])
+def test_go_takes_only_a_question_number(tmp_path, go):
+    sha = one_way_head(tmp_path)
+    got, out, calls = run(tmp_path, [{"head": sha, "checks": PENDING}], ["ok"], extra=("--go", go))
+    assert (got, out) == (4, [f"refused: --go {go} is no question number (Q<nr>)"])
+    assert calls == [] or arm_calls(calls) == []
+
+
+def test_check_takes_no_go(tmp_path):
+    sha = one_way_head(tmp_path)
+    got, out, calls = run(
+        tmp_path, [{"head": sha, "checks": GREEN}], ["ok"], extra=("--check", "--go", "Q812")
+    )
+    assert got == 2 and out[-1].startswith("gh failed: usage:")
     assert arm_calls(calls) == []
 
 
@@ -564,7 +662,7 @@ def test_the_plugin_classifier_rejects_core_grammar(tmp_path):
         (
             'printf "T2 one-way brake-change\\nreview: high\\n"\n',
             6,
-            "refused: one-way brake-change — only the human merges it",
+            "refused: one-way brake-change — ask the human (merge question), then arm with --go Q<nr>",
         ),
         (
             'echo "risk-class: rules parse error" >&2; exit 2\n',

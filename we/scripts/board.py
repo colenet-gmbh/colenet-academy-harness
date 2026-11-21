@@ -88,7 +88,8 @@ ask      posts a question for the owner after a cold reader (`cold_reader.py`) u
          A `merge-go` question needs `--pr` (a URL, `<owner>/<repo>#<n>` or a number) on an OPEN
          PR (`gh pr view`), else it is refused before the reader; the item keeps `pr_url`.
          `--one-way <class>` (only with merge-go) stamps `one_way`: the pane then names Accept
-         "Yes, I'll do it" (it writes `accept`) beside the PR link to approve or merge.
+         Go (it writes `accept`) beside the PR link; the asking session arms on it with
+         `arm_pr.sh --go <id>`.
          `--kind task` stamps `kind: task` (the pane labels
          Accept as Taken when the task carries a recommendation). `--source <command or link>` stamps where the ask's fact comes from (the
          pane shows it). `--owner <member>` or `--component <name>` (the member whose `components`
@@ -645,7 +646,7 @@ def prune(board, state, now):
         """A closed question goes once its asker is owed nothing: delivered to the asker, or
         routed to the coordinator (deliver.ts routes an answer the asker has not taken within
         PRUNE_AFTER_H). A one-way merge-go accepted stays until `close-merged` takes it: the
-        human still has to merge."""
+        asking session still has to arm it."""
         if item.get("one_way") and item.get("cause") == "merge-go" and close["answer"] == "accept":
             return None
         if item.get("cause") == "window-go" and close["answer"] == "accept":
@@ -4168,9 +4169,7 @@ def parser():
     q.add_argument("--text-file", metavar="PATH", help="the --ask text from a file, - for stdin")
     q.add_argument("--urgent", action="store_true", help="bundle lists it before the others")
     q.add_argument("--pr", metavar="REF", help="the open PR a merge-go question is about")
-    q.add_argument(
-        "--one-way", metavar="CLASS", help="merge-go on a one-way PR: Accept reads Yes, I'll do it"
-    )
+    q.add_argument("--one-way", metavar="CLASS", help="merge-go on a one-way PR: Accept reads Go")
     q.add_argument(
         "--kind",
         dest="ask_kind",

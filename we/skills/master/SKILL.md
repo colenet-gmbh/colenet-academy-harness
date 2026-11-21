@@ -220,7 +220,7 @@ A worker briefed `PR owner: worker` runs steps 2–3 and its fix rounds; you act
    line naming money, auth or tenant work when the diff has it. Link the PR to the ticket and move
    no status: In Review is "PR merged and linked" (L0 §Lifecycle) and `/we:merged` sets it.
 4. Run `${CLAUDE_PLUGIN_ROOT}/scripts/watch-pr-checks.sh <PR> --sha <pushed sha>` as a background command,
-   with `--until-merged` once auto-merge is armed (`--human-merge` on a one-way PR the human merges), and next to it one
+   with `--until-merged` once auto-merge is armed (`--human-merge` on a one-way PR waiting for the human's go), and next to it one
    `${CLAUDE_PLUGIN_ROOT}/scripts/watch-pr-conflicts.sh <PR>…` over the run's open PRs. The headers list
    the exit codes; start both from the main checkout (`references/session-traps.md` § CI and checks). One checks watcher per PR: a worker running `/we:ci-review` on it watches until green
    (L0 §Sessions), then you arm it `--until-merged`. Meanwhile refine or prepare the next story.
@@ -261,7 +261,7 @@ A worker briefed `PR owner: worker` runs steps 2–3 and its fix rounds; you act
   |---|---|---|
   | `T0`, `T2` | you: `${CLAUDE_PLUGIN_ROOT}/scripts/arm_pr.sh <PR>`, right after `gh pr create` | the repo's required checks (GitHub waits) |
   | `T2` with a card hit (`trust-loosening:`, `brake-review:` hit line) | you, the same arm | as `T2`; the security card verdict is a PR comment for the human and the security owner |
-  | `T2 one-way <class>` | only the human; you never arm it, in any repo | their approve on the head, then their merge, from a board item |
+  | `T2 one-way <class>` | you, only on the human's go: `arm_pr.sh <PR> --go Q<nr>` | the go, passed back with its question number, then the required checks |
   | `T? uncommitted changes under <path>` (exit 3), any other line or exit | nobody yet: the class is not known | commit or remove the file, classify again; `arm_pr.sh` refuses it (exit 6) |
 
   - `--method squash|rebase` when `.weside/orchestrate.md` names it. The helper never merges; act on
@@ -273,11 +273,12 @@ A worker briefed `PR owner: worker` runs steps 2–3 and its fix rounds; you act
     (`<KEY>-card`, through the crew's launcher like any worker, brief per
     `references/worker-dispatch.md` § Card worker); it writes its verdict to a file, you post it
     unchanged. It is input for the people who read the PR, not a condition of the arm.
-  - **One-way:** post the T2 panel and the card verdict, then write one board item with the PR link,
-    the class and both verdicts (`board.py ask --cause merge-go --pr <url> --one-way <class>`): it
-    waits for the human's merge. The closing message says `user merge: one-way (<class>)`. Ask
-    "please approve" where the gate takes the approve as the go, else "please merge", and do nothing
-    after it.
+  - **One-way:** post the T2 panel and the card verdict, then ask the merge question through the
+    coordinator with the PR link, the class and both verdicts (its board item:
+    `board.py ask --cause merge-go --pr <url> --one-way <class>`). On the go it passes back with the
+    question number, arm with `arm_pr.sh <PR> --go Q<nr>` (it comments the go on the PR) and watch
+    `--until-merged`. No approve on GitHub is the go; without the go nothing arms it. A go holds for
+    the head it was asked on: a later push touching a file of the one-way class asks again.
   - Drafts: `/we:pr` step 4; a draft is no merge brake. Non-destructive migrations auto-merge serially
     (owner 03.10.2026): the second PR arms only after the first landed, merging `origin/<default>`,
     checking for one migration head, and pushing first. A fix round on an armed PR starts with

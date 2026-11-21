@@ -35,7 +35,7 @@ PR owner rights (`build.pr_owner: worker` of `.weside/config.json`, read from th
 origin like the crew; `pr_owner_on_default`): the worker carries its own PR, so under the same key and
 branch conditions it may also run `git push` (`push`: every destination branch carries its key),
 `gh pr create` (`pr_create`: no argument, `--head` only its branch), `gh pr edit` and `gh pr comment`
-(`pr_edit`, `pr_comment`: its own PR), `arm_pr.sh` (`arm`: its own PR), `gh pr merge` (`merge`: its
+(`pr_edit`, `pr_comment`: its own PR), `arm_pr.sh` (`arm`: its own PR, never `--go`), `gh pr merge` (`merge`: its
 own PR, either `--disable-auto` alone or `--match-head-commit <its checkout's HEAD>`, the line
 `arm_pr.sh` prints as `ready`, and only when `arm_pr.sh --check` answers
 `ready` on that HEAD, the one owner of those facts (hold labels, one-way class, every required name
@@ -728,8 +728,8 @@ def _create_refusal(args: list[str], branch: str) -> str | None:
 def _merge_refusal(args: list[str], cwd: str | None) -> str | None:
     """`gh pr merge` holds only as `--disable-auto` alone (a fix round begins with it) or as the
     command `arm_pr.sh` prints with `ready`: `--match-head-commit` on this checkout's HEAD. That
-    HEAD is the one `arm_pr.sh` classified (it runs the one-way check only when the checkout is the
-    PR head), and GitHub refuses the merge when the PR's head moved since."""
+    HEAD is the one `arm_pr.sh` classified, and GitHub refuses the merge when the PR's head moved
+    since."""
     flags = [t.split("=", 1)[0] for t in args[2:] if t.startswith("-")]
     if "--disable-auto" in flags:
         extra = [f for f in flags if f not in ("--disable-auto", "-R", "--repo")]
@@ -784,6 +784,8 @@ def _arm_refusal(
     argv: list[str], slug: str | None, branch: str, cwd: str | None, deadline: float | None = None
 ) -> str | None:
     run = _arm_argv(argv)
+    if any(t.split("=", 1)[0] == "--go" for t in run[1:]):
+        return "arm_pr.sh --go: the human's go on a one-way PR reaches the session that asked, never a worker"
     repo = _flag_value(run[1:], "--repo", "-R")
     if repo and slug_of(repo) != slug:
         return f"{repo} is another repo than {slug}"

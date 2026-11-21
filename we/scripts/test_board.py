@@ -3437,8 +3437,8 @@ class TestPrune:
         assert [q["id"] for q in board_of(crewless)["owner_queue"]] == ["Q7"]
 
     def test_an_accepted_one_way_merge_go_stays_until_close_merged(self, crewless):
-        """Red arm: "Yes, I'll do it" on a one-way merge-go is the human's promise to merge by
-        hand; the reminder stays on the board until close-merged sees the PR merged."""
+        """Red arm: Go on a one-way merge-go still waits for the asking session's arm; the
+        reminder stays on the board until close-merged sees the PR merged."""
         path = crewless / "board.json"
         data = json.loads(path.read_text(encoding="utf-8"))
         q7 = next(q for q in data["owner_queue"] if q["id"] == "Q7")

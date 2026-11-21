@@ -81,7 +81,7 @@ export type BoardQueueItem = {
   recommendation?: string | null
   // `merge-go`, `plan`, … (`board.py ask --cause`).
   cause?: string | null
-  // The open PR a merge question is about, and its one-way class: Accept reads "Yes, I'll do it" beside the link.
+  // The open PR a merge question is about, and its one-way class: Accept reads Go beside the link.
   pr_url?: string | null
   one_way?: string | null
   // `task` (`board.py ask --kind task`): the pane offers Taken instead of Accept.
@@ -242,8 +242,9 @@ export type BoardAnswerKind = 'accept' | 'deny' | 'discuss' | 'info' | 'update' 
 export type BoardDeliveredKind = Exclude<BoardAnswerKind, 'read'>
 // The texts a delivery sends, each overridable by the board's `answer_prompts`: one per delivered kind
 // for the orchestrator (and the asker), `update_asker`, what Update asks of the asking session, and the
-// two Accepts that mean "I do it myself": `accept_hand` ("Yes, I'll do it" on a one-way merge-go with its
-// PR, `{pr}` standing for the PR link) and `accept_task` (Taken on a task).
+// two Accepts with a meaning of their own: `accept_hand` (Go on a one-way merge-go with its PR, `{pr}`
+// standing for the PR link: the asking session arms with `arm_pr.sh --go <id>`) and `accept_task`
+// (Taken on a task).
 export type BoardAcceptVariant = 'accept_hand' | 'accept_task'
 export type BoardPromptKind = BoardDeliveredKind | 'update_asker' | BoardAcceptVariant
 

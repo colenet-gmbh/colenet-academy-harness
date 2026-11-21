@@ -161,6 +161,22 @@ def test_the_unbound_t2_oneway_case_keeps_waiting_on_the_human_alone():
     assert _lists(case)["waits"] == ["human"]
 
 
+def test_the_t2_oneway_case_routes_a_question_and_arms_on_the_go():
+    """The one-way case's master asks the human through the coordinator and arms on the go it gets
+    back with the question number; no approve on GitHub is the go. Red arm: the L0 that made the
+    human's approve the go."""
+    case = REPO / "tests" / "coldstart" / "master" / "t2-oneway-human-merges.yaml"
+    forbidden = _lists(case)["forbidden"]
+    assert "gh pr review --approve" in forbidden and "please approve" in forbidden
+    [route] = ROUTE.findall(case.read_text(encoding="utf-8"))
+    l0, _card = _rendered(GENERIC_FIXTURE)
+    one_way = l0.split("- **One-way is a computed class:**", 1)[1].split("\n- ", 1)[0]
+    flat = " ".join(one_way.split())
+    assert re.search(route.encode().decode("unicode_escape"), flat), flat
+    assert "on Hal's go" in flat and "`arm_pr.sh --go Q<nr>`" in flat
+    assert "approve" not in flat
+
+
 GENERIC_FIXTURE = "we/scripts/fixtures/crew-v2-generic.json"
 ORDER_LINE = (
     "- On a card hit (`trust-loosening`, `brake-review`): a fresh worker with Bo's card reviews the "

@@ -17,6 +17,12 @@ check included), for `arm_pr.sh`: stdout is the classifier's output and exit 0 w
 `risk.command` prints `T0`. It fetches `RULES_FROM` (and a crew's `risk.rules_from`) best-effort
 and reads the rules from the ref it has.
 
+`risk_runner.py head <sha> <base>` classifies the commit `sha` instead of the checkout: the same
+classifier on `base` in a no-checkout worktree of `sha` (`exec_in_tree`), with the output and exit
+codes of `here`. A base without rules is `T0` before the commit is looked at; otherwise a commit
+missing from this clone is a reason (`head <sha> not here (fetch it)`), exit 2. `arm_pr.sh` runs it
+when its checkout is not the PR head, so the class never depends on where the arm runs.
+
 `git(root, *args, timeout=...)` is the caller's git: stdout, or None on any failure. Python 3.9, stdlib only.
 """
 
@@ -255,6 +261,32 @@ def here(
     return _judge(name, out)
 
 
+def head(
+    root: str, sha: str, base: str, git: Git = plain_git, timeout: float = CLASSIFY_TIMEOUT
+) -> tuple[int, str]:
+    """(0, the classifier's stdout) or (2, one line why): the crew's classifier on `base` in a
+    no-checkout worktree of the commit `sha`, whatever this checkout holds (`arm_pr.sh`)."""
+    if git(root, "rev-parse", "--verify", "-q", f"{base}^{{commit}}") is None:
+        return 2, f"no {base} here (fetch it)"
+    if not _has_rules(root, git, base):
+        return 0, "T0"
+    if git(root, "cat-file", "-e", f"{sha}^{{commit}}") is None:
+        return 2, f"head {sha[:12]} not here (fetch it)"
+    fetch_rules(root, RULES_FROM, git)
+    rules_from = (crew_on(root, git).get("risk") or {}).get("rules_from")
+    if isinstance(rules_from, str) and rules_from != RULES_FROM:
+        fetch_rules(root, rules_from, git)
+    found = rules(root, git, fetch=False)
+    if not isinstance(found, tuple):  # None: no rules (T0); a str: why the rules cannot be read
+        return (0, "T0") if found is None else (2, found)
+    prefix, blob, _rules_from = found
+    name = classifier_name(found)
+    out, why = exec_in_tree(root, git, blob, [*prefix, base], sha, timeout)
+    if out is None:
+        return 2, f"{name}: {why}"
+    return _judge(name, out)
+
+
 def _judge(name: str, out: subprocess.CompletedProcess) -> tuple[int, str]:
     """(0, stdout) for a class on line 1 and exit 0; (2, one line why) otherwise."""
     line = (out.stdout.splitlines() or [""])[0].strip()
@@ -267,14 +299,18 @@ def _judge(name: str, out: subprocess.CompletedProcess) -> tuple[int, str]:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2 or argv[0] != "here" or argv[1].startswith("-"):
-        print("usage: risk_runner.py here <base>", file=sys.stderr)
+    ok = (len(argv) == 2 and argv[0] == "here") or (len(argv) == 3 and argv[0] == "head")
+    if not ok or any(a.startswith("-") for a in argv[1:]):
+        print("usage: risk_runner.py here <base> | head <sha> <base>", file=sys.stderr)
         return 2
     root = plain_git(os.getcwd(), "rev-parse", "--show-toplevel")
     if root is None:
         print("not a git checkout")
         return 2
-    code, text = here(root.strip(), argv[1])
+    if argv[0] == "head":
+        code, text = head(root.strip(), argv[1], argv[2])
+    else:
+        code, text = here(root.strip(), argv[1])
     print(text)
     return code
 

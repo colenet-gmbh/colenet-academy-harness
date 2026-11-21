@@ -23,8 +23,8 @@ INBOX = (
     "**The board is Hal's only inbox:** the push line, the bundle and an escalation each point at "
     "a board item."
 )
-ONE_WAY = "Only Hal merges a\n  one-way PR, on their approve;"
-DECIDED_3 = "3. One-way merges on Hal's approve only."
+ONE_WAY = "A one-way PR merges\n  on Hal's go: ask via"
+DECIDED_3 = "3. One-way merges on Hal's go, no approve gate."
 
 
 @pytest.fixture(autouse=True)
@@ -151,8 +151,8 @@ def test_the_phrase_tests_go_red_on_the_previous_text(tmp_path):
         "",
     )
     old = old.replace(
-        "on their approve;",
-        "on their approve; one word arms auto-merge;",
+        "panel and card are input.",
+        "panel and card are input; one word arms auto-merge;",
     )
     (process / "L0.md").write_text(old)
     text = rp.render_l0(generic(), process=process)
