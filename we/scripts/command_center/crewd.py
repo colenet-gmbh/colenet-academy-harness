@@ -12,7 +12,8 @@ own and no control. A background thread runs both with a fixed argv and a timeou
 every `TTL_S` seconds; requests only read the rendered snapshot in memory: no subprocess, no
 `open()` per request. The page answers at once from the last snapshot: at start the thread loads
 the cache file (`cache_path()`, mode 600 from its first byte, rendered fields and `fetched_at`
-only), then the fast read (`zentrale.py --fast`), then the full reads.
+only; loaded back through the same allowlist and redaction), then the fast read
+(`zentrale.py --fast`), then the full reads.
 
 Bind. Only the pod IP: `serve` refuses a loopback or wildcard address. Loopback stays closed on
 purpose, because a userspace tailscaled hands incoming tailnet connections to 127.0.0.1, a path
@@ -593,10 +594,54 @@ def _guarded(state: State, step, *args, **kwargs) -> None:
         state.fail(f"{type(exc).__name__}: {clean(exc)}")
 
 
+SNAP_KEYS = ("project", "generated_at", "fast", "header", "gaps", "sources", "owner", "red")
+SNAP_KEYS += ("waiting", "working", "ci", "accounts")
+
+
+def restore_snapshot(snap) -> dict | None:
+    """A cached snapshot through `snapshot_of` again (allowlist and redaction), so the cache file
+    is never trusted as rendered; None for a payload without the snapshot's shape."""
+    if not isinstance(snap, dict):
+        return None
+    if set(snap) == {"error"}:
+        return {"error": clean(snap["error"])}
+    if not set(SNAP_KEYS) <= set(snap):
+        return None
+    accounts = [
+        {
+            **a,
+            "five_hour": {"pct": a.get("five_hour")},
+            "seven_day": {"pct": a.get("seven_day")},
+        }
+        for a in snap.get("accounts") or []
+        if isinstance(a, dict)
+    ]
+    return snapshot_of(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "project": snap.get("project"),
+            "built_at": snap.get("generated_at"),
+            "fast": snap.get("fast"),
+            "header": snap.get("header"),
+            "gaps": snap.get("gaps"),
+            "sources": snap.get("sources"),
+            "sections": {
+                **{k: snap.get(k) for k in ("owner", "red", "waiting", "working", "ci")},
+                "accounts": accounts,
+            },
+        }
+    )
+
+
 def _load_cache(state: State, cache: Path) -> None:
+    """The cache file into `state`, both parts through their allowlist again."""
     cached = read_cache(cache)
-    if cached:
-        state.set(snap=cached.get("snap"), flow=cached.get("flow"), at=cached.get("fetched_at"))
+    if not cached:
+        return
+    snap = restore_snapshot(cached.get("snap"))
+    flow = flow_of(cached["flow"]) if isinstance(cached.get("flow"), dict) else None
+    if snap is not None or flow is not None:
+        state.set(snap=snap, flow=flow, at=cached.get("fetched_at"))
 
 
 def refresh_loop(state: State, cwd: str | None, cache: Path, stop: threading.Event) -> None:
