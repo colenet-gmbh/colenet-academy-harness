@@ -197,13 +197,12 @@ button opens `/flow`: first its section **Crew flow** (who works, who waits on w
 queue and run per open PR, stories waiting on acceptance, every gap, and the swimlane page's path),
 read from the last snapshot of `scripts/flow_intervals.py --snapshot` with its age shown; a snapshot
 older than 5 min starts one refresh in the background. Below it come the story lights for what this
-session works on, when the session names a key. The board's **Crew** button opens the crew pane:
-one line per live session of the crew (name, role, what it works on, since when, what it waits on, the
-plugin version it loaded), sessions that wait first, then the oldest, each worker under its starter and
-a worker without a live starter in a group of its own. It renders `scripts/crew_view.py --json` (that
-script's docstring owns the fields, the order and `schema_version`; a session counts as live by the
-test `we-worker status` uses), re-reads it every 30 s while open, and marks its stamp `(stale)` once
-the last read is older than two refreshes. Until `/board` runs in a session the pane polls
+session works on, when the session names a key. The board's **Zentrale** button opens the
+command centre in six sections: **With the owner**, **Red**, **Waiting**, **Working**, **CI** and
+**Accounts**. It renders `scripts/command_center/zentrale.py --json`; that script's docstring owns
+what each section holds, its sources, thresholds and `schema_version`, and `open_ends.py` owns the
+row contract. **Swimlanes** draws `scripts/flow_intervals.py --json` as one lane per session (keys
+`1` and `2`: 8 h and 24 h); **Sections** returns. Until `/board` runs in a session the pane polls
 nothing; the deliverer (§ Answers) checks the board file every three seconds in every session, pane or not, and acts only in the orchestrator's. Once open, the pane checks the file's modification time every three seconds and re-reads it
 when it moved; every minute it re-reads the file and the live column whatever happened.
 

@@ -146,6 +146,19 @@ ACCEPTANCE = "waits on acceptance"
 TERMINAL = {"done"}
 SCHEMA_VERSION = 1
 NOT_WAITING = {"working", "no-data"}
+# The kinds of a session lane (module docstring § Row contract), `waiting:<role>` for every role key:
+# the Zentrale's swimlanes (`hooks/board/zentrale.ts` GLYPH) draw each; a test binds the two lists.
+LANE_KINDS = (
+    "working",
+    "waiting:human",
+    "waiting:<role>",
+    "waiting:ci",
+    "blocked",
+    "idle-after-end",
+    "idle",
+    "parked",
+    "no-data",
+)
 FIXED_SENTENCE = "Not counted: waiting that only transcripts show; this page has no such source."
 CI_LINE = "CI wait: no source yet"
 

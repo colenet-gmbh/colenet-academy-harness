@@ -297,7 +297,8 @@ export type LiveView = {
   error?: string
 }
 
-// One live session of `scripts/crew_view.py --json` (its docstring owns the fields), schema 1.
+// One live session of `scripts/crew_view.py --json` (its docstring owns the fields), schema 1; `age` is
+// added by `command_center/zentrale.py` (crew_view.py age_text), the one age format the pane prints.
 export type CrewEntry = {
   name: string
   session_id: string
@@ -310,19 +311,76 @@ export type CrewEntry = {
   blocked_kind: string | null
   since: string | null
   age_s: number | null
+  age?: string
   plugin: string
   starter: string | null
   group: string | null
   waits: boolean
 }
 
-// The crew pane's view: the document crew_view.py printed, the board it read, when it was read.
-export type CrewView = {
+// One open end of `command_center/open_ends.py` (its docstring owns the row contract), schema 1.
+export type ZentraleRow = {
+  kind: string
+  item: string
+  title: string
+  holder: string
+  for: string
+  master: string
+  since: string
+  since_note: string
+  age_s: number | null
+  age?: string
+  source: string
+  classes: string[]
+  red: boolean
+}
+
+export type ZentraleAccount = {
+  name: string
+  active: boolean
+  in_rotation: boolean
+  five_hour: { pct: number | null; resets_at: string | null }
+  seven_day: { pct: number | null; resets_at: string | null }
+  threshold: number | null
+  status: string
+  measured_at: string | null
+  age_s: number | null
+  stale: boolean
+  red: boolean
+}
+
+// `command_center/zentrale.py --json` (its docstring owns the fields), schema 1.
+export type ZentraleDoc = {
+  schema_version: number
+  project: string | null
+  built_at: string
+  fast: boolean
+  header: string[]
+  gaps: string[]
+  sources: Record<string, { fetched_at: string | null; gap: string | null }>
+  sections: {
+    owner: ZentraleRow[]
+    red: ZentraleRow[]
+    waiting: ZentraleRow[]
+    working: CrewEntry[]
+    ci: {
+      repos: { repo: string; fetched_at: string | null; default_head: string; checks: { pr: number; name: string; status: string; since: string | null; age_s: number | null; age?: string }[] }[]
+      locks: string
+    }
+    accounts: ZentraleAccount[]
+  }
+}
+
+// The Zentrale pane's view: the last document, the board it read, when it was read; the swimlanes'
+// intervals (`flow_intervals.py --json`) once asked; which face shows.
+export type ZentraleView = {
   board?: string
-  generatedAt?: string
-  sessions: CrewEntry[]
+  doc?: ZentraleDoc
   at: number
   error?: string
+  lanes?: { intervals: { who: string; kind: string; start: string; end: string }[]; at: number; error?: string }
+  face: 'sections' | 'lanes'
+  hours: 8 | 24
 }
 
 declare module 'claude-code' {
@@ -340,8 +398,8 @@ declare module 'claude-code' {
       boardLogOpen: boolean
       boardWork: Shaped<BoardWorkView | null>
       boardWorkOpen: Shaped<string[]>
-      crewView: Shaped<CrewView | null>
-      crewOpen: boolean
+      zentraleView: Shaped<ZentraleView | null>
+      zentraleOpen: boolean
     }
   }
 }
