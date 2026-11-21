@@ -437,3 +437,19 @@ def test_workflow_route_keeps_the_branch_of_a_run_past_the_wait_cap(fake_gh, cap
     assert "still running" in err and "https://example.invalid/runs/" in err
     assert len(json.loads(runs.read_text())) == 1
     assert docs_push_branches(world).startswith("docs-push/")
+
+
+@pytest.mark.parametrize(
+    "url, repo",
+    [
+        ("https://github.com/acme/docs.git", ["--repo", "acme/docs"]),
+        ("git@github.com:acme/docs.git", ["--repo", "acme/docs"]),
+        ("/srv/git/remote.git", []),
+    ],
+)
+def test_gh_is_pinned_to_the_remote_it_pushed_to(make, url, repo):
+    world = make()
+    git(world.scratch, "remote", "set-url", "origin", url)
+    plan_push.pin_repo("origin")
+    assert repo == plan_push.REPO
+    plan_push.REPO[:] = []

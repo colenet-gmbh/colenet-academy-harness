@@ -28,7 +28,8 @@ The worktree holds one or more commits on top of the default branch. The script
      `Secret scan` exit 4, `Push` with `main moved` a lost race, anything else exit 2 with the run
      URL. The workflow checks the range again with its own fixed globs and pushes with a token no
      session holds; the local checks here only refuse early. The `docs-push/<sha>` branch is
-     deleted before the script ends;
+     deleted before the script ends, except past the wait cap: the run may still land, so its
+     branch stays and is named;
    a lost race (a non-fast-forward, or `main moved`) fetches, rebases, checks again and retries,
    at most three times;
 6. prints the landed commit and one line per file.
@@ -46,7 +47,8 @@ Exit codes:
   2  failed (a git error, a rebase conflict, retries used up; on the workflow route also `gh`
      missing or the dispatch refused, the run not found within 60 s, the wait cap of 10 min
      reached, or a failed step without a mapping: the run URL is printed, never a second dispatch);
-     nothing was pushed by this script
+     nothing was pushed by this script, except past the wait cap: that run may still land the
+     commits, so the caller waits for it (its URL) and never takes the PR way meanwhile
   3  the server rejected the push: this repo takes no direct push, land by PR
   4  refused by the secret scan: a finding, or no scanner configured (or it did not run); nothing
      was pushed, and this commit lands by no route, the PR way included. Its own code because a
@@ -303,9 +305,20 @@ def land(remote: str, branch: str | None) -> list[str]:
     raise PushError(FAILED, f"push lost the race {RETRIES + 1} times; run again")
 
 
+GITHUB_REPO = re.compile(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$")
+REPO: list[str] = []
+
+
+def pin_repo(remote: str) -> None:
+    """`gh` talks to the repo `<remote>` points at, not to whatever it would pick itself."""
+    url = git("remote", "get-url", remote, check=False).stdout.strip()
+    found = GITHUB_REPO.search(url)
+    REPO[:] = ["--repo", found.group(1)] if found else []
+
+
 def gh(*args: str) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(["gh", *args], capture_output=True, text=True, check=False)
+        return subprocess.run(["gh", *args, *REPO], capture_output=True, text=True, check=False)
     except OSError as exc:
         raise PushError(FAILED, f"gh {' '.join(args)}: {exc.strerror}") from exc
 
@@ -324,6 +337,7 @@ def by_workflow(remote: str, branch: str, base: str) -> bool:
     """Land HEAD through `docs-push.yml`; True landed, False lost the race (rebase and again)."""
     sha = git("rev-parse", "HEAD").stdout.strip()
     ref = f"refs/heads/docs-push/{sha}"
+    pin_repo(remote)
     git("push", "--quiet", remote, f"HEAD:{ref}")
     keep = False
     try:

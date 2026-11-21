@@ -63,7 +63,7 @@ Every verb that commits a planning document follows this section: `/we:epic`, `/
        owner (in a crew: machinery) and stop. `plans.secret_scan: "none"` is the owner's setting,
        never written by the session that pushes.
      - Exit 3, "this repo takes no direct push": the PR way below, same commits.
-     - Exit 2: a git error, a rebase conflict or a failed run; report its line, never dispatch again.
+     - Exit 2: a git error or a failed run; report its line. A run past the wait cap may still land: wait for its URL, no PR.
    - **`pr`** (and exit 3, or a path refusal): a default branch under a ruleset takes no push from
      an account without a bypass, so docs reach it through a PR that merges itself:
      - a repo fact that names a docs-PR verb wins (one command that rebases, refuses non-docs and
