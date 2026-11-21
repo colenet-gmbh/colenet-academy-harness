@@ -281,8 +281,10 @@ def test_waits_stories_tickets(tmp_path):
     assert "ABC-13" not in rows
     assert doc["rows"][0]["item"] == "ABC-15"  # unknown since first
     assert not [g for g in doc["gaps"] if g.startswith("tickets")]  # control: 10 min, not stale
-    snap.write_text(json.dumps({"@taken": at(31), "ABC-15": "In Progress"}))
-    assert "tickets: stale (31 min)" in build(board)["gaps"]
+    snap.write_text(json.dumps({"@taken": at(46), "ABC-15": "In Progress"}))
+    stale = build(board)
+    assert f"tickets: stale since {at(46)}" in stale["gaps"]
+    assert "ABC-15" not in {r["item"] for r in stale["rows"]}  # no story of a stale snapshot
     snap.unlink()
     doc = build(board)
     assert "tickets: not read (no snapshot)" in doc["gaps"]

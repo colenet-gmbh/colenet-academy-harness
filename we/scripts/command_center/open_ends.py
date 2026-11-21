@@ -22,9 +22,10 @@ Sources and holders:
   `waiting_on` role.
 - `story`: each key whose last transition is `to: in_progress`; holder the worker line holding
   the key, else any line holding it, else `no holder`. The ticket snapshot
-  `<board stem>-tickets.json` (or `--tickets`; `{"@taken": UTC, KEY: state name}`) adds keys only the
-  ticket system has in progress (`source: tickets`, since `unknown`); older than `TICKETS_STALE`
-  the header says `tickets: stale (<n> min)`, without a file `tickets: not read (no snapshot)`.
+  `<board stem>-tickets.json` (or `--tickets`; `ticket_snapshot.py` writes and reads it) adds keys
+  only the ticket system has in progress (`source: tickets`, since `unknown`); one older than
+  `flow.tickets_stale_min` adds none and the gap says `tickets: stale since <@taken>`, without a file
+  `tickets: not read (no snapshot)`.
 - `pr`: per repo the open PRs (`flow_report.OPEN_PRS_QUERY`, then `open_pr_states`) with the
   required names of each PR's base (`required_checks.sh`), classed by `arm_pr.sh`'s rule
   (`flow_report.pr_verdict`): draft; red (a failing required check); user merge (a body line
@@ -50,15 +51,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
 import board as boardlib  # noqa: E402
 import crew as crew_mod  # noqa: E402
 import flow_intervals as fi  # noqa: E402
 import flow_report as fr  # noqa: E402
+import ticket_snapshot  # noqa: E402
 
 SCHEMA_VERSION = 1
 CI_WAIT_LIMIT = timedelta(minutes=60)  # longer than a normal required run: stuck or never started
-TICKETS_STALE = timedelta(minutes=30)
 OWNER = "owner"
 NO_HOLDER = "no holder"
 ROW_FIELDS = (
@@ -260,27 +262,6 @@ def escalation_rows(state, who: Crew, until) -> list:
     return out
 
 
-def tickets(path: Path | None, until: datetime) -> tuple:
-    """(mapping key → state name, header line)."""
-    if path is None or not path.is_file():
-        return {}, "tickets: not read (no snapshot)"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        return {}, f"tickets: not read ({type(exc).__name__})"
-    if not isinstance(data, dict):
-        return {}, "tickets: not read (no object)"
-    taken = fi.parse_ts(data.get("@taken"))
-    mapping = {k: v for k, v in data.items() if k != "@taken" and isinstance(v, str)}
-    if taken is None:
-        return mapping, "tickets: stale (no @taken)"
-    age = until - taken
-    minutes = int(age.total_seconds() // 60)
-    if age > TICKETS_STALE:
-        return mapping, f"tickets: stale ({minutes} min)"
-    return mapping, f"tickets: taken {iso(taken)} ({minutes} min old)"
-
-
 def story_rows(state, crew: dict, who: Crew, snapshot: dict, until) -> list:
     out, seen = [], set()
     for key, last in state.last_rows().items():
@@ -467,7 +448,12 @@ def build(
         header.append(f"obsolete questions: {obsolete}")
         rows += q_rows + wait_rows(who, until) + escalation_rows(state, who, until)
         snap_path = ticket_file or board.with_name(f"{board.stem}-tickets.json")
-        snapshot, line = tickets(snap_path, until)
+        snapshot, line, fresh = ticket_snapshot.read(
+            snap_path,
+            until,
+            float({**crew_mod.DEFAULTS["flow"], **(crew.get("flow") or {})}["tickets_stale_min"]),
+        )
+        snapshot = snapshot if fresh else {}  # a stale snapshot names no story as current
         (gaps if "not read" in line or "stale" in line else header).append(line)
         rows += story_rows(state, crew, who, snapshot, until)
     for repo in repos or []:
