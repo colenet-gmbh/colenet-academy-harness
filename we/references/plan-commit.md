@@ -47,6 +47,9 @@ Every verb that commits a planning document follows this section: `/we:epic`, `/
      onto `origin/<default>`, refuses paths outside `plans.push_paths` (default `docs/plans/**`, plus
      a staging-check file still in its planned state travelling with its plan), runs the secret scan
      (`plans.secret_scan`, default gitleaks) and pushes, retrying a lost race up to three times.
+     It refuses a merge commit in the range. Where `origin/<default>` carries
+     `.github/workflows/docs-push.yml`, it lands through that workflow instead (branch
+     `docs-push/<sha>`, dispatch, wait up to 10 min; its docstring maps each failed step to an exit).
      `plans.push_paths` may take dated records (ADRs, logbooks, handoffs, incidents, a date in the name;
      the human's decision); living docs take the PR way, which the drift check reads, and so does a mixed batch, unsplit.
      - Exit 0: the document is on the default branch. A step that needs it there (Ready gate,
@@ -60,7 +63,7 @@ Every verb that commits a planning document follows this section: `/we:epic`, `/
        owner (in a crew: machinery) and stop. `plans.secret_scan: "none"` is the owner's setting,
        never written by the session that pushes.
      - Exit 3, "this repo takes no direct push": the PR way below, same commits.
-     - Exit 2: a git error or a rebase conflict; report its line, nothing was pushed.
+     - Exit 2: a git error, a rebase conflict or a failed run; report its line, never dispatch again.
    - **`pr`** (and exit 3, or a path refusal): a default branch under a ruleset takes no push from
      an account without a bypass, so docs reach it through a PR that merges itself:
      - a repo fact that names a docs-PR verb wins (one command that rebases, refuses non-docs and

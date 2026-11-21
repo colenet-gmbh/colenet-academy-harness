@@ -10,6 +10,7 @@ Run: `python3 -m pytest -q we/scripts/test_plan_push.py`
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -67,8 +68,60 @@ def configure(root: Path) -> None:
     git(root, "config", "user.name", "t")
 
 
+FAKE_GH = r"""#!PYTHON
+# A fake `gh` for the docs-push.yml route: `workflow run` plays the workflow against the bare
+# remote and records a run; `run list` / `run view` answer from that record. The outcome of each
+# dispatch comes from the JSON list in $FAKE_GH_PLAN (landed, path, scan, race, other).
+import json, os, subprocess, sys
+state = os.environ["FAKE_GH_STATE"]
+runs = json.load(open(state)) if os.path.exists(state) else []
+args = sys.argv[1:]
+def steps(failed):
+    names = ["Validate input", "Check range", "Secret scan", "Mint token", "Push"]
+    out, hit = [], False
+    for name in names:
+        conclusion = "failure" if name == failed else ("skipped" if hit else "success")
+        hit = hit or name == failed
+        out.append({"name": name, "conclusion": conclusion})
+    return out
+if args[:2] == ["workflow", "run"]:
+    sha = args[args.index("-f") + 1].split("=", 1)[1]
+    plan = json.load(open(os.environ["FAKE_GH_PLAN"]))
+    outcome = plan[min(len(runs), len(plan) - 1)]
+    remote = os.environ["FAKE_GH_REMOTE"]
+    # the workflow fetches the SHA from the docs-push branch the caller pushed
+    branches = subprocess.run(["git", "-C", remote, "branch", "--list", "docs-push/*"],
+                              capture_output=True, text=True).stdout
+    assert f"docs-push/{sha}" in branches, branches
+    failed, log = None, ""
+    if outcome == "race":
+        subprocess.run([sys.executable, os.environ["FAKE_GH_RACER"]], check=True)
+        failed, log = "Push", "Push\tmain moved"
+    elif outcome == "path":
+        failed, log = "Check range", "Check range\toutside the docs paths: apps/x.py"
+    elif outcome == "scan":
+        failed, log = "Secret scan", "Secret scan\tdocs/plans/x.md:3 aws-access-token"
+    elif outcome == "other":
+        failed, log = "Mint token", "Mint token\tbad credentials"
+    else:
+        subprocess.run(["git", "-C", remote, "update-ref", "refs/heads/main", sha], check=True)
+    runs.append({"databaseId": 100 + len(runs), "displayTitle": f"docs-push {sha}",
+                 "url": f"https://example.invalid/runs/{100 + len(runs)}", "status": "completed",
+                 "conclusion": "failure" if failed else "success",
+                 "jobs": [{"steps": steps(failed)}], "log": log})
+    json.dump(runs, open(state, "w"))
+elif args[:2] == ["run", "list"]:
+    print(json.dumps([{k: r[k] for k in ("databaseId", "displayTitle", "url")} for r in runs]))
+elif args[:2] == ["run", "view"]:
+    run = next(r for r in runs if str(r["databaseId"]) == args[2])
+    print(run["log"] if "--log-failed" in args else json.dumps(run))
+else:
+    sys.exit(f"fake gh: unexpected {args}")
+"""
+
+
 class World:
-    def __init__(self, tmp: Path, plans: dict, crew: dict | None) -> None:
+    def __init__(self, tmp: Path, plans: dict, crew: dict | None, workflow: bool = False) -> None:
         self.tmp, self.remote, self.clone = tmp, tmp / "remote.git", tmp / "clone"
         self.scratch = tmp / "scratch"
         git(tmp, "init", "-q", "--bare", "-b", "main", str(self.remote))
@@ -83,6 +136,8 @@ class World:
             write(self.clone, ".weside/crew.json", json.dumps(crew))
             for rel in (crew.get("files") or {}).values():
                 write(self.clone, rel, "x\n")
+        if workflow:
+            write(self.clone, ".github/workflows/docs-push.yml", "name: docs-push\n")
         commit(self.clone, "README.md", "x\n", "init")
         git(self.clone, "push", "-q", "origin", "HEAD:main")
         git(self.clone, "worktree", "add", "-q", "--detach", str(self.scratch), "origin/main")
@@ -103,8 +158,10 @@ class World:
 
 @pytest.fixture()
 def make(tmp_path, monkeypatch):
-    def build(plans: dict | None = None, crew: dict | None = None) -> World:
-        world = World(tmp_path, plans or {}, crew)
+    def build(
+        plans: dict | None = None, crew: dict | None = None, workflow: bool = False
+    ) -> World:
+        world = World(tmp_path, plans or {}, crew, workflow)
         monkeypatch.chdir(world.scratch)
         return world
 
@@ -136,10 +193,32 @@ def test_a_crew_pointing_outside_weside_still_names_its_receipt_dir(make, capsys
     assert world.remote_head() == "docs(ACME-1): plan"
 
 
+def merge_range(world: World, case: str) -> None:
+    """A plan commit plus a merge of a side branch, the merge kept by `rebase.rebaseMerges`.
+
+    `git log --name-only` lists no file of a merge commit and a plain rebase flattens it; only
+    the tree diff sees what the merge commit itself adds (the evil merge).
+    """
+    git(world.scratch, "config", "rebase.rebaseMerges", "true")
+    git(world.scratch, "checkout", "-q", "-b", "side")
+    side = "apps/x.py" if case == "merge brings code" else "docs/plans/ACME-2-story.md"
+    commit(world.scratch, side, "print(1)\n", "side")
+    git(world.scratch, "checkout", "-q", "--detach", "origin/main")
+    commit(world.scratch, "docs/plans/ACME-1-story.md", "# plan\n")
+    git(world.scratch, "merge", "-q", "--no-ff", "--no-commit", "side")
+    if case == "evil merge":
+        write(world.scratch, "apps/x.py", "print(1)\n")
+        git(world.scratch, "add", "-A")
+    git(world.scratch, "commit", "-q", "--no-edit")
+
+
 @pytest.mark.parametrize(
     "case, needle",
     [
         ("code path", "src/app.py"),
+        ("merge brings code", "apps/x.py"),
+        ("evil merge", "apps/x.py"),
+        ("docs merge", "refused: a merge commit in the range"),
         ("config widens itself", ".weside/config.json"),
         ("armed receipt", ".weside/verify/ACME-1.yaml"),
         ("receipt without plan", ".weside/verify/ACME-1.yaml"),
@@ -156,6 +235,8 @@ def test_refuses_and_pushes_nothing(make, capsys, monkeypatch, case, needle):
     if case == "code path":
         write(world.scratch, "src/app.py", "print(1)\n")
         commit(world.scratch, *plan)
+    elif case in ("merge brings code", "evil merge", "docs merge"):
+        merge_range(world, case)
     elif case == "config widens itself":
         wide = {"plans": {"push_paths": ["**"], "secret_scan": "none"}}
         write(world.scratch, ".weside/config.json", json.dumps(wide))
@@ -194,8 +275,11 @@ def test_refuses_and_pushes_nothing(make, capsys, monkeypatch, case, needle):
     assert plan_push.main([]) == expected == (4 if case in scan_cases else 1)
     err = capsys.readouterr().err
     assert needle in err
-    if case in ("code path", "config widens itself", "armed receipt", "receipt without plan"):
+    paths_cases = ("code path", "config widens itself", "merge brings code", "evil merge")
+    if case in (*paths_cases, "armed receipt", "receipt without plan"):
         assert "land these by PR" in err
+    if case in paths_cases:
+        assert "refused: paths outside plans.push_paths" in err
     assert world.remote_head() == before
 
 
@@ -240,3 +324,116 @@ def test_server_rejection_exits_with_its_own_code(make, capsys):
     assert plan_push.main([]) == plan_push.REJECTED
     assert "this repo takes no direct push; land by PR" in capsys.readouterr().err
     assert world.remote_head() == "init"
+
+
+@pytest.fixture()
+def fake_gh(make, tmp_path, monkeypatch):
+    """A world whose main carries docs-push.yml, and a fake `gh` playing the given outcomes."""
+
+    def build(*outcomes: str) -> World:
+        world = make(workflow=True)
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        gh = bin_dir / "gh"
+        gh.write_text(FAKE_GH.replace("PYTHON", sys.executable, 1))
+        gh.chmod(0o755)
+        racer = tmp_path / "racer.py"
+        racer.write_text(
+            "import sys\n"
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+            "from pathlib import Path\n"
+            "import test_plan_push as t\n"
+            "w = t.World.__new__(t.World)\n"
+            f"w.tmp, w.remote = Path({str(tmp_path)!r}), Path({str(world.remote)!r})\n"
+            "w.other_push('docs/plans/ACME-2-story.md')\n"
+        )
+        plan = tmp_path / "gh_plan.json"
+        plan.write_text(json.dumps(list(outcomes)))
+        monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+        monkeypatch.setenv("FAKE_GH_STATE", str(tmp_path / "gh_runs.json"))
+        monkeypatch.setenv("FAKE_GH_PLAN", str(plan))
+        monkeypatch.setenv("FAKE_GH_REMOTE", str(world.remote))
+        monkeypatch.setenv("FAKE_GH_RACER", str(racer))
+        monkeypatch.setattr(plan_push, "POLL", 0)
+        return world
+
+    return build
+
+
+def docs_push_branches(world: World) -> str:
+    return git(world.remote, "branch", "--list", "docs-push/*").strip()
+
+
+def test_workflow_route_lands_through_the_dispatched_run(fake_gh, capsys):
+    world = fake_gh("landed")
+    commit(world.scratch, "docs/plans/ACME-1-story.md", "# plan\n", "docs(ACME-1): plan")
+
+    assert plan_push.main([]) == 0, capsys.readouterr().err
+    out = capsys.readouterr().out
+    assert out.splitlines()[0].startswith("landed on main: ")
+    assert "A\tdocs/plans/ACME-1-story.md" in out
+    assert world.remote_head() == "docs(ACME-1): plan"
+    assert docs_push_branches(world) == ""
+
+
+@pytest.mark.parametrize(
+    "outcome, code, needle",
+    [
+        ("path", plan_push.REFUSED, "outside the docs paths: apps/x.py"),
+        ("scan", plan_push.SCAN_REFUSED, "step Secret scan"),
+        ("other", plan_push.FAILED, "failed in step Mint token: https://example.invalid/runs/"),
+    ],
+)
+def test_workflow_route_maps_the_failed_step(fake_gh, capsys, outcome, code, needle):
+    world = fake_gh(outcome)
+    commit(world.scratch, "docs/plans/ACME-1-story.md", "# plan\n", "docs(ACME-1): plan")
+
+    assert plan_push.main([]) == code
+    err = capsys.readouterr().err
+    assert needle in err
+    assert world.remote_head() == "init"
+    assert docs_push_branches(world) == ""
+
+
+def test_workflow_route_rebases_and_dispatches_again_when_main_moved(fake_gh, capsys):
+    world = fake_gh("race", "landed")
+    commit(world.scratch, "docs/plans/ACME-1-story.md", "# plan\n", "docs(ACME-1): plan")
+
+    assert plan_push.main([]) == 0, capsys.readouterr().err
+    runs = json.loads(Path(os.environ["FAKE_GH_STATE"]).read_text())
+    assert len(runs) == 2 and runs[0]["displayTitle"] != runs[1]["displayTitle"]
+    log = git(world.remote, "log", "--format=%s", "main").splitlines()
+    assert log[:2] == ["docs(ACME-1): plan", "docs: docs/plans/ACME-2-story.md"]
+    assert docs_push_branches(world) == ""
+
+
+def test_workflow_route_refuses_the_evil_merge_before_any_dispatch(fake_gh, capsys):
+    world = fake_gh("landed")
+    merge_range(world, "evil merge")
+
+    assert plan_push.main([]) == plan_push.REFUSED
+    assert "refused: paths outside plans.push_paths" in capsys.readouterr().err
+    assert not Path(os.environ["FAKE_GH_STATE"]).exists()
+    assert world.remote_head() == "init"
+
+
+def test_workflow_route_keeps_the_branch_of_a_run_past_the_wait_cap(fake_gh, capsys, monkeypatch):
+    world = fake_gh("path")
+    runs = Path(os.environ["FAKE_GH_STATE"])
+    real_gh = plan_push.gh
+
+    def running(*args):
+        out = real_gh(*args)
+        if args[:2] == ("run", "view") and "--json" in args:
+            out.stdout = json.dumps({**json.loads(out.stdout), "status": "in_progress"})
+        return out
+
+    monkeypatch.setattr(plan_push, "gh", running)
+    monkeypatch.setattr(plan_push, "WAIT_CAP", 0)
+    commit(world.scratch, "docs/plans/ACME-1-story.md", "# plan\n", "docs(ACME-1): plan")
+
+    assert plan_push.main([]) == plan_push.FAILED
+    err = capsys.readouterr().err
+    assert "still running" in err and "https://example.invalid/runs/" in err
+    assert len(json.loads(runs.read_text())) == 1
+    assert docs_push_branches(world).startswith("docs-push/")
