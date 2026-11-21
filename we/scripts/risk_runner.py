@@ -228,24 +228,45 @@ def _has_rules(root: str, git: Git, ref: str) -> bool:
     return isinstance(command, str) and bool(command.strip())
 
 
-def here(
-    root: str, base: str, git: Git = plain_git, timeout: float = CLASSIFY_TIMEOUT
-) -> tuple[int, str]:
-    """(0, the classifier's stdout) or (2, one line why): the crew's classifier on `base` in the
-    checkout `root` itself, so a risk path with uncommitted changes is seen (`arm_pr.sh`)."""
+def _classifier(
+    root: str, base: str, git: Git, sha: str | None = None
+) -> tuple[Found | None, tuple[int, str] | None]:
+    """(the classifier `rules` found, None) or (None, the answer without one) for `here` and
+    `head`: `(0, "T0")` when the base or the rules set none, `(2, why)` when it cannot be told.
+    `sha`, when given, must be a commit in this clone. The rules are fetched best-effort: offline,
+    the ref at hand decides."""
     if git(root, "rev-parse", "--verify", "-q", f"{base}^{{commit}}") is None:
-        return 2, f"no {base} here (fetch it)"  # an absent base cannot say it sets no rules
+        return None, (
+            2,
+            f"no {base} here (fetch it)",
+        )  # an absent base cannot say it sets no rules
     if not _has_rules(root, git, base):
-        return 0, "T0"  # the PR's base sets no rules: nothing to classify, as without a crew
-    fetch_rules(root, RULES_FROM, git)  # best-effort: offline, the ref at hand decides
+        return None, (
+            0,
+            "T0",
+        )  # the PR's base sets no rules: nothing to classify, as without a crew
+    if sha is not None and git(root, "cat-file", "-e", f"{sha}^{{commit}}") is None:
+        return None, (2, f"head {sha[:12]} not here (fetch it)")
+    fetch_rules(root, RULES_FROM, git)
     rules_from = (crew_on(root, git).get("risk") or {}).get("rules_from")
     if isinstance(rules_from, str) and rules_from != RULES_FROM:
         fetch_rules(root, rules_from, git)
     found = rules(root, git, fetch=False)
     if found is None:
-        return 0, "T0"
+        return None, (0, "T0")
     if isinstance(found, str):
-        return 2, found
+        return None, (2, found)
+    return found, None
+
+
+def here(
+    root: str, base: str, git: Git = plain_git, timeout: float = CLASSIFY_TIMEOUT
+) -> tuple[int, str]:
+    """(0, the classifier's stdout) or (2, one line why): the crew's classifier on `base` in the
+    checkout `root` itself, so a risk path with uncommitted changes is seen (`arm_pr.sh`)."""
+    found, answer = _classifier(root, base, git)
+    if found is None:
+        return answer
     prefix, blob, _rules_from = found
     name = classifier_name(found)
     tmp = tempfile.mkdtemp(prefix="we-arm-class.")
@@ -266,19 +287,9 @@ def head(
 ) -> tuple[int, str]:
     """(0, the classifier's stdout) or (2, one line why): the crew's classifier on `base` in a
     no-checkout worktree of the commit `sha`, whatever this checkout holds (`arm_pr.sh`)."""
-    if git(root, "rev-parse", "--verify", "-q", f"{base}^{{commit}}") is None:
-        return 2, f"no {base} here (fetch it)"
-    if not _has_rules(root, git, base):
-        return 0, "T0"
-    if git(root, "cat-file", "-e", f"{sha}^{{commit}}") is None:
-        return 2, f"head {sha[:12]} not here (fetch it)"
-    fetch_rules(root, RULES_FROM, git)
-    rules_from = (crew_on(root, git).get("risk") or {}).get("rules_from")
-    if isinstance(rules_from, str) and rules_from != RULES_FROM:
-        fetch_rules(root, rules_from, git)
-    found = rules(root, git, fetch=False)
-    if not isinstance(found, tuple):  # None: no rules (T0); a str: why the rules cannot be read
-        return (0, "T0") if found is None else (2, found)
+    found, answer = _classifier(root, base, git, sha)
+    if found is None:
+        return answer
     prefix, blob, _rules_from = found
     name = classifier_name(found)
     out, why = exec_in_tree(root, git, blob, [*prefix, base], sha, timeout)

@@ -96,8 +96,10 @@ def plain_checkout(tmp_path):
     _git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
 
 
-def run(tmp_path, reads, arms, required=REQUIRED, merge=None, extra=(), env_extra=None):
-    if not (tmp_path / ".git").exists():  # the arm classifies fail-closed: it needs a clone
+def run(
+    tmp_path, reads, arms, required=REQUIRED, merge=None, extra=(), env_extra=None, clone=True
+):
+    if clone and not (tmp_path / ".git").exists():  # the arm classifies fail-closed: a clone
         plain_checkout(tmp_path)
     if merge is not None:  # a crew with a `merge` block in the checkout; the base has none
         (tmp_path / ".weside").mkdir()
@@ -496,6 +498,76 @@ def test_the_humans_go_arms_a_one_way_pr_and_says_so_on_it(tmp_path):
     assert comment_calls(calls) == [
         ["pr", "comment", "7", "--repo", "o/r", "--body", "one-way armed on the human's go Q812"]
     ]
+
+
+def test_the_humans_go_is_said_on_the_pr_when_it_is_ready_too(tmp_path):
+    """Red arm: the comment came only after `armed:`; a PR GitHub calls clean went to the `ready`
+    line, and its one-way merge on the go left no trace on the PR."""
+    sha = one_way_head(tmp_path)
+    code, out, calls = run(
+        tmp_path, [{"head": sha, "checks": GREEN}], [CLEAN], extra=("--go", "Q812")
+    )
+    assert (code, out) == (
+        3,
+        [
+            f"ready: all required checks green on {sha} — merge: gh pr merge 7 --merge --match-head-commit {sha}"
+        ],
+    )
+    assert comment_calls(calls) == [
+        ["pr", "comment", "7", "--repo", "o/r", "--body", "one-way armed on the human's go Q812"]
+    ]
+
+
+def pr_head_on_origin(tmp_path):
+    """`work`, a clone whose origin (a bare repo) holds the one-way PR head only as
+    `refs/pull/7/head`: the arm has to fetch it. Returns (work, sha)."""
+    src, origin, work = tmp_path / "src", tmp_path / "origin.git", tmp_path / "work"
+    src.mkdir()
+    work.mkdir()
+    sha = one_way_head(src)
+    _git(tmp_path, "clone", "-q", "--bare", str(src), str(origin))
+    _git(origin, "update-ref", "refs/pull/7/head", sha)
+    _git(origin, "update-ref", "-d", "refs/heads/pr")
+    _git(work, "init", "-q", "-b", "main")
+    _git(work, "remote", "add", "origin", str(origin))
+    _git(work, "fetch", "-q", "origin", "main:refs/remotes/origin/main")
+    _git(work, "checkout", "-q", "--detach", "origin/main")
+    return work, sha
+
+
+@pytest.mark.parametrize(
+    ("extra", "code"), [((), 6), (("--go", "Q812"), 0)], ids=["refused", "armed"]
+)
+def test_the_fetched_pr_head_ref_is_dropped_after_the_class(tmp_path, extra, code):
+    """Red arm: every arm from another checkout left `refs/we-arm/pr-<N>` behind."""
+    work, sha = pr_head_on_origin(tmp_path)
+    got, out, _calls = run(work, [{"head": sha, "checks": PENDING}], ["ok"], extra=extra)
+    assert got == code, out
+    if code == 6:  # classified on the fetched head, so the fetch happened
+        assert out == [
+            "refused: one-way brake-change — ask the human (merge question), then arm with --go Q<nr>"
+        ]
+    left = subprocess.run(
+        ["git", "for-each-ref", "refs/we-arm/"],
+        cwd=work,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert left == ""
+
+
+def test_outside_a_git_clone_it_refuses(tmp_path):
+    """No clone, no class: the arm refuses instead of arming unclassified."""
+    got, out, calls = run(
+        tmp_path,
+        [{"head": NEW, "checks": PENDING}],
+        ["ok"],
+        clone=False,
+        env_extra={"GIT_CEILING_DIRECTORIES": str(tmp_path.parent)},
+    )
+    assert (got, out) == (6, ["refused: one-way not classified (not a git checkout)"])
+    assert arm_calls(calls) == [] and comment_calls(calls) == []
 
 
 def test_go_on_a_two_way_pr_arms_without_a_comment(tmp_path):

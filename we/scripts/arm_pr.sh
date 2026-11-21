@@ -21,11 +21,12 @@
 # `.weside/risk-paths`, both from origin/main) classifies the PR head against its base, wherever the
 # helper runs: in a checkout whose HEAD is the PR head on the checkout itself (`risk_runner.py here`,
 # uncommitted risk paths included), elsewhere on the head commit after a fetch of `pull/<PR>/head`
-# (`risk_runner.py head`). Fail closed: no class is a refusal. A one-way class arms only with
+# into `refs/we-arm/pr-<PR>`, dropped again after the class (`risk_runner.py head`). Outside a git
+# clone there is no class. Fail closed: no class is a refusal. A one-way class arms only with
 # `--go Q<nr>`, the number of the question that brought the human's go (the merge question goes
-# through the coordinator, `/we:master` § Close the run); after the arm a PR comment
-# `one-way armed on the human's go Q<nr>` records it. `--go` on a PR that is not one-way changes
-# nothing.
+# through the coordinator, `/we:master` § Close the run); after the arm, or before the `ready`
+# line, a PR comment `one-way armed on the human's go Q<nr>` records it. `--go` on a PR that is
+# not one-way changes nothing.
 #
 # One verdict line and its exit code:
 #   armed: auto-merge on <sha> (<method>)                                        exit 0
@@ -94,7 +95,9 @@ TIMEOUT=${ARM_REGISTER_TIMEOUT:-300}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 # stdout only is a gh value: gh prints notices (upgrade, preview commands) on stderr, even on success.
-GH_ERR=$(mktemp) && trap 'rm -f "$GH_ERR"' EXIT
+ARM_REF=""  # refs/we-arm/pr-<N> while one_way holds a fetched PR head; dropped after the class
+drop_ref() { [ -z "$ARM_REF" ] || git update-ref -d "$ARM_REF" 2>/dev/null; ARM_REF=""; }
+GH_ERR=$(mktemp) && trap 'rm -f "$GH_ERR"; drop_ref' EXIT
 gh_err() { sed '/^[[:space:]]*$/d' "$GH_ERR" | tail -n 1; }
 if [ -z "$REPO" ]; then
   REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>"$GH_ERR") || { echo "gh failed: $(gh_err)"; exit 2; }
@@ -171,10 +174,13 @@ one_way() {  # the PR head's class against its base, wherever this runs; fail cl
   if [ "$(git rev-parse HEAD 2>/dev/null)" = "$SHA" ]; then
     out=$(python3 "$HERE/risk_runner.py" here "origin/$BASE" 2>/dev/null) || rc=$?
   else
-    git cat-file -e "$SHA^{commit}" 2>/dev/null \
-      || git fetch -q --no-tags origin "+refs/pull/$PR/head:refs/we-arm/pr-$PR" 2>/dev/null \
-      || git fetch -q --no-tags origin "$SHA" 2>/dev/null || true
+    if ! git cat-file -e "$SHA^{commit}" 2>/dev/null; then
+      ARM_REF="refs/we-arm/pr-$PR"  # the EXIT trap drops it too, whatever ends the run
+      git fetch -q --no-tags origin "+refs/pull/$PR/head:$ARM_REF" 2>/dev/null \
+        || git fetch -q --no-tags origin "$SHA" 2>/dev/null || true
+    fi
     out=$(python3 "$HERE/risk_runner.py" head "$SHA" "origin/$BASE" 2>/dev/null) || rc=$?
+    drop_ref
   fi
   line=$(head -n 1 <<<"$out")
   if [ "$rc" -ne 0 ]; then echo "refused: one-way not classified (${line:-risk_runner.py exit $rc})"; exit 6; fi
@@ -187,7 +193,7 @@ one_way() {  # the PR head's class against its base, wherever this runs; fail cl
   esac
 }
 
-go_comment() {  # after an arm of a one-way PR on --go: the PR records whose go armed it; never exits
+go_comment() {  # after an arm or a ready line of a one-way PR on --go: the PR records the go; never exits
   [ -n "$ONE_WAY" ] && [ -n "$GO" ] || return 0
   gh pr comment "$PR" --repo "$REPO" --body "one-way armed on the human's go $GO" >/dev/null 2>"$GH_ERR" \
     || echo "go comment failed: $(gh_err)" >&2
@@ -297,6 +303,6 @@ while :; do
       # required) and HAS_HOOKS merge like CLEAN: the required checks were judged by name above.
       case "$MSTATE" in CLEAN|UNSTABLE|HAS_HOOKS) ;; *) arm; continue ;; esac
       [ "$REVIEW" != REVIEW_REQUIRED ] && [ "$REVIEW" != CHANGES_REQUESTED ] || { arm; continue; }
-      ready_line; exit 3 ;;
+      go_comment; ready_line; exit 3 ;;
   esac
 done
