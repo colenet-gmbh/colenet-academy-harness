@@ -25,7 +25,7 @@ import { buildWork, groupKeys, layoutWork, storiesInScope, storyKey, storyPhase,
 import type { Part } from './work'
 import { matchesKey } from '../flow/phase'
 import { openFlow } from '../flow/register'
-import { openCrew } from './crew'
+import { openZentrale } from './zentrale-pane'
 import { ALL_PLANS, defaultBranch, git, loadPrs, parsePlanFiles, planGrep } from '../plans/plans'
 
 const PANE = 'we-board'
@@ -1136,15 +1136,15 @@ export const registerBoard = (on: On, options: PluginOptions) => {
         )}
         {l?.error && <Text color="warning">{`Live column: ${l.error}`}</Text>}
 
-        {pack([{ key: 'refresh', width: 11 }, { key: 'flow', width: 8 }, { key: 'crew', width: 8 }, { key: 'stamp', width: stampText.length }], b => b.width, width).map((line, i) => (
+        {pack([{ key: 'refresh', width: 11 }, { key: 'flow', width: 8 }, { key: 'zentrale', width: 12 }, { key: 'stamp', width: stampText.length }], b => b.width, width).map((line, i) => (
           <Box key={`foot-${i}`} flexDirection="row" gap={2} marginTop={i ? 0 : 1}>
             {line.map(b =>
               b.key === 'refresh' ? (
                 <Button key="refresh" hotkey="r" label="Refresh" onPress={() => refreshPressed($, file)} />
               ) : b.key === 'flow' ? (
                 <Button key="flow" label="Flow" onPress={() => void openFlow($, '')} />
-              ) : b.key === 'crew' ? (
-                <Button key="crew" label="Crew" onPress={() => void openCrew($, v?.path)} />
+              ) : b.key === 'zentrale' ? (
+                <Button key="zentrale" label="Zentrale" onPress={() => void openZentrale($, v?.path)} />
               ) : (
                 <Text key="stamp" dimColor>{stampText}</Text>
               ),

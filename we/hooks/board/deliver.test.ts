@@ -1,7 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
-import { answerLines, deliveryLine, isFinal, keyOf, ledgerState, markerRows, noticeMatches, rebuildWaits, versionAtLeast, writerNote } from './deliver'
+import { answerLines, BUSY_MAX_MS, deliveryLine, isFinal, keyOf, ledgerState, markerRows, noticeMatches, rebuildWaits, transcriptVerdict, versionAtLeast, writerNote } from './deliver'
+import type { Awaiting } from './deliver'
 
 type T$ = Parameters<TestBody>[0]
 type TOn = Parameters<TestBody>[1]
@@ -946,4 +947,16 @@ test('answer_to asker: asker and starter both gone, the coordinator gets the rou
   await clock.advance(9_000)
   expect(h.sent.map(s => s.to)).toEqual(['asker', 'lead'])
   expect(h.submitted.filter(t => t.includes('did not reach lead'))).toHaveLength(1)
+})
+
+test('transcriptVerdict without a seen mark: the stored prompt counts, anything else is lost, never busy', () => {
+  const a = { key: 'k', delivery: {} as never, text: 'answer Q4', ledgerPath: '/l', submittedAt: 1_000, tries: 1 } as Awaiting
+  const said = (role: 'user' | 'assistant', text: string) => ({ role, text, toolUses: [] })
+  // without `seen` the whole transcript is read: an older copy of the prompt is stored
+  expect(transcriptVerdict(a, [said('user', 'answer Q4'), said('assistant', 'ok')] as never, 2_000)).toBe('stored')
+  // new rows but no `seen`: the session cannot be judged busy, so the prompt is lost, however young
+  expect(transcriptVerdict(a, [said('assistant', 'working')] as never, 2_000)).toBe('lost')
+  expect(transcriptVerdict({ ...a, seen: 0 }, [said('assistant', 'working')] as never, 2_000)).toBe('busy')
+  expect(transcriptVerdict({ ...a, seen: 0 }, [said('assistant', 'working')] as never, 1_000 + BUSY_MAX_MS)).toBe('lost')
+  expect(transcriptVerdict(a, undefined, 2_000)).toBe('lost')
 })
