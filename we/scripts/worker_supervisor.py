@@ -51,7 +51,7 @@ Usage:
   worker_supervisor.py spawn --name <n> --tree <dir>   the supervisor, detached
   worker_supervisor.py run --name <n> --tree <dir>     the supervisor in the foreground
   worker_supervisor.py gc [--repo <dir>] [--apply | --dry-run]
-  worker_supervisor.py status [--key <name|id>]        `we-worker status`, `claude agents --json` on stdin
+  worker_supervisor.py status [--key <name|id>] [--json]  `we-worker status`, `claude agents --json` on stdin
   worker_supervisor.py queue --name <n> --tree <dir> [--starter S] [--timeout 2h] [--has-brief]
                                                        registers a refused start (its we-worker
                                                        call NUL-separated on stdin, the brief
@@ -304,7 +304,12 @@ def _living(rows: list[dict], name: str) -> list[dict]:
 
 def _remove_files(state: Path, name: str) -> list[str]:
     gone = []
-    for path in (state / f"{name}.settings.json", state / f"{name}.json"):
+    # the brief file (`worker_launch.write_brief`) goes too; launched.jsonl stays
+    for path in (
+        state / f"{name}.settings.json",
+        state / f"{name}.json",
+        state / f"{name}.brief.md",
+    ):
         with contextlib.suppress(OSError):
             path.unlink()
             gone.append(path.name)
@@ -584,12 +589,23 @@ def time_limit(state: Path, name: str, now: float) -> str | None:
     return "time-limit=" + dt.datetime.fromtimestamp(deadline, dt.timezone.utc).strftime("%H:%M")
 
 
-def status_lines(
+def lives(row: dict) -> bool:
+    """Whether a `claude agents --json` row's process runs: the one test `we-worker status` marks
+    `exited(...)` by, also the crew view's "live" (`crew_view.py`)."""
+    pid = str(row.get("pid", "-"))
+    return pid.isdigit() and int(pid) > 0 and wl._pid_lives(pid)
+
+
+STATUS_SCHEMA_VERSION = 1
+
+
+def status_records(
     rows: list[dict], key: str | None, projects: Path, state: Path, now: float
-) -> list[str]:
-    """`we-worker status`: one line per worker (background, or a window worker), its end mark from
-    `api_mark` and the timer's `time_limit`; an exited worker with a resumable mark gets its resume
-    command (`resume_command`); then one line per queued start (`queued`)."""
+) -> list[dict]:
+    """The loop of `we-worker status` as objects: one per worker (background, or a window worker)
+    `{name, id, pid, state, alive, last, end, time_limit, window, resume}`; `state` is the row's
+    state, `exited(<state>)` when the process is gone; `end` the `api_mark`; `resume` the resume
+    command of an exited worker with a resumable end, else null."""
     out = []
     for row in rows:
         row["id"] = row.get("id") or row.get("sessionId")
@@ -607,17 +623,43 @@ def status_lines(
             else (row.get("state") or row.get("status"))
         )
         pid = str(row.get("pid", "-"))
-        gone = not (pid.isdigit() and int(pid) > 0 and wl._pid_lives(pid))  # no pid: exited
+        gone = not lives(row)  # no pid: exited
         if gone:
             st = f"exited({st})"
-        tl = time_limit(state, row.get("name") or "", now)
-        extra = [x for x in ("window" if window else None, mark, tl) if x]
-        head = [str(row.get("id")), str(row.get("name")), f"pid={pid}", str(st), f"last={hm}"]
-        out.append(" ".join([*head, *extra]))
+        resume = None
         if gone and mark in RESUMABLE and row.get("sessionId"):
-            when = "the reset" if mark == "usage-limit" else "the login is back"
-            cmd = resume_command(str(row.get("name")), str(row["sessionId"]), row.get("cwd"))
-            out.append(f"  resume after {when}: {cmd}")
+            resume = resume_command(str(row.get("name")), str(row["sessionId"]), row.get("cwd"))
+        out.append(
+            {
+                "name": str(row.get("name")),
+                "id": str(row.get("id")),
+                "pid": pid,
+                "state": str(st),
+                "alive": not gone,
+                "last": hm,
+                "end": mark,
+                "time_limit": time_limit(state, row.get("name") or "", now),
+                "window": window,
+                "resume": resume,
+            }
+        )
+    return out
+
+
+def status_lines(
+    rows: list[dict], key: str | None, projects: Path, state: Path, now: float
+) -> list[str]:
+    """`we-worker status`: one line per worker of `status_records`, its end mark and the timer's
+    `time_limit`; an exited worker with a resumable mark gets its resume command; then one line
+    per queued start (`queued`)."""
+    out = []
+    for r in status_records(rows, key, projects, state, now):
+        extra = [x for x in ("window" if r["window"] else None, r["end"], r["time_limit"]) if x]
+        head = [r["id"], r["name"], f"pid={r['pid']}", r["state"], f"last={r['last']}"]
+        out.append(" ".join([*head, *extra]))
+        if r["resume"]:
+            when = "the reset" if r["end"] == "usage-limit" else "the login is back"
+            out.append(f"  resume after {when}: {r['resume']}")
     for pos, q in enumerate(queued(state), 1):
         if key and key != q.get("name"):
             continue
@@ -1033,6 +1075,10 @@ def _status_verb(args: argparse.Namespace, state: Path) -> int:
     except ValueError:
         print("we-worker status: claude agents --json printed no JSON", file=sys.stderr)
         return 1
+    if args.json:
+        records = status_records(rows, args.key, projects_dir(), state, time.time())
+        print(json.dumps({"schema_version": STATUS_SCHEMA_VERSION, "workers": records}))
+        return 0
     print("\n".join(status_lines(rows, args.key, projects_dir(), state, time.time())))
     return 0
 
@@ -1113,6 +1159,7 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--dry-run", action="store_true")
     p = sub.add_parser("status")
     p.add_argument("--key")
+    p.add_argument("--json", action="store_true", help="the workers as objects (schema_version)")
     p = sub.add_parser("queue")
     p.add_argument("--name", required=True)
     p.add_argument("--tree", required=True)

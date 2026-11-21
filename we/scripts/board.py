@@ -88,7 +88,8 @@ ask      posts a question for the owner after a cold reader (`cold_reader.py`) u
          A `merge-go` question needs `--pr` (a URL, `<owner>/<repo>#<n>` or a number) on an OPEN
          PR (`gh pr view`), else it is refused before the reader; the item keeps `pr_url`.
          `--one-way <class>` (only with merge-go) stamps `one_way`: the pane then names Accept
-         "Yes, I'll do it" (it writes `accept`) beside the PR link to approve or merge.
+         Go (it writes `accept`) beside the PR link; the asking session arms on it with
+         `arm_pr.sh <PR>`.
          `--kind task` stamps `kind: task` (the pane labels
          Accept as Taken when the task carries a recommendation). `--source <command or link>` stamps where the ask's fact comes from (the
          pane shows it). `--owner <member>` or `--component <name>` (the member whose `components`
@@ -114,7 +115,8 @@ prune    drops what is handled from board.json (docs/board.md § Pruning) and pr
          a question or item an Accept or Deny closed once nothing is owed to its asker any more
          (the deliverer finds the asker only on the board): every answer line on it is older than
          the ledger's epoch, written in the asker's own session, or the asker's row in
-         board-deliveries.jsonl is `delivered: true` (refused, or not taken within PRUNE_AFTER_H:
+         board-deliveries.jsonl is `delivered: true` (the coordinator's row when the coordinator
+         asked it itself; refused, or not taken within PRUNE_AFTER_H:
          the starter's or the route row is), except a one-way merge-go accepted, which `close-merged` takes, and a
          `window-go` accepted, which stays until its asker runs `withdraw` once the go is typed; an
          unanswered `withdrawn` or `superseded` one; a news item the
@@ -132,8 +134,9 @@ blocked  marks another session's line as blocked (docs/board.md § Blocked worke
          prompt (`waiting_on: human`), `chat` only while it is idle (`--waiting-on` a role key or
          human). It writes `blocked`, `waiting_on`, `since`, `sla_due` of that one line and nothing
          else; the same wait again writes nothing. `--clear` removes them once (refused while the
-         permission prompt still stands) and marks the session's open `access-click` questions
-         posted during the wait `obsolete` (`labels.prompt_resolved` and the time), never deleted.
+         permission prompt still stands) and marks the session's open questions the wait raised
+         (`access-click` for a permission wait, `info` for a chat wait) posted during the wait
+         `obsolete` (`labels.prompt_resolved` and the time), never deleted.
 decision records an owner's cut, fence or process decision of their area (`roles.<area>`; `--key`
          a ticket key or, for a decision without a ticket, a plan slug as in `ask`): one `log`
          entry `D<n>` of kind `decision`, then one line in board-decisions.jsonl.
@@ -595,16 +598,20 @@ def _parse_ts(text):
 
 
 def _ledger(state):
-    """The deliverer's first start (`epoch`, None without one) and every (id, answer_ts, role)
-    with a `delivered: true` row in board-deliveries.jsonl."""
-    epoch, delivered = None, set()
+    """The deliverer's first start (`epoch`, None without one), every (id, answer_ts, role)
+    with a `delivered: true` row in board-deliveries.jsonl, and every (id, answer_ts, to) of a
+    delivered `coordinator` row (the coordinator as asker gets no asker row: deliver.ts
+    `recipientsOf`)."""
+    epoch, delivered, to_coordinator = None, set(), set()
     for row in state.deliveries():
         if set(row) == {"epoch"}:
             ts = _parse_ts(row["epoch"])
             epoch = ts if epoch is None or (ts and ts < epoch) else epoch
         elif row.get("delivered") is True:  # a later refusal never follows a delivery
             delivered.add((row.get("id"), row.get("answer_ts"), row.get("role")))
-    return epoch, delivered
+            if row.get("role") == "coordinator":
+                to_coordinator.add((row.get("id"), row.get("answer_ts"), row.get("to")))
+    return epoch, delivered, to_coordinator
 
 
 def prune(board, state, now):
@@ -621,7 +628,7 @@ def prune(board, state, now):
         if a.get("answer") in CLOSING:
             closing[qid] = a
         last[qid] = a.get("answer")
-    epoch, delivered = _ledger(state)
+    epoch, delivered, to_coordinator = _ledger(state)
     gone = {q.get("id") for q in state.questions() if q.get("outcome") in GONE}
 
     def asker_carried(item, line):
@@ -631,13 +638,15 @@ def prune(board, state, now):
         if not asker or line.get("session") == asker or epoch is None or (at and at <= epoch):
             return True
         key = (line.get("id"), line.get("ts"))
+        if (*key, asker) in to_coordinator:
+            return True  # the coordinator asked it itself: its prompt was the asker's copy
         return any((*key, role) in delivered for role in ("asker", "starter", "route"))
 
     def answered(item, qid, close):
         """A closed question goes once its asker is owed nothing: delivered to the asker, or
         routed to the coordinator (deliver.ts routes an answer the asker has not taken within
         PRUNE_AFTER_H). A one-way merge-go accepted stays until `close-merged` takes it: the
-        human still has to merge."""
+        asking session still has to arm it."""
         if item.get("one_way") and item.get("cause") == "merge-go" and close["answer"] == "accept":
             return None
         if item.get("cause") == "window-go" and close["answer"] == "accept":
@@ -1176,6 +1185,12 @@ def _resolved_label(crew, now):
     return f"{label} {now.astimezone(ZoneInfo(tz)).strftime('%H:%M')}"
 
 
+# The cause of the question a wait raises (the sampler's detector asks it): a cleared wait makes its
+# open questions obsolete. Q874, Q883, Q891, Q892: a chat wait cleared (the worker answered by its
+# starter, or stopped) left its `info` question open for hours, and the owner answered a dead one.
+WAIT_CAUSES = {"permission": "access-click", "chat": "info"}
+
+
 def _clear_blocked(state, args, crew, now):
     closed = {a.get("id") for a in state.answers() if a.get("answer") in CLOSING}
     ended, out = [], {}
@@ -1206,13 +1221,14 @@ def _clear_blocked(state, args, crew, now):
         del line["blocked"]
         line["updated_at"] = now.strftime(MINUTE_FMT)  # a rewritten line is not stale
         obsolete = []
-        if blocked.get("kind") == "permission":
+        cause = WAIT_CAUSES.get(blocked.get("kind"))
+        if cause:
             reason = _resolved_label(crew, now)
             for item in board.get("owner_queue") or []:
                 if (
                     isinstance(item, dict)
                     and item.get("session") == args.name
-                    and item.get("cause") == "access-click"
+                    and item.get("cause") == cause
                     and not item.get("obsolete")
                     and item.get("id") not in closed
                     and str(item.get("ts") or "") >= str(blocked.get("since") or "")
@@ -1900,8 +1916,8 @@ def _carry_reads(verb, searches, keys):
     _print_carry(ticket_adapter.read_ops(searches, keys))
     print(
         f"board.py {verb}: carry the reads with your ticketing tool, then run it again with "
-        '--input FILE ({"hits": {state: [key or {key, changed}]}, "tickets": {key: {labels, '
-        "comments}}})",
+        '--input FILE ({"hits": {state: [key or {key, changed}]}, "tickets": {key: {status, '
+        "labels, comments}}})",
         file=sys.stderr,
     )
     return 0
@@ -1924,7 +1940,7 @@ def cmd_signals(state, args, crew, now):
     _scope_guard(crew, wanted)
     board = state.board()
     remote = [  # only open questions: an Accept or Deny ends the read-back
-        q for q in _open_questions(state, board)[0] if q.get("to") and q.get("to") != slug
+        q for q in open_questions(state, board)[0] if q.get("to") and q.get("to") != slug
     ]
     hits, searches, tickets, keys = [], [], {}, []
     for sig in wanted:
@@ -2259,7 +2275,7 @@ def cmd_decision(state, args, crew, now):
     return 0
 
 
-def _open_questions(state, board):
+def open_questions(state, board):
     """`owner_queue` questions no Accept, Deny or Withdraw closed: (open, obsolete). Open ones
     urgent first, each group oldest `since` first; obsolete ones (a resolved prompt,
     `blocked --clear`) apart."""
@@ -2391,7 +2407,7 @@ def cmd_bundle(state, args, crew, now):
         lines = state.decisions()
         last_marker = max((i for i, d in enumerate(lines) if "bundle" in d), default=-1)
         fresh = [d for d in lines[last_marker + 1 :] if d.get("kind") == "decision"]
-        open_items, obsolete = _open_questions(state, board)
+        open_items, obsolete = open_questions(state, board)
         open_ids = [q["id"] for q in open_items]
         escalations = [
             r
@@ -2983,8 +2999,9 @@ def _human_of(m):
 def rule_owner(m):
     """With several humans only a human who owns the state the story leaves (`owns_states`)
     moves it on; out of a running state (`crew.RUNNING_STATES`) the refusal names the question
-    to its owner instead."""
-    if not crew_mod.several_humans(m.crew) or m.source is None:
+    to its owner instead. A ticket that already stands at the target, or past Selected on a late
+    `select` (`ticket_already`), leaves no state, so no owner is asked."""
+    if not crew_mod.several_humans(m.crew) or m.source is None or m.extra.get("ticket_already"):
         return []
     owners = crew_mod.state_owners(m.crew, m.source)
     if not owners:
@@ -3207,6 +3224,8 @@ def rule_pulled(m):
             ]
         m.extra["reopen"] = reason
         return []
+    if m.extra.get("ticket_already"):
+        return []
     if m.source != "selected":
         was = "no row" if m.source is None else f"its last row is {m.source}"
         return [
@@ -3219,6 +3238,8 @@ def rule_pulled(m):
 def rule_reviewed(m):
     if not crew_mod.maps_state(m.crew, "in_test"):
         return ["the crew maps no in_test status (crew.json board.states.in_test)"]
+    if m.extra.get("ticket_already"):
+        return []
     if m.source != "in_review":
         return [f"in_test needs the key to be in_review (it is {m.source or 'none'})"]
     return []
@@ -3342,7 +3363,9 @@ DONE_VIA_ACCEPT = (
 def rule_in_review(m):
     """Done comes from in_review, or from in_test; with an owner of in_test (several humans) only
     from in_test. `--already-fixed` (a story another merged PR already fixed) comes from any
-    state but done."""
+    state but done. A ticket already Done (`ticket_already`) gets its row."""
+    if m.extra.get("ticket_already"):
+        return []
     was = m.source or "none"
     if getattr(m.args, "already_fixed", None):
         return [f"{m.key} is done already"] if was == "done" else []
@@ -3526,6 +3549,9 @@ def _transition(state, args, crew, now, target, head):
     )
     m = Move(state, key, target, root, plan, crew, args)
     m.source = source
+    already = _ticket_already(crew, source, target)
+    if already:
+        m.extra["ticket_already"] = source
     for group, rule in ENTRY_RULES[target]:
         lines = rule(m)
         if lines:
@@ -3551,9 +3577,7 @@ def _transition(state, args, crew, now, target, head):
             "ticket": adapter.name,
         },
     )
-    ops = adapter.move(key, status)
-    if target == "selected":
-        ops += adapter.comment(key, _select_comment(m))
+    ops = _transition_ops(adapter, m, status, already)
     if "tier" in m.extra:
         print(f"tier: {m.extra['tier']}")
     if "round" in m.extra:
@@ -3612,6 +3636,36 @@ def _status_bus(crew):
     return crew_mod.several_humans(crew) and ticketing != "none"
 
 
+def _transition_ops(adapter, m, status, already):
+    """The carry of a written row: the transition (none when the ticket already stands there),
+    and for `selected` the select comment and the crew's `board.select_unlabel` labels."""
+    ops = [] if already else adapter.move(m.key, status)
+    if already:
+        print(f"ticket already {m.source}: no transition")
+    if m.target == "selected":
+        comment = _select_comment(m)
+        if already and m.source != m.target:
+            comment += f"\nThe ticket stays {m.source}."
+        ops += adapter.comment(m.key, comment)
+        for label in (m.crew.get("board") or {}).get("select_unlabel") or []:
+            ops += adapter.unlabel(m.key, label)
+    return ops
+
+
+FORWARD = ("backlog", "selected", "in_progress", "in_review", "in_test", "done")
+
+
+def _ticket_already(crew, source, target):
+    """With the ticket's status as the shared state: the ticket already stands at the target (a
+    human or a session moved it first), or past Selected when the story is selected late. The
+    row is still written; the ticket gets no transition back."""
+    if not _status_bus(crew) or source not in FORWARD or target not in FORWARD:
+        return False
+    if source == target:
+        return True
+    return target == "selected" and FORWARD.index(source) > FORWARD.index(target)
+
+
 def _source_state(state, adapter, crew, key, verb="move"):
     """The state a story leaves: with several humans the ticket's status (every machine moves
     the ticket, each keeps its own rows), `CARRY` while the session has to read it, refused
@@ -3622,6 +3676,11 @@ def _source_state(state, adapter, crew, key, verb="move"):
         if ticket is None:
             return CARRY
         status = ticket.get("status")
+        if status is None:
+            raise BoardError(
+                f"board.py {verb} {key}: refused: the --input file names no status for {key}: "
+                f'read the ticket and add "tickets": {{"{key}": {{"status": "<its status>", …}}}}'
+            )
         found = state_of_status(crew, status)
         if found is None:
             raise BoardError(
@@ -3744,6 +3803,9 @@ def move_done(
                 "--comment-file <the receipt comment> --input FILE`"
             )
     m.source = source
+    already = _ticket_already(crew, source, "done")
+    if already:
+        m.extra["ticket_already"] = source
     for _group, rule in ENTRY_RULES["done"]:
         lines = rule(m)
         if lines:
@@ -3763,7 +3825,10 @@ def move_done(
         "ticket": adapter.name,
     }
     state.record_transition(key, lambda _last: row)
-    ops = adapter.move(key, status) + adapter.comment(key, m.comment)
+    ops = [] if already else adapter.move(key, status)
+    if already:
+        print(f"ticket already {source}: no transition")
+    ops += adapter.comment(key, m.comment)
     sample = _sample(state, crew, key, now) if row["via"] == "receipt" else None
     return row, ops, sample
 
@@ -4104,9 +4169,7 @@ def parser():
     q.add_argument("--text-file", metavar="PATH", help="the --ask text from a file, - for stdin")
     q.add_argument("--urgent", action="store_true", help="bundle lists it before the others")
     q.add_argument("--pr", metavar="REF", help="the open PR a merge-go question is about")
-    q.add_argument(
-        "--one-way", metavar="CLASS", help="merge-go on a one-way PR: Accept reads Yes, I'll do it"
-    )
+    q.add_argument("--one-way", metavar="CLASS", help="merge-go on a one-way PR: Accept reads Go")
     q.add_argument(
         "--kind",
         dest="ask_kind",
@@ -4191,9 +4254,11 @@ def crew_guard(args, env=None, cwd=None):
     """(refusal or None, the board to stamp after the write or None) for a `board.py` call.
 
     Refused (two crews, AC11): a writing verb of a session without a crew on the default board
-    (no `--board`), and a writing verb on a board whose stamp (`crew.stamp_path`) names another
-    crew than the session's. The session's own board, resolved from its crew, is stamped by its
-    first write. An explicit `--board` on an unstamped file passes (scratch and test boards)."""
+    (no `--board`), and a writing verb of a crew's session on a board whose stamp
+    (`crew.stamp_path`) names another crew. The session's own board, resolved from its crew, is
+    stamped by its first write. A session without a crew that names a board with `--board` passes
+    and writes under the board's own stamp: the explicit file is the intent, and only a second
+    crew's session can mistake another crew's board for its own."""
     verb = _verb_name(args)
     if verb in READ_VERBS:
         return None, None
@@ -4205,7 +4270,9 @@ def crew_guard(args, env=None, cwd=None):
     mine = None
     if cid is not None:
         mine = crew_mod.board_file(crew_path, crew, env, DEFAULT_BOARD)
-    if cid is None and not args.board:
+    if cid is None:
+        if args.board:
+            return None, None
         owner = f"crew {stamp}" if stamp else "the default board, no crew stamped yet"
         return _guard_text(verb, why, target, owner), None
     if stamp is not None and stamp != cid:

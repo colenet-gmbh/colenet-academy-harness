@@ -12,12 +12,15 @@
 #                     no review does not end it while the PR can still merge (armed, mergeStateStatus
 #                     CLEAN, UNSTABLE or HAS_HOOKS: GitHub merges past a red non-required check).
 #                     Green with auto-merge off prints `waiting <sha>: green · merge: <state> · auto-merge
-#                     off — <who arms it> — watching to the merge` once per head and keeps polling (a
+#                     off — <who arms it> — watching to the merge` once per head and keeps polling
+#                     (`arm_step`: a one-way class of the head, by the classifier arm_pr.sh asks, says
+#                     `one-way <class>: arm only after the human's yes on the board`; a
+#                     head it cannot classify adds `(class unknown: …)` to `arm: arm_pr.sh <PR>`) (a
 #                     BLOCKED past WATCH_BLOCKED_GRACE still ends it, armed or not), and a
 #                     moved head prints `head moved <old> -> <new> — watching it` and is followed: a
 #                     watcher that ended there left its master sitting next to a PR that merged later.
-#   --human-merge     for a PR only a human merges (one-way, never armed): --until-merged that
-#                     waits past `auto-merge off` and BLOCKED (the approve) until MERGED or CLOSED;
+#   --human-merge     for a one-way PR waiting for the human's go (not armed yet): --until-merged that
+#                     waits past `auto-merge off` and BLOCKED (no go yet) until MERGED or CLOSED;
 #                     only a conflict or a stale base (DIRTY, BEHIND) still ends it with exit 0 (as
 #                     does the merge: `final … merged`).
 #   --max-hours <h>   lifetime cap, default 6.
@@ -32,7 +35,18 @@
 #   head never reached <expected> (still <sha>) after <n>s  exit 5
 #   final <sha>: codex <WARNING|BLOCKING> · auto-merge <disarmed|off> — then /we:ci-review   exit 6
 #       (the head's `<!-- codex-review -->` comment judged it and its check is not green: a skip with a reason turns it green)
-#   final <sha>: merged                                     exit 0  (a merge is the good end)
+#   final <sha>: merged[ · merge commit <c>]                exit 0  (a merge is the good end)
+#   merged <sha> before its CI ended — watching the head's runs to their end   (a merge while a
+#       required check of the head (required_checks.sh on the base) is still open in the rollup, a
+#       human merging past the checks: the merge is no verdict, so the watch goes on in every mode and
+#       ends with one of the next two lines; a run created after `mergedAt` (a `pull_request: closed`
+#       workflow) counts for nothing then; an open non-required check, or a required list it cannot
+#       read, leaves the merge the end: `merged` or `merged (red: …)`)
+#   final <sha>: merged-green[ · merge commit <c>]          exit 0
+#   final <sha>: merged-red[ · merge commit <c>] · failed: <names> — the base branch carries it: fix it first
+#                                                            exit 15 (also `· codex <WARNING|BLOCKING>` in place of
+#       `failed:`; after such a merge no other exit ends the watch: a red check, a job that never started, a
+#       review quota or a Codex verdict all end merged-red)
 #   final <sha>: merged (red: <names>)                      exit 7  (with --until-merged, the red
 #       non-required checks it watched past stay in the line)
 #   final <sha>: closed                                     exit 8
@@ -66,7 +80,8 @@
 # it` (`mergeable` CONFLICTING ends the watch with exit 12 first).
 # A check name that ran more than once on the head (a draft run, then the ready run) is judged
 # by its newest run only (`startedAt`; a run not started yet is the newest). The checks of a
-# cancelled run that a newer run of the same workflow and event replaced count for nothing.
+# cancelled or failed run that a newer, still open run of the same workflow and event replaced
+# count for nothing.
 # Final means: the head's checks are non-empty, none pending, no workflow run for the head SHA
 # queued or in progress (a rerun counts as pending until it completes), and the whole set
 # unchanged for WATCH_QUIET seconds and at least two reads. Checks register seconds after a
@@ -143,7 +158,7 @@ LIFETIME=${WATCH_MAX_LIFETIME:-$((MAX_HOURS * 3600))}
 BORN=$(date +%s)
 
 # Line 1: the head SHA. Line 2: mergeStateStatus<TAB>mergeable<TAB>state<TAB>auto-merge on|off
-# <TAB>isDraft<TAB>the labels joined by a comma.
+# <TAB>isDraft<TAB>the labels joined by a comma<TAB>merge commit<TAB>baseRefName<TAB>mergedAt.
 # Then one line per check: <verdict>\t<name>\t<run id or empty>\t<details url>,
 # verdict pending | pass | fail | cancelled. Only the newest run of each check (workflow and
 # name) on the head counts: a draft run's red ci-summary beside the ready run is history, not red.
@@ -153,7 +168,8 @@ CLASSIFY='def ckey: [(.workflowName // ""), (.name // .context // "")];
   def newest: . as $all | [$all[] | . as $c | select(all($all[]; ckey != ($c | ckey) or at <= ($c | at)))];
   .headRefOid, ((.mergeStateStatus // "UNKNOWN") + "\t" + (.mergeable // "UNKNOWN")
     + "\t" + (.state // "OPEN") + "\t" + (if .autoMergeRequest then "on" else "off" end)
-    + "\t" + ((.isDraft // false) | tostring) + "\t" + ([(.labels // [])[].name] | join(","))),
+    + "\t" + ((.isDraft // false) | tostring) + "\t" + ([(.labels // [])[].name] | join(","))
+    + "\t" + (.mergeCommit.oid // "") + "\t" + (.baseRefName // "") + "\t" + (.mergedAt // "")),
   (((.statusCheckRollup // []) | newest)[] | (
   (if .__typename == "StatusContext" then
      (if .state == "SUCCESS" then "pass" elif (.state == "PENDING" or .state == "EXPECTED") then "pending" else "fail" end)
@@ -164,8 +180,9 @@ CLASSIFY='def ckey: [(.workflowName // ""), (.name // .context // "")];
   + "\t" + (.name // .context)
   + "\t" + (((.detailsUrl // .targetUrl // "") | capture("/actions/runs/(?<id>[0-9]+)") | .id) // "")
   + "\t" + (.detailsUrl // .targetUrl // "")))'
-# One line per workflow run on the head SHA: <id>\t<attempt>\t<status>\t<conclusion>\t<workflow>\t<event>.
-RUNS='.[] | "\(.databaseId)\t\(.attempt)\t\(.status)\t\(.conclusion // "")\t\(.workflowName // "")\t\(.event // "")"'
+# One line per workflow run on the head SHA:
+# <id>\t<attempt>\t<status>\t<conclusion>\t<workflow>\t<event>\t<createdAt>.
+RUNS='.[] | "\(.databaseId)\t\(.attempt)\t\(.status)\t\(.conclusion // "")\t\(.workflowName // "")\t\(.event // "")\t\(.createdAt // "")"'
 # The body of the last Codex review comment (one sticky comment, edited per reviewed head).
 CODEX_BODY='[.comments[]? | select(.body | contains("<!-- codex-review -->"))] | last | .body // ""'
 
@@ -243,13 +260,14 @@ lock_head() {  # the holder line names the head it watches
 
 view() {
   gh_try OUT pr view "$PR" -R "$REPO" \
-    --json headRefOid,statusCheckRollup,mergeStateStatus,mergeable,state,autoMergeRequest,isDraft,labels \
+    --json headRefOid,statusCheckRollup,mergeStateStatus,mergeable,state,autoMergeRequest,isDraft,labels,mergeCommit,baseRefName,mergedAt \
     --jq "$CLASSIFY" && [ -n "$OUT" ]
 }
 field() { sed -n 2p <<<"$OUT" | cut -f"$1"; }
+merge_commit() { local c; c=$(field 7); [ -n "$c" ] && echo " · merge commit ${c:0:12}"; return 0; }
 closed_exit() {  # a merged or closed PR ends the watch with its own line, never "red"
   case "$(field 3)" in
-    MERGED) echo "final $1: merged${WAITING:+ (red: $WAITING)}"; [ -n "$WAITING" ] && exit 7; exit 0 ;;
+    MERGED) echo "final $1: merged$(merge_commit)${WAITING:+ (red: $WAITING)}"; [ -n "$WAITING" ] && exit 7; exit 0 ;;
     CLOSED) echo "final $1: closed"; exit 8 ;;
   esac
 }
@@ -279,7 +297,26 @@ arm_step() {  # who arms this unarmed PR: a hold label's human, the repo's workf
     else echo "the repo's workflow arms a ready PR"; fi
     return
   fi
-  echo "arm: arm_pr.sh $PR"
+  local class; class=$(one_way_of "$SHA" "$(field 8)")
+  case "$class" in
+    -) echo "arm: arm_pr.sh $PR" ;;
+    "") echo "arm: arm_pr.sh $PR (class unknown: a one-way class arms only after the human's yes on the board)" ;;
+    *) echo "one-way $class: arm only after the human's yes on the board" ;;
+  esac
+}
+one_way_of() {  # one_way_of <head> <base>: the head's one-way class, "-" for none, "" when unknown
+  # The classifier arm_pr.sh asks (risk_runner.py head, the head commit fetched first when this
+  # clone lacks it); a non-zero exit or an unknown line 1 is no class (fail closed).
+  local out line
+  [ -n "$1" ] && [ -n "$2" ] || return 0
+  git cat-file -e "$1^{commit}" 2>/dev/null \
+    || GIT_TERMINAL_PROMPT=0 git fetch -q --no-tags origin "$1" 2>/dev/null || true
+  out=$(python3 "$(dirname "${BASH_SOURCE[0]}")/risk_runner.py" head "$1" "origin/$2" 2>/dev/null) || return 0
+  line=$(head -n 1 <<<"$out")
+  case "$line" in
+    "T2 one-way "*) echo "${line#T2 one-way }" ;;
+    T0 | T2) echo "-" ;;
+  esac
 }
 merge_stuck() {  # green, but GitHub will not merge it by itself
   # BLOCKED while green and armed is normal for seconds before the merge; only after BLOCKED_GRACE
@@ -294,7 +331,7 @@ merge_stuck() {  # green, but GitHub will not merge it by itself
 }
 disarm() {  # prints the auto-merge note after disarming an armed PR; never exits
   local out
-  if [ "$(field 4)" != on ]; then echo "auto-merge off"; return; fi
+  if [ "$(field 4)" != on ] || [ -n "$MERGED_EARLY" ]; then echo "auto-merge off"; return; fi
   if out=$(gh pr merge "$PR" -R "$REPO" --disable-auto 2>"$GH_ERR"); then
     echo "auto-merge disarmed"
   else
@@ -344,8 +381,33 @@ infra_exit() {  # every failed check is a job that never started: no red, no rer
   echo "final $SHA: infra · $1: job never started ($2) — do not rerun, tell the coordinator"
   exit 13
 }
+required_open() {  # a required check of the merged head still open in the rollup at the merge
+  # GitHub merges an armed PR once its required checks pass, past a non-required run still open:
+  # only an open required check means a human merged past the checks. An unreadable or empty
+  # required list says nothing, so the merge stays the end.
+  local names open verdict name run _url base
+  base=$(field 8)
+  names=$("$(dirname "${BASH_SOURCE[0]}")/required_checks.sh" --repo "$REPO" ${base:+"$base"}) || return 1
+  [ -n "$names" ] || return 1
+  open=$(awk -F'\t' '$3 ~ /^(queued|in_progress|requested|pending)$/ { print $1 }' <<<"$RUNROWS")
+  while IFS=$'\t' read -r verdict name run _url; do
+    [ -n "$name" ] || continue
+    grep -qxF -- "$name" <<<"$names" || continue
+    [ "$verdict" = pending ] && return 0
+    [ -n "$run" ] && grep -qx "$run" <<<"$open" && return 0
+  done < <(tail -n +3 <<<"$OUT" | late_out)
+  return 1
+}
+late_out() {  # drops the rollup rows whose run was created after the merge (stdin to stdout)
+  awk -F'\t' -v late="$LATE" 'BEGIN { n = split(late, l, "\n"); for (i = 1; i <= n; i++) if (l[i] != "") skip[l[i]] = 1 }
+    !($3 in skip)'
+}
+merged_red() {  # merged_red <what>: the one end of a watch whose PR merged before its CI ended
+  echo "final $SHA: merged-red$(merge_commit) · $1 — the base branch carries it: fix it first"; exit 15
+}
 red_exit() {  # red_exit <failed names>: the red final line; a failed review check disarms first
   local note="" name run reason zero="" why="" all=1
+  [ -n "$MERGED_EARLY" ] && merged_red "failed: $1"
   while IFS=$'\t' read -r name run job; do
     [ -n "$name" ] || continue
     reason=$(zero_steps "$run" "$job" | head -n 1)
@@ -390,12 +452,13 @@ codex_exit() {  # exit 6 when the Codex comment for this head carries WARNING or
         echo "codex $verdict on $SHA, its check green: skipped with a reason, the watch goes on"
         return 0
       fi
+      [ -n "$MERGED_EARLY" ] && merged_red "codex $verdict"
       echo "final $SHA: codex $verdict · $(disarm) — then /we:ci-review"
       exit 6 ;;
     ERROR)
       local why
       why=$(grep -iE "$QUOTA_RX" <<<"$BODY" | head -n 1)
-      [ -n "$why" ] && quota_exit "codex: $(grep -oiE "$QUOTA_RX" <<<"$why" | head -n 1)"
+      [ -n "$why" ] && [ -z "$MERGED_EARLY" ] && quota_exit "codex: $(grep -oiE "$QUOTA_RX" <<<"$why" | head -n 1)"
       why=$(grep -vE '^\s*<!--.*-->\s*$' <<<"$BODY" | grep -iE 'error|fail|reason' | head -n 1)
       echo "codex ERROR: ${why:-no reason in the comment} — rerun the Codex check" ;;
   esac
@@ -404,6 +467,7 @@ codex_exit() {  # exit 6 when the Codex comment for this head carries WARNING or
 take_lock
 quota_wait
 SHA=""
+MERGED_EARLY=""
 until view; do tick; done
 SHA=$(head -n 1 <<<"$OUT")
 if [ -n "$EXPECT" ]; then
@@ -434,7 +498,19 @@ watch_head() {  # (re)start the per-head state: on start and, with --until-merge
 watch_head
 while :; do
   if view && gh_try RUNROWS run list -R "$REPO" --commit "$SHA" --limit 100 --json databaseId,attempt,status,conclusion,workflowName,event --jq "$RUNS"; then
-    closed_exit "$SHA"
+    # A run created after the merge (a `pull_request: closed` workflow) is no CI of this head.
+    LATE=""
+    if [ "$(field 3)" = MERGED ] && [ -n "$(field 9)" ]; then
+      LATE=$(awk -F'\t' -v m="$(field 9)" '$7 != "" && $7 > m { print $1 }' <<<"$RUNROWS")
+      RUNROWS=$(awk -F'\t' -v m="$(field 9)" '!($7 != "" && $7 > m)' <<<"$RUNROWS")
+    fi
+    # Merged while a required check of its head is still open (a human merged past the checks):
+    # the merge is no verdict, so the watch goes on to the head's runs' end, merged-green or merged-red.
+    if [ "$(field 3)" = MERGED ] && [ -z "$MERGED_EARLY" ] && required_open; then
+      MERGED_EARLY=1
+      echo "merged $SHA$(merge_commit) before its CI ended — watching the head's runs to their end"
+    fi
+    [ -n "$MERGED_EARLY" ] || closed_exit "$SHA"
     NOW_SHA=$(head -n 1 <<<"$OUT")
     if [ "$NOW_SHA" != "$SHA" ]; then
       [ -n "$UNTIL_MERGED" ] || { echo "head moved $SHA -> $NOW_SHA"; exit 3; }
@@ -442,10 +518,10 @@ while :; do
       echo "head moved $SHA -> $NOW_SHA — watching it"
       SHA=$NOW_SHA; INTERVAL=$BASE_INTERVAL; watch_head; tick; continue
     fi
-    if [ "$(field 2)" = CONFLICTING ]; then
+    if [ -z "$MERGED_EARLY" ] && [ "$(field 2)" = CONFLICTING ]; then
       echo "final $SHA: conflicts with the base — merge it"; exit 12
     fi
-    ROWS=$(tail -n +3 <<<"$OUT")
+    ROWS=$(tail -n +3 <<<"$OUT" | late_out)
     # Runs still queued or in progress (a fresh push, a `gh run rerun` not yet started). A run
     # parked in `waiting`/`action_required` waits for a human and does not hold the watcher.
     OPEN_RUNS=$(awk -F'\t' '$3 ~ /^(queued|in_progress|requested|pending)$/ { print $1 }' <<<"$RUNROWS")
@@ -453,11 +529,12 @@ while :; do
     [ -n "$OPEN_RUNS" ] && PENDING=1
     # A cancelled run with a newer run of the same workflow and event on the head was replaced
     # (`gh pr ready` cancels the draft run, a push or edit cancels the older run): its checks are
-    # history, never a failure, a progress line or a --fail-fast exit, but only while the newer
+    # history, never a failure, a progress line or a --fail-fast exit (a failed run too: the draft
+    # run's red ci-summary while the ready run is open), but only while the newer
     # run is still open: once it finished, CLASSIFY already shows its result for every check it
     # reported, and a cancelled check it never reported stays the latest for its name, so red.
     SUPERSEDED=$(awk -F'\t' '{ id[NR] = $1; s[NR] = $3; c[NR] = $4; k[NR] = $5 "\t" $6 }
-      END { for (i = 1; i <= NR; i++) if (c[i] == "cancelled") for (j = 1; j <= NR; j++)
+      END { for (i = 1; i <= NR; i++) if (c[i] == "cancelled" || c[i] == "failure") for (j = 1; j <= NR; j++)
         if (k[j] == k[i] && id[j] + 0 > id[i] + 0 && s[j] ~ /^(queued|in_progress|requested|pending)$/) {
           print id[i]; break } }' <<<"$RUNROWS")
     FAILED=""
@@ -511,7 +588,7 @@ while :; do
     if [ -n "$LIVE" ] && [ -z "$PENDING" ] && [ "$READS" -ge 2 ] && [ $((NOW - STABLE_SINCE)) -ge "$QUIET" ]; then
       if [ -n "$FAILED" ]; then
         # A red non-required check (an auto-merge workflow) does not stop a PR GitHub still merges.
-        if [ -n "$UNTIL_MERGED" ] && can_merge && ! grep -qiE "$REVIEW_RX" <<<"$(tr ',' '\n' <<<"$FAILED")"; then
+        if [ -z "$MERGED_EARLY" ] && [ -n "$UNTIL_MERGED" ] && can_merge && ! grep -qiE "$REVIEW_RX" <<<"$(tr ',' '\n' <<<"$FAILED")"; then
           [ "$WAITING" = "$FAILED" ] || echo "still merging: $FAILED red, $(merge_note) — watching to the merge"
           WAITING=$FAILED; backoff; tick; continue
         fi
@@ -519,7 +596,9 @@ while :; do
       fi
       # Auto-merge off is said once and watched past: the caller arms it (or the human merges) and
       # still gets the `merged` exit; DIRTY, BEHIND and a long BLOCKED need the session, so they end.
-      if [ -n "$UNTIL_MERGED" ] && [ -z "$HUMAN_MERGE" ] && [ "$(field 4)" = off ] \
+      if [ -n "$MERGED_EARLY" ]; then
+        echo "final $SHA: merged-green$(merge_commit)"; exit 0
+      elif [ -n "$UNTIL_MERGED" ] && [ -z "$HUMAN_MERGE" ] && [ "$(field 4)" = off ] \
         && [ "$(field 1)" != DIRTY ] && [ "$(field 1)" != BEHIND ] \
         && ! { [ "$(field 1)" = BLOCKED ] && [ $(($(date +%s) - STABLE_SINCE)) -ge "$BLOCKED_GRACE" ]; }; then
         [ "$OFF_SAID" = "$SHA" ] || echo "waiting $SHA: green · $(merge_note) — watching to the merge"

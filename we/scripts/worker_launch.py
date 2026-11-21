@@ -27,7 +27,8 @@ removed with the worktree): `we-brief.md` (the brief under a first `Lead:` line)
 as a process worker only when the marker's `session_id` is its own (`worker_marker`), so the Lead
 working in the same worktree is never one (`hooks/worker_report_gate.py`,
 `hooks/worker_rights_gate.py`); `scripts/watch-worker.sh` reads the marker by name. `stop` removes both
-files, also for a session that already ended.
+files, also for a session that already ended. Every start, `launch`'s and `we-worker`'s, appends one
+line to `<state dir>/launched.jsonl` (§ the starter log, above `record_launch`).
 
 Usage:
   worker_launch.py backend [--repo <dir>]          prints `subagent` or the template; 2 = invalid
@@ -90,7 +91,24 @@ Usage:
                                                    --main-checkout only prints the main
                                                    checkout's top, exit 1 when <dir> is none
   worker_launch.py marker --tree <wt> --name <n> [--key K] [--role R] [--starter S] [--mode M]
+                          [--starter-session <id>]
                                                    writes the launcher's marker (`write_marker`)
+                                                   and its line in launched.jsonl
+  worker_launch.py launched --name <n> [--key K] [--starter S] [--starter-session <id>]
+                                                   only the line in launched.jsonl (a start
+                                                   without a marker; `record_launch`)
+  worker_launch.py starters [--json]               the newest launched.jsonl line per worker;
+                                                   --json: {schema_version, generated_at, path,
+                                                   unreadable, starters}
+  worker_launch.py backfill-starters [--since 14d] [--apply]
+                                                   the worker lanes of flow_intervals.py without a
+                                                   starter: per worker the source it would use
+                                                   (`timing`: a WorkerLaunch line of
+                                                   ~/.claude/we-timing; `transcript`: the starter
+                                                   line in the head of its transcript, only the
+                                                   name kept) or `unrecoverable`; writes nothing
+                                                   without --apply, which appends one line per
+                                                   recovered worker with `backfill: <source>`
   worker_launch.py launch --worktree <wt> --name <n> --brief-file <f> [--agent <we:dev-…>]
   worker_launch.py stop --name <n> [--worktree <wt>] exit 0 stopped · 1 failed · 3 still running;
                                                    with --worktree it removes marker and brief;
@@ -660,9 +678,10 @@ def remove_command(repo: Path, path: str) -> str:
     return shlex.join(["git", "worktree", "remove", path])
 
 
-def write_marker(tree: Path, **fields: object) -> Path:
+def write_marker(tree: Path, starter_session: str | None = None, **fields: object) -> Path:
     """The launcher's marker in the tree's own git dir: name, key, role, starter, tree, mode,
-    launched_at. It carries no `session_id`, so the marker-bound worker gates stay as they were."""
+    launched_at. It carries no `session_id`, so the marker-bound worker gates stay as they were.
+    The start also goes into `launched.jsonl` (`record_launch`), which outlives the marker."""
     gd = git_dir(tree)
     if gd is None:
         raise LaunchError(f"{tree} is no git worktree")
@@ -670,7 +689,244 @@ def write_marker(tree: Path, **fields: object) -> Path:
     doc["tree"] = str(tree)
     doc["launched_at"] = time.time()
     (gd / MARKER).write_text(json.dumps(doc, indent=2) + "\n")
+    record_launch(
+        str(fields.get("name") or ""),
+        fields.get("key"),  # type: ignore[arg-type]
+        fields.get("starter"),  # type: ignore[arg-type]
+        starter_session,
+    )
     return gd / MARKER
+
+
+# --- the starter log ---------------------------------------------------------------------------
+#
+# `<state_dir>/launched.jsonl` (`state_dir` of `worker_supervisor.py`) keeps one line per start:
+# `name, key, starter, starter_session, ts`, a backfilled line also `backfill: <source>`. The
+# marker `<state_dir>/<name>.json` goes when its worker ends (`worker_supervisor._remove_files`
+# names two files, never this one), so this file is where an ended worker's starter stays.
+# `starter_session` is the starting shell's `$CLAUDE_CODE_SESSION_ID`; before this file only the
+# external timer (`worker_timer register --starter-session`) received it. Each line is one
+# `os.write` on an `O_APPEND` descriptor: parallel launchers leave whole lines without a lock.
+
+LAUNCHED = "launched.jsonl"
+STARTERS_SCHEMA = 1
+STARTER_RX = re.compile(
+    r"Dein Starter ist ([A-Za-z0-9][A-Za-z0-9._-]*)|Lead: ([A-Za-z0-9][A-Za-z0-9._-]*) \u2014"
+)
+TRANSCRIPT_HEAD_LINES = 200
+
+
+def _state_dir() -> Path:
+    import worker_supervisor  # noqa: PLC0415 (it imports this module)
+
+    return worker_supervisor.state_dir()
+
+
+def _utc(ts: float | None = None) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() if ts is None else ts))
+
+
+def append_line(path: Path, doc: dict) -> None:
+    """One JSON line in one `os.write` on an `O_APPEND` descriptor."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = (json.dumps(doc, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+
+
+def record_launch(
+    name: str,
+    key: str | None = None,
+    starter: str | None = None,
+    starter_session: str | None = None,
+    state: Path | None = None,
+    **extra: object,
+) -> None:
+    """Append the start of `name` to `launched.jsonl`; a failed write is one stderr line, the
+    start goes on."""
+    doc = {
+        "name": name,
+        "key": key or None,
+        "starter": starter or None,
+        "starter_session": starter_session or None,
+        "ts": _utc(),
+        **extra,
+    }
+    import worker_rights  # noqa: PLC0415
+
+    path = (state or _state_dir()) / LAUNCHED
+    if worker_rights.forbidden_write(path, doc):
+        return
+    try:
+        append_line(path, doc)
+    except OSError as exc:
+        print(f"worker_launch: {LAUNCHED} not written ({exc})", file=sys.stderr)
+
+
+def read_launched(state: Path) -> tuple[list[dict], int]:
+    """`(lines, unreadable)` of `launched.jsonl`, oldest first."""
+    rows, bad = [], 0
+    try:
+        text = (state / LAUNCHED).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return [], 0
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            doc = json.loads(line)
+        except ValueError:
+            bad += 1
+            continue
+        if isinstance(doc, dict) and isinstance(doc.get("name"), str) and doc["name"]:
+            rows.append(doc)
+        else:
+            bad += 1
+    return rows, bad
+
+
+def starters_doc(state: Path) -> dict:
+    """`starters --json`: the newest line per worker name."""
+    rows, bad = read_launched(state)
+    newest: dict = {}
+    for doc in sorted(rows, key=lambda d: str(d.get("ts"))):
+        newest[doc["name"]] = doc
+    return {
+        "schema_version": STARTERS_SCHEMA,
+        "generated_at": _utc(),
+        "path": str(state / LAUNCHED),
+        "unreadable": bad,
+        "starters": [newest[n] for n in sorted(newest)],
+    }
+
+
+def timing_launches(timing: Path) -> dict[str, str]:
+    """`{worker name: starter session}` of the `WorkerLaunch` lines in `~/.claude/we-timing`
+    (`_timing`: the file stem is the starting session)."""
+    out: dict[str, str] = {}
+    for path in sorted(timing.glob("*.jsonl")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if "WorkerLaunch" not in text:
+            continue
+        for line in text.splitlines():
+            try:
+                doc = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(doc, dict) and doc.get("event") == "WorkerLaunch" and doc.get("name"):
+                out.setdefault(str(doc["name"]), path.stem)
+    return out
+
+
+def transcript_starter(projects: Path, session_id: str | None) -> str | None:
+    """The starter named in the head of the session's transcript (`Dein Starter ist <X>`, the
+    timer's start line, or a brief's `Lead: <X> —`): only the captured name leaves this function,
+    never the line; reads at most `TRANSCRIPT_HEAD_LINES` lines."""
+    if not session_id or not re.fullmatch(r"[A-Za-z0-9-]+", session_id):
+        return None
+    for path in projects.glob(f"*/{session_id}.jsonl"):
+        try:
+            with path.open(encoding="utf-8", errors="replace") as fh:
+                for i, line in enumerate(fh):
+                    if i >= TRANSCRIPT_HEAD_LINES:
+                        break
+                    found = STARTER_RX.search(line)
+                    if found:
+                        return (found.group(1) or found.group(2)).rstrip(".")
+        except OSError:
+            return None
+    return None
+
+
+def backfill_starters(
+    workers: list[tuple[str, str | None]],
+    apply: bool,
+    *,
+    state: Path,
+    timing: Path,
+    projects: Path,
+    session_names: dict[str, str],
+) -> list[str]:
+    """One line per starterless worker: the source it would use (`timing`, `transcript`) and the
+    starter, or `unrecoverable`; with `apply`, one `launched.jsonl` line per recovered worker with
+    `backfill: <source>`. Reads only the starter line of a transcript (`transcript_starter`)."""
+    launches = timing_launches(timing)
+    lines = []
+    for name, sid in workers:
+        starter, source, starter_session = None, None, None
+        if name in launches:
+            starter_session = launches[name]
+            starter = session_names.get(starter_session)
+            source = "timing" if starter else None
+        if starter is None:
+            starter = transcript_starter(projects, sid)
+            source = "transcript" if starter else None
+        if starter is None:
+            lines.append(f"{name}: unrecoverable")
+            continue
+        verb = "recovered" if apply else "would use"
+        lines.append(f"{name}: {verb} {source} -> {starter}")
+        if apply:
+            record_launch(
+                name,
+                None,
+                starter,
+                starter_session if source == "timing" else None,
+                state,
+                backfill=source,
+            )
+    return lines
+
+
+def _starter_verbs(args: argparse.Namespace) -> int:
+    """`launched`, `starters` and `backfill-starters`."""
+    state = _state_dir()
+    if args.cmd == "launched":
+        record_launch(args.name, args.key, args.starter, args.starter_session, state)
+        return 0
+    if args.cmd == "starters":
+        doc = starters_doc(state)
+        if args.json:
+            print(json.dumps(doc, indent=2, ensure_ascii=False))
+        else:
+            for x in doc["starters"]:
+                print(f"{x['name']} {x.get('starter') or '-'} {x.get('ts') or '-'}")
+        return 0
+    import datetime as dt  # noqa: PLC0415
+
+    import flow_intervals  # noqa: PLC0415 (the reader owns which lanes are workers)
+    import worker_supervisor  # noqa: PLC0415
+
+    now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+    built = flow_intervals.load(Path.cwd(), args.since, now)
+    names = {}
+    for name, lane in built["lanes"].items():
+        if lane.get("session_id"):
+            names.setdefault(lane["session_id"], name)
+    workers = flow_intervals.starterless(built)
+    timing = Path.home() / ".claude" / "we-timing"
+    lines = backfill_starters(
+        workers,
+        args.apply,
+        state=state,
+        timing=timing,
+        projects=worker_supervisor.projects_dir(),
+        session_names=names,
+    )
+    for line in lines:
+        print(line)
+    gone = sum(1 for x in lines if x.endswith(": unrecoverable"))
+    print(
+        f"backfill-starters: {len(workers)} workers without a starter, {gone} unrecoverable"
+        + ("" if args.apply else "; dry run, nothing written (--apply writes)")
+    )
+    return 0
 
 
 AUTO_MEMORY = ("off", "own", "shared")
@@ -1082,6 +1338,7 @@ def write_settings(
     name: str | None = None,
     account: dict | None = None,
     brief: str | None = None,
+    starter: str | None = None,
 ) -> dict:
     """The worker's `--settings` file (`worker_rights.settings`), with the timer's hook, the
     lean context of `workers.context` (`apply_context`), the chosen account (`apply_account`)
@@ -1089,18 +1346,46 @@ def write_settings(
     (`ticketing_unneeded`)."""
     import worker_rights  # noqa: PLC0415
 
-    doc = apply_context(worker_rights.settings(repo, key), repo, name, out.parent)
+    doc = apply_context(worker_rights.settings(repo, key, starter), repo, name, out.parent)
     if account:
         apply_account(doc, account)
     if brief:
         turn_off(doc, ticketing_unneeded(brief, repo))
-    if session_start:
-        doc["hooks"] = {
-            "SessionStart": [{"hooks": [{"type": "command", "command": session_start}]}]
-        }
+    commands = [session_start] if session_start else []
     out.parent.mkdir(parents=True, exist_ok=True)
+    if brief and brief.strip() and name:
+        commands.append(brief_hook(write_brief(out.parent, name, brief)))
+    if commands:
+        doc["hooks"] = {
+            "SessionStart": [{"hooks": [{"type": "command", "command": c} for c in commands]}]
+        }
     _write_private(out, json.dumps(doc, indent=2) + "\n")
     return doc
+
+
+# The brief also as a file: `claude --bg` drops its prompt argument when a SendMessage reaches the
+# new session before it submitted that prompt (measured 20.11.: a queued start, whose waiter tells
+# the starter at once, and a resume). The worker's SessionStart hook names the file, so the next
+# turn finds the brief whichever message starts it.
+BRIEF_SUFFIX = ".brief.md"
+
+
+def write_brief(state: Path, name: str, brief: str) -> Path:
+    """`<state>/<name>.brief.md`, private; the next start of that name overwrites it."""
+    path = state / f"{name}{BRIEF_SUFFIX}"
+    _write_private(path, brief if brief.endswith("\n") else brief + "\n")
+    return path
+
+
+def brief_hook(path: Path) -> str:
+    """The SessionStart command that names the brief file as additional context."""
+    text = (
+        f"we-worker: your brief is the file {path}. If this conversation does not start with it"
+        " (a message that reaches a new session first can push the start prompt out), read that"
+        " file now and follow it."
+    )
+    payload = {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}
+    return "printf '%s\\n' " + shlex.quote(json.dumps(payload, ensure_ascii=False))
 
 
 def launch(worktree: Path, name: str, brief_file: Path, agent: str | None = None) -> Path:
@@ -1147,7 +1432,9 @@ def launch(worktree: Path, name: str, brief_file: Path, agent: str | None = None
         settings_path = gd / SETTINGS
         off = ticketing_unneeded(brief, worktree)  # read on the worker's login, as `claude_env`
         doc = turn_off(
-            {"env": worker_rights.worker_env(key)}, off, installed_plugin_ids(claude_env())
+            {"env": worker_rights.worker_env(key, starter=lead)},
+            off,
+            installed_plugin_ids(claude_env()),
         )
         settings_path.write_text(json.dumps(doc, indent=2) + "\n")
         argv[1:1] = ["--settings", str(settings_path)]
@@ -1171,6 +1458,7 @@ def launch(worktree: Path, name: str, brief_file: Path, agent: str | None = None
             file=sys.stderr,
         )
     _timing("WorkerLaunch", name=name, agent_type=agent, cwd=str(worktree))
+    record_launch(name, key, lead, os.environ.get("CLAUDE_CODE_SESSION_ID"))
     if out.stdout.strip():
         print(out.stdout.strip())
     return marker_path
@@ -1391,6 +1679,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--role", default="worker")
     p.add_argument("--starter")
     p.add_argument("--mode")
+    p.add_argument("--starter-session")
+    _starter_parsers(sub)
     p = sub.add_parser("launch")
     p.add_argument("--worktree", type=Path, required=True)
     p.add_argument("--name", required=True)
@@ -1406,6 +1696,19 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _starter_parsers(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser("launched")
+    p.add_argument("--name", required=True)
+    p.add_argument("--key")
+    p.add_argument("--starter")
+    p.add_argument("--starter-session")
+    p = sub.add_parser("starters")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("backfill-starters")
+    p.add_argument("--since", default="14d")
+    p.add_argument("--apply", action="store_true")
+
+
 def _settings_parsers(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("settings")
     p.add_argument("--repo", type=Path, required=True)
@@ -1415,6 +1718,7 @@ def _settings_parsers(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--name")
     p.add_argument("--account-file", type=Path)
     p.add_argument("--brief-stdin", action="store_true")
+    p.add_argument("--starter")
     p = sub.add_parser("account")
     p.add_argument("--repo", type=Path, default=Path.cwd())
     p.add_argument("--account", required=True)
@@ -1441,7 +1745,14 @@ def _settings_verbs(args: argparse.Namespace) -> None:
                 raise LaunchError(f"--account-file: {exc}", 2) from exc
         brief = sys.stdin.read() if args.brief_stdin else None
         write_settings(
-            args.repo.resolve(), args.key, args.out, args.session_start, args.name, chosen, brief
+            args.repo.resolve(),
+            args.key,
+            args.out,
+            args.session_start,
+            args.name,
+            chosen,
+            brief,
+            args.starter,
         )
         print(args.out)
 
@@ -1490,6 +1801,7 @@ def _tree_verbs(args: argparse.Namespace) -> int:
             role=args.role,
             starter=args.starter,
             mode=args.mode,
+            starter_session=args.starter_session,
         )
         return 0
     if args.main_checkout:
@@ -1531,6 +1843,8 @@ def main(argv: list[str] | None = None) -> int:
         return _check_verb(args)
     if args.cmd in ("capacity", "needs"):
         return _gate_verb(args)
+    if args.cmd in ("launched", "starters", "backfill-starters"):
+        return _starter_verbs(args)
     code = 0
     try:
         if args.cmd == "backend":

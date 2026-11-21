@@ -537,6 +537,29 @@ def test_ten_rules_of_160_characters_pass(tmp_path):
     assert run(core, "show").returncode == 0
 
 
+def test_lenses_when_t2_takes_a_list_of_lens_keys(tmp_path):
+    core, _ = workspace(tmp_path, with_(ready_panel__lenses_when_t2=["product"]))
+    out = run(core, "show")
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout)["ready_panel"]["lenses_when_t2"] == ["product"]
+    for bad, says in (("product", "must be a list"), (["nonesuch"], "'nonesuch' is no lens")):
+        core.joinpath(".weside", "crew.json").write_text(
+            json.dumps(with_(ready_panel__lenses_when_t2=bad))
+        )
+        out = run(core, "show")
+        assert out.returncode == 1 and says in out.stderr, (bad, out.stderr)
+
+
+@pytest.mark.parametrize("bad", ["x", ["security"], 3])
+def test_a_ready_panel_that_is_no_object_is_a_crew_error(tmp_path, bad):
+    """No AttributeError: the lens check refuses it on its own, and `show` names the key."""
+    with pytest.raises(crew.CrewError, match="ready_panel must be an object"):
+        crew._validate_lenses(tmp_path / "crew.json", {"ready_panel": bad}, set())
+    core, _ = workspace(tmp_path, {**CREW, "ready_panel": bad})
+    out = run(core, "show")
+    assert out.returncode == 1 and "ready_panel must be an object" in out.stderr, out.stderr
+
+
 def test_a_value_of_the_wrong_type_is_refused(tmp_path):
     core, _ = workspace(tmp_path, with_(limits__masters="five"))
     out = run(core, "show")
@@ -549,7 +572,7 @@ def test_the_ready_panel_keys_default_and_take_a_number_of_at_least_one(tmp_path
     minimal = {"version": 2, "roles": CREW["roles"], "members": CREW["members"]}
     core, _ = workspace(tmp_path, minimal)
     shown = json.loads(run(core, "show").stdout)["ready_panel"]
-    assert shown == {"warning_ok_after_rounds": None, "max_rounds": 2}
+    assert shown == {"warning_ok_after_rounds": None, "max_rounds": 2, "lenses_when_t2": []}
     for good in (1, 3, None):
         core.joinpath(".weside", "crew.json").write_text(
             json.dumps(with_(**{f"ready_panel__{key}": good}))
@@ -590,6 +613,34 @@ def test_the_ready_gate_keys_default_and_are_typed(tmp_path):
         assert out.returncode == 1 and message in out.stderr, (changes, out.stderr)
 
 
+@pytest.mark.parametrize(
+    ("repos", "message"),
+    [
+        (["not a slug", 3], "flow.repos must be a list of strings"),
+        (["not a slug"], "flow.repos[0] 'not a slug' must be an owner/name GitHub slug"),
+        (["acme/infra", "acme"], "flow.repos[1] 'acme' must be an owner/name GitHub slug"),
+        ("acme/infra", "flow.repos must be a list"),
+    ],
+)
+def test_flow_repos_is_refused_on_every_load_unless_owner_name_slugs(tmp_path, repos, message):
+    """The type check runs in ``_validate``, so every ``load`` refuses, not only ``--strict``."""
+    core, _ = workspace(tmp_path, with_(flow__repos=repos))
+    path = core / ".weside" / "crew.json"
+    with pytest.raises(crew.CrewError, match=r"flow\.repos") as exc:
+        crew.load(path)
+    assert str(exc.value) == f"{path}: {message}"
+    for args in (("validate",), ("validate", "--strict")):
+        out = run(core, *args)
+        assert out.returncode == 1 and message in out.stderr, (args, out.stderr)
+
+
+def test_flow_repos_of_owner_name_slugs_passes_strict(tmp_path):
+    core, _ = workspace(tmp_path, with_(flow__repos=["acme/infra", "Acme/Web.site"]))
+    out = run(core, "validate", "--strict")
+    assert out.returncode == 0 and out.stderr == "", out.stderr
+    assert json.loads(run(core, "show").stdout)["flow"]["repos"] == ["acme/infra", "Acme/Web.site"]
+
+
 def test_the_flow_block_defaults_merges_and_is_typed(tmp_path):
     minimal = {"version": 2, "roles": CREW["roles"], "members": CREW["members"]}
     core, _ = workspace(tmp_path, minimal)
@@ -599,6 +650,9 @@ def test_the_flow_block_defaults_merges_and_is_typed(tmp_path):
         "stale_min": 15,
         "starter_wait_min": 30,
         "urgent_commands": [],
+        "main_state_command": None,
+        "tickets_stale_min": 45,
+        "repos": [],
     }
     bound = with_(flow__log_dir="~/flow", flow__urgent_commands=["gh secret", r"eas build"])
     core.joinpath(".weside", "crew.json").write_text(json.dumps(bound))
@@ -1041,12 +1095,43 @@ def test_merge_block_is_validated_where_the_crew_loads(tmp_path):
     for name, merge, says in (
         ("a", {"armer": "Workflow"}, "merge.armer must be one of session, workflow"),
         ("h", {"hold_labels": "review"}, "merge.hold_labels must be a list"),
-        ("n", {"hold_labels": [1]}, "merge.hold_labels must be a list of strings"),
+        ("n", {"hold_labels": [1]}, "merge.hold_labels must be a list of label strings"),
+        (
+            "e",
+            {"hold_labels": ["review", " "]},
+            "merge.hold_labels must be a list of label strings",
+        ),
     ):
         bad, _ = workspace(tmp_path / name, {**CREW, "merge": merge})
         out = run(bad, "validate")
         assert out.returncode == 1 and says in out.stderr, out.stderr
         assert run(bad, "merge", "armer").returncode == 1
+
+
+def test_zentrale_block_is_validated_where_the_crew_loads(tmp_path):
+    """`zentrale.web_url` an https URL, `link_hosts` hosts without a scheme, `peers` IP networks."""
+    assert crew.DEFAULTS["zentrale"] == {"web_url": None, "link_hosts": [], "peers": []}
+    good, _ = workspace(
+        tmp_path / "g",
+        {
+            **CREW,
+            "zentrale": {
+                "web_url": "https://crew.example.org/crew/",
+                "link_hosts": ["github.com/acme"],
+                "peers": ["10.0.0.0/16", "192.0.2.7"],
+            },
+        },
+    )
+    assert run(good, "validate", "--strict").returncode == 0
+    for name, block, says in (
+        ("u", {"web_url": "http://crew.example.org/crew/"}, "zentrale.web_url must be an https"),
+        ("j", {"web_url": "javascript:alert(1)"}, "zentrale.web_url must be an https"),
+        ("h", {"link_hosts": ["https://github.com/acme"]}, "zentrale.link_hosts must be"),
+        ("p", {"peers": ["traefik"]}, "zentrale.peers: 'traefik' is no IP network"),
+    ):
+        bad, _ = workspace(tmp_path / name, {**CREW, "zentrale": block})
+        out = run(bad, "validate")
+        assert out.returncode == 1 and says in out.stderr, out.stderr
 
 
 def test_merge_rev_reads_the_crew_the_commit_has_through_its_pointer(tmp_path):

@@ -161,6 +161,24 @@ def test_the_unbound_t2_oneway_case_keeps_waiting_on_the_human_alone():
     assert _lists(case)["waits"] == ["human"]
 
 
+def test_the_t2_oneway_case_routes_a_question_and_arms_after_the_yes():
+    """The one-way case's master asks the human through the coordinator and arms with `arm_pr.sh`
+    once the yes is back; no approve on GitHub and no go number is the yes. The case's route must be
+    one the rendered L0 gives, and nothing the case forbids may stand in it. Red arm: the L0 that
+    made the master arm with `arm_pr.sh --go Q<nr>`."""
+    case = REPO / "tests" / "coldstart" / "master" / "t2-oneway-human-merges.yaml"
+    forbidden = _lists(case)["forbidden"]
+    assert {"gh pr review --approve", "please approve", "arm_pr.sh --go"} <= set(forbidden)
+    [route] = ROUTE.findall(case.read_text(encoding="utf-8"))
+    l0, _card = _rendered(GENERIC_FIXTURE)
+    one_way = l0.split("- **One-way is a computed class:**", 1)[1].split("\n- ", 1)[0]
+    flat = " ".join(one_way.split())
+    assert re.search(route.encode().decode("unicode_escape"), flat), flat
+    assert "`arm_pr.sh`" in flat
+    assert [f for f in forbidden if f in flat] == [], flat
+    assert "approve" not in flat
+
+
 GENERIC_FIXTURE = "we/scripts/fixtures/crew-v2-generic.json"
 ORDER_LINE = (
     "- On a card hit (`trust-loosening`, `brake-review`): a fresh worker with Bo's card reviews the "
@@ -203,11 +221,11 @@ def test_the_generic_crew_renders_no_security_routing():
     ("name", "fixture"),
     [
         ("card-blocking-after-merge", SECURITY_FIXTURE),
-        ("main-red-before-arm", GENERIC_FIXTURE),
+        ("main-red-keeps-merging", GENERIC_FIXTURE),
     ],
 )
 def test_the_merge_cases_route_on_a_line_the_rendered_l0_carries(name, fixture):
-    """A card verdict after the merge becomes a fix story; main red holds the arm.
+    """A card verdict after the merge becomes a fix story; main red does not hold the arm.
     Both routes must be satisfiable by the L0 the master reads with the case's crew."""
     case = REPO / "tests" / "coldstart" / "master" / f"{name}.yaml"
     top = {k: v.strip() for k, v in TOP.findall(case.read_text(encoding="utf-8"))}

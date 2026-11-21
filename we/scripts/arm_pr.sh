@@ -17,10 +17,20 @@
 # head, GitHub calls the PR mergeable (CLEAN, UNSTABLE, HAS_HOOKS) and no required review is
 # missing. The caller then merges as a separate, explicit command with `--match-head-commit <sha>`.
 #
-# Before the arm, only in a checkout whose HEAD is the PR head, the crew's risk classifier runs
-# (`risk_runner.py here`: the crew's `risk.command`, else `risk_paths.py` over `.weside/risk-paths`,
-# both from origin/main); a one-way class is refused: only the human merges it. Anywhere else a stderr note says it was not classified: the caller's class (`/we:master`
-# § Close the run) stays the one-way gate.
+# Before the arm the crew's risk classifier (the crew's `risk.command`, else `risk_paths.py` over
+# `.weside/risk-paths`, both from origin/main) classifies the PR head against its base, wherever the
+# helper runs: in a checkout whose HEAD is the PR head on the checkout itself (`risk_runner.py here`,
+# uncommitted risk paths included), elsewhere on the head commit after a fetch of `pull/<PR>/head`
+# into `refs/we-arm/pr-<PR>`, dropped again after the class (`risk_runner.py head`). Outside a git
+# clone there is no class. Fail closed: no class is a refusal. A one-way class is no refusal: it
+# merges only after the human's yes on the board (the merge question goes through the coordinator,
+# `/we:master` § Close the run), and the session that asked arms it. The helper cannot tell a yes
+# from a session's own board line, so it does not check one; it says the class loudly instead: the
+# line `one-way <class>: merges only after the human's yes on the board (L0)` before the verdict,
+# and after the arm, or before the `ready` line, a PR comment `one-way <class> armed` or
+# `one-way <class> ready for the printed merge` with that reminder and `(head <sha>)`, once per head (a run that
+# finds the comment for this head does not post it again). A process worker (`WE_ROLE=worker`)
+# never arms a one-way class and gets no `ready` for it: the session that asked the human does.
 #
 # One verdict line and its exit code:
 #   armed: auto-merge on <sha> (<method>)                                        exit 0
@@ -34,7 +44,7 @@
 #   refused: label <name> — only the human merges it                             exit 4
 #   refused: armed by workflow — the step is gh pr ready                         exit 4
 #   refused: head moved <old> -> <new>                                           exit 5
-#   refused: one-way <class> — only the human merges it                          exit 6
+#   refused: one-way <class> — the session that asked the human arms it        exit 6  (WE_ROLE=worker)
 #   refused: one-way not classified (<why>) — the classifier failed or printed no class   exit 6
 #   red: <names> on <sha> — not armed                                            exit 7
 #   no checks on <sha> after <n>s — not armed, run again                         exit 8
@@ -50,8 +60,8 @@
 # `--check` reads once and arms nothing: the same facts as above (crew merge block, hold labels,
 # one-way class, required names absent = pending, mergeStateStatus, reviewDecision) give one line
 # and exit 0 only on `ready`. `--sha` binds it to that head (a different head is `refused: head
-# moved`). The one-way check is strict here: a checkout that is not the PR head, or a classifier
-# that prints nothing, refuses. The worker rights gate calls it before a worker's own merge line:
+# moved`). A one-way class prints its line first and refuses only a worker. The worker rights gate
+# calls it, with `WE_ROLE=worker`, before a worker's own merge line:
 #   ready: … (as above)                                                         exit 0
 #   pending: <names> on <sha> — not ready                                        exit 8
 #   not ready on <sha> (<mergeStateStatus>, review <decision>)                   exit 8
@@ -63,7 +73,7 @@ set -uo pipefail
 
 usage() { echo "gh failed: usage: arm_pr.sh <PR> [--method merge|squash|rebase] [--repo <owner/repo>] [--check [--sha <sha>]]"; exit 2; }
 
-PR="" METHOD=merge REPO="" CHECK="" SHA=""
+PR="" METHOD=merge REPO="" CHECK="" SHA="" ONE_WAY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --method) METHOD=${2:-}; shift 2 || usage ;;
@@ -83,7 +93,9 @@ TIMEOUT=${ARM_REGISTER_TIMEOUT:-300}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 # stdout only is a gh value: gh prints notices (upgrade, preview commands) on stderr, even on success.
-GH_ERR=$(mktemp) && trap 'rm -f "$GH_ERR"' EXIT
+ARM_REF=""  # refs/we-arm/pr-<N> while one_way holds a fetched PR head; dropped after the class
+drop_ref() { [ -z "$ARM_REF" ] || git update-ref -d "$ARM_REF" 2>/dev/null; ARM_REF=""; }
+GH_ERR=$(mktemp) && trap 'rm -f "$GH_ERR"; drop_ref' EXIT
 gh_err() { sed '/^[[:space:]]*$/d' "$GH_ERR" | tail -n 1; }
 if [ -z "$REPO" ]; then
   REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>"$GH_ERR") || { echo "gh failed: $(gh_err)"; exit 2; }
@@ -151,24 +163,43 @@ read_pr() {  # sets ID STATE DRAFT HEAD BASE MSTATE REVIEW LABELS CHECKS; exits 
   SHA=$HEAD
 }
 
-one_way() {  # refuses a one-way class when this checkout is the PR head; a stderr note otherwise
-  local line skip="one-way: not classified here (this checkout is not the PR head) — the class is the caller's"
-  if [ "$(git rev-parse HEAD 2>/dev/null)" != "$SHA" ]; then
-    [ -z "$CHECK" ] || { echo "refused: one-way not classified (this checkout is not the PR head)"; exit 6; }
-    echo "$skip" >&2; return 0
+one_way() {  # the PR head's class against its base, wherever this runs; fail closed
+  # The crew's classifier (risk_runner.py: `risk.command`, else risk_paths.py, else no rules = T0).
+  # In a checkout whose HEAD is the PR head it runs on the checkout, so an uncommitted risk path
+  # is seen (risk_paths.py's exit 3); anywhere else on the head commit, fetched first. A non-zero
+  # exit or an unknown line 1 is no class.
+  local out line rc=0
+  if [ "$(git rev-parse HEAD 2>/dev/null)" = "$SHA" ]; then
+    out=$(python3 "$HERE/risk_runner.py" here "origin/$BASE" 2>/dev/null) || rc=$?
+  else
+    if ! git cat-file -e "$SHA^{commit}" 2>/dev/null; then
+      ARM_REF="refs/we-arm/pr-$PR"  # the EXIT trap drops it too, whatever ends the run
+      git fetch -q --no-tags origin "+refs/pull/$PR/head:$ARM_REF" 2>/dev/null \
+        || git fetch -q --no-tags origin "$SHA" 2>/dev/null || true
+    fi
+    out=$(python3 "$HERE/risk_runner.py" head "$SHA" "origin/$BASE" 2>/dev/null) || rc=$?
+    drop_ref
   fi
-  # The crew's classifier (risk_runner.py: `risk.command`, else risk_paths.py, else no rules = T0),
-  # run in this checkout. Fail closed: a non-zero exit (risk_paths.py's exit 3 is an uncommitted
-  # risk path) or an unknown line 1 is no class.
-  local out rc=0
-  out=$(python3 "$HERE/risk_runner.py" here "origin/$BASE" 2>/dev/null) || rc=$?
   line=$(head -n 1 <<<"$out")
   if [ "$rc" -ne 0 ]; then echo "refused: one-way not classified (${line:-risk_runner.py exit $rc})"; exit 6; fi
   case "$line" in
-    "T2 one-way "*) echo "refused: one-way ${line#T2 one-way } — only the human merges it"; exit 6 ;;
+    "T2 one-way "*)
+      ONE_WAY=${line#T2 one-way }
+      if [ "${WE_ROLE:-}" = worker ]; then echo "refused: one-way $ONE_WAY — the session that asked the human arms it"; exit 6; fi
+      echo "one-way $ONE_WAY: merges only after the human's yes on the board (L0)" ;;
     T0 | T2) ;;
     *) echo "refused: one-way not classified (line 1: ${line:-empty})"; exit 6 ;;
   esac
+}
+
+one_way_comment() {  # after an arm or before a ready line of a one-way PR: the class on the PR, once per head; never exits
+  [ -n "$ONE_WAY" ] || return 0
+  local tail="(head $SHA)" bodies
+  bodies=$(gh pr view "$PR" --repo "$REPO" --json comments --jq '.comments[].body' 2>/dev/null) || bodies=""
+  if grep -F -- "$tail" <<<"$bodies" | grep -q "^one-way $ONE_WAY .* — merges only after "; then return 0; fi
+  gh pr comment "$PR" --repo "$REPO" \
+    --body "one-way $ONE_WAY $1 — merges only after the human's yes on the board $tail" >/dev/null 2>"$GH_ERR" \
+    || echo "one-way comment failed: $(gh_err)" >&2
 }
 
 REQUIRED=""
@@ -197,7 +228,7 @@ pending_line() {  # after `armed:`: the head's required checks still pending, by
 arm() {  # 0 armed (exits), 1 GitHub calls the PR clean, exits on any other answer
   local out
   if out=$(gh api graphql -f query="$ARM" -f id="$ID" -f sha="$SHA" -f method="$(tr "[:lower:]" "[:upper:]" <<<"$METHOD")" 2>"$GH_ERR"); then
-    echo "armed: auto-merge on $SHA ($METHOD)"; pending_line; exit 0
+    echo "armed: auto-merge on $SHA ($METHOD)"; pending_line; one_way_comment armed; exit 0
   fi
   local why; why=$(gh_err)
   if grep -qiE 'is in (clean|unstable) status' "$GH_ERR"; then return 1; fi
@@ -275,6 +306,6 @@ while :; do
       # required) and HAS_HOOKS merge like CLEAN: the required checks were judged by name above.
       case "$MSTATE" in CLEAN|UNSTABLE|HAS_HOOKS) ;; *) arm; continue ;; esac
       [ "$REVIEW" != REVIEW_REQUIRED ] && [ "$REVIEW" != CHANGES_REQUESTED ] || { arm; continue; }
-      ready_line; exit 3 ;;
+      one_way_comment "ready for the printed merge"; ready_line; exit 3 ;;
   esac
 done

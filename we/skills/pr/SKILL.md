@@ -31,8 +31,9 @@ For a branch built outside `/we:master`; master § Push, PR, CI does the same in
    product decision, an unmerged dependency, a follow-up that still has to land on the branch, a money
    path awaiting the owner. Never for a review or fix round: a red required check already blocks the
    merge, and the Codex review skips drafts (owner, 30.10.2026). A draft's body starts with one line
-   `**Draft:** <reason> — ready when <condition>` (hook `draft_reason_gate.py`); `gh pr ready <PR>` once the
-   condition holds, with that line removed, and never while the PR conflicts with its base (the same hook names it). A fix after the merge is a
+   `**Draft:** <reason> — ready when <condition>` (hook `draft_reason_gate.py`). Once the condition holds,
+   `${CLAUDE_PLUGIN_ROOT}/scripts/pr_ready.sh <PR> ready --sha <head>` checks head and conflict first, then removes
+   that line and readies the PR; `pr_ready.sh <PR> undo "<reason> — ready when <condition>"` is the way back. A fix after the merge is a
    follow-up PR from `origin/<base>`, never a push to the merged branch. Ticket: link the PR to it and move
    no status (`${CLAUDE_PLUGIN_ROOT}/references/ticketing.md`); In Review follows the merge through
    `/we:merged` (L0 §Lifecycle).

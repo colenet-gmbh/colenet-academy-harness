@@ -20,7 +20,9 @@ a ref pattern, `--all`, `--mirror`, `--branches`, any `git push` from a checkout
 `--no-verify`, `git commit -n`, `core.hooksPath`); merge (`gh pr merge --admin` or `--auto`; any
 other `gh pr merge` than `--disable-auto` unless it is the merge line below, typed as a command of
 its own under `build.pr_owner: worker`; any `gh pr merge` in a compound command, `--disable-auto`
-included); the crew's `deny_text` anywhere in the command.
+included; `arm_pr.sh` run anywhere in a command that names `WE_ROLE` or clears the environment
+(`env -i`, `exec -c`, `sudo`): the script refuses a worker's one-way class by that variable, and the
+gate cannot tell which value the script will see); the crew's `deny_text` anywhere in the command.
 
 Rights (crew `worker_rights`, read from the default branch of origin, never from the worktree; opt-in
 per repo, all off by default): in a repo whose `origin` is one
@@ -28,12 +30,15 @@ of `worker_rights.repos`, a worker with a story key, on a branch that is not the
 carries that key, may run without asking
   `gh pr ready` (`pr_ready`) and `gh pr comment` (`pr_comment`), with no selector or one naming the PR
   whose head is its branch in its repo (`gh pr view --json` resolves it; a `gh` failure denies);
+  `pr_ready.sh <PR> ready|undo` is a form of `pr_ready` and must name that own PR (its `gh pr edit`
+  of the `**Draft:**` line rides along);
   the crew's `branch_rc` command prefix (a branch RC: the repo's pre-push guard holds the receipt).
 PR owner rights (`build.pr_owner: worker` of `.weside/config.json`, read from the default branch of
 origin like the crew; `pr_owner_on_default`): the worker carries its own PR, so under the same key and
 branch conditions it may also run `git push` (`push`: every destination branch carries its key),
 `gh pr create` (`pr_create`: no argument, `--head` only its branch), `gh pr edit` and `gh pr comment`
-(`pr_edit`, `pr_comment`: its own PR), `arm_pr.sh` (`arm`: its own PR), `gh pr merge` (`merge`: its
+(`pr_edit`, `pr_comment`: its own PR), `arm_pr.sh` (`arm`: its own PR, and only with `WE_ROLE=worker` in
+the environment, the variable `arm_pr.sh` refuses a one-way class by), `gh pr merge` (`merge`: its
 own PR, either `--disable-auto` alone or `--match-head-commit <its checkout's HEAD>`, the line
 `arm_pr.sh` prints as `ready`, and only when `arm_pr.sh --check` answers
 `ready` on that HEAD, the one owner of those facts (hold labels, one-way class, every required name
@@ -425,6 +430,50 @@ def normalised(text: str) -> str:
     return re.sub(r"""\$(?=['"])|['"\\]""", "", text)
 
 
+# a text that names WE_ROLE (unset, export, env -u, an assignment) or clears the environment of what
+# it runs: beside `arm_pr.sh` the gate cannot know the role the script reads its one-way refusal by
+_ROLE_CHANGE = re.compile(
+    r"WE_ROLE|\benv\b[^\n;|&]*\s(?:-[a-zA-Z]*i[a-zA-Z]*|--ignore-environment|-)(?=\s|$)"
+    r"|\bexec\s+-[a-zA-Z]*c|(?<![\w-])(?:sudo|doas|su)(?![\w-])"
+)
+
+
+def _role_touched(text: str) -> bool:
+    return bool(_ROLE_CHANGE.search(text) or _ROLE_CHANGE.search(normalised(text)))
+
+
+def _runs_arm(text: str, depth: int = 0) -> bool:
+    """Whether `text` runs `arm_pr.sh` anywhere: as a chain part, behind a wrapper or an assignment,
+    in a `bash -c` string, an `eval` or a substitution body (`hidden_right`'s reach, for every
+    owner). Nested past `MAX_DEPTH` counts as running it."""
+    if depth > MAX_DEPTH:
+        return True
+    text = _QUOTED_HEREDOC.sub(lambda m: f"<<{m[1]}{m[2]}{m[1]}{m[3]}{m[5]}", text)
+    if any(_runs_arm(inner, depth + 1) for inner in _substitutions(text)):
+        return True
+    for part in segments(text):
+        argv = strip_keywords(part)
+        wrapped = bool(argv) and (
+            os.path.basename(argv[0]) in WRAPPERS or bool(ASSIGNMENT.fullmatch(argv[0]))
+        )
+        for k in range(len(argv) if wrapped else min(len(argv), 1)):
+            if _arm_argv(argv[k:]) or _nested_arm(argv[k:], depth):
+                return True
+    return False
+
+
+def _nested_arm(argv: list[str], depth: int) -> bool:
+    """`arm_pr.sh` in the `-c` string of a shell or in the arguments of `eval` that `argv` runs."""
+    name = os.path.basename(argv[0])
+    if name in SHELLS:
+        for j in range(1, len(argv) - 1):
+            if re.fullmatch(r"-[a-zA-Z]*c[a-zA-Z]*", argv[j]):
+                return _runs_arm(argv[j + 1], depth + 1)
+    elif name == "eval":
+        return _runs_arm(" ".join(argv[1:]), depth + 1)
+    return False
+
+
 def never(  # noqa: PLR0911, PLR0912
     command: str, cwd: str | None, rights: dict | None = None, owner: str = "master"
 ) -> str | None:
@@ -437,6 +486,8 @@ def never(  # noqa: PLR0911, PLR0912
         found = compiled.search(text) or compiled.search(normalised(text))
         if found:
             return item.format(*(found.groups() or ("",)))
+    if _runs_arm(text) and _role_touched(text):
+        return "merge (arm_pr.sh beside a change of WE_ROLE)"
     if re.search(_GIT_PUSH, text):
         for where in _push_dirs(text, cwd):
             branch = current_branch(where)
@@ -552,6 +603,8 @@ def right_of(argv: list[str], rights: dict, owner: str = "master") -> str | None
             and "resolveReviewThread" in " ".join(args)
         ):
             return "resolve_thread"
+    if _script_argv(argv, "pr_ready.sh"):
+        return "pr_ready"
     if owner == "worker":
         if name == "git" and _git_split(argv)[0][:1] == ["push"]:
             return "push"
@@ -724,8 +777,8 @@ def _create_refusal(args: list[str], branch: str) -> str | None:
 def _merge_refusal(args: list[str], cwd: str | None) -> str | None:
     """`gh pr merge` holds only as `--disable-auto` alone (a fix round begins with it) or as the
     command `arm_pr.sh` prints with `ready`: `--match-head-commit` on this checkout's HEAD. That
-    HEAD is the one `arm_pr.sh` classified (it runs the one-way check only when the checkout is the
-    PR head), and GitHub refuses the merge when the PR's head moved since."""
+    HEAD is the one `arm_pr.sh` classified, and GitHub refuses the merge when the PR's head moved
+    since."""
     flags = [t.split("=", 1)[0] for t in args[2:] if t.startswith("-")]
     if "--disable-auto" in flags:
         extra = [f for f in flags if f not in ("--disable-auto", "-R", "--repo")]
@@ -742,20 +795,46 @@ def _merge_refusal(args: list[str], cwd: str | None) -> str | None:
     return None
 
 
-def _arm_argv(argv: list[str]) -> list[str]:
-    """`arm_pr.sh` and its arguments, run directly or by a shell (`bash arm_pr.sh 7`), else []."""
+def _script_argv(argv: list[str], script: str) -> list[str]:
+    """`script` and its arguments, run directly or by a shell (`bash arm_pr.sh 7`), else []."""
     for k, tok in enumerate(argv[:2]):
-        if os.path.basename(tok) == "arm_pr.sh" and (
-            k == 0 or os.path.basename(argv[0]) in SHELLS
-        ):
+        if os.path.basename(tok) == script and (k == 0 or os.path.basename(argv[0]) in SHELLS):
             return argv[k:]
     return []
+
+
+def _arm_argv(argv: list[str]) -> list[str]:
+    """`arm_pr.sh` and its arguments, run directly or by a shell, else []."""
+    return _script_argv(argv, "arm_pr.sh")
+
+
+def _ready_script_refusal(
+    run: list[str], slug: str | None, branch: str, cwd: str | None, deadline: float | None = None
+) -> str | None:
+    """Why `pr_ready.sh <PR> …` (`run`) does not name this branch's own PR in `slug`, else None."""
+    repo = _flag_value(run[1:], "--repo", "-R")
+    if repo and slug_of(repo) != slug:
+        return f"{repo} is another repo than {slug}"
+    selector, k = None, 1
+    while k < len(run):
+        if run[k] in ("--sha", "--repo", "-R"):
+            k += 2
+            continue
+        if not run[k].startswith("-"):
+            selector = run[k]
+            break
+        k += 1
+    if selector is None:
+        return "pr_ready.sh without a PR"
+    return _own_pr_refusal(selector, slug, branch, cwd, deadline)
 
 
 def _arm_refusal(
     argv: list[str], slug: str | None, branch: str, cwd: str | None, deadline: float | None = None
 ) -> str | None:
     run = _arm_argv(argv)
+    if os.environ.get("WE_ROLE") != "worker":  # a worker known by its marker only
+        return "arm_pr.sh without WE_ROLE=worker: arm_pr.sh refuses a worker's one-way class by it"
     repo = _flag_value(run[1:], "--repo", "-R")
     if repo and slug_of(repo) != slug:
         return f"{repo} is another repo than {slug}"
@@ -825,6 +904,9 @@ def right_refusal(  # noqa: PLR0911, PLR0912
         return _push_refusal(argv, key, cwd)
     if right == "arm":
         return _arm_refusal(argv, slug, branch, cwd, deadline)
+    ready_run = _script_argv(argv, "pr_ready.sh")
+    if right == "pr_ready" and ready_run:
+        return _ready_script_refusal(ready_run, slug, branch, cwd, deadline)
     args, global_repo = _gh_split(argv)
     named = global_repo or _repo_flag(args)
     if named and slug_of(named) != slug:
@@ -896,7 +978,8 @@ def _merge_facts_refusal(  # noqa: PLR0911
     """`arm_pr.sh --check` on this checkout's HEAD, because a worker can type the merge line
     without running the helper: the gate holds exactly the facts `ready` stands on (crew merge
     block, hold labels, one-way class, every required name green with absent as pending, the merge
-    state, the review decision), from the one script that owns them. Only `ready` on that HEAD
+    state, the review decision), from the one script that owns them, run with `WE_ROLE=worker` so
+    a one-way class refuses for a worker known by its marker only too. Only `ready` on that HEAD
     passes; any other line, an unreadable PR, a failed call or the deadline refuses. The script
     runs in its own process group, so a timeout kills its `gh`, `git` and classifier children too."""
     if not isinstance(number, int):
@@ -916,6 +999,7 @@ def _merge_facts_refusal(  # noqa: PLR0911
             stderr=subprocess.PIPE,
             text=True,
             cwd=cwd or None,
+            env={**os.environ, "WE_ROLE": "worker"},  # a one-way class is no `ready` for a worker
             start_new_session=True,
         )
     except OSError as exc:
@@ -975,6 +1059,25 @@ def _own_pr_refusal(
 BRAKE_LOG = "brakes.jsonl"
 
 
+def forbidden_write(out: Path, line: dict) -> bool:
+    """A test run's write into a live state directory or one below it (`WE_STATE_FORBIDDEN`,
+    `os.pathsep`-separated, set by the repo's `conftest.py`): the line goes to the file named by
+    `WE_STATE_LEAKS` instead and True says to write nothing. Shared by `brake_log` and
+    `worker_launch.record_launch`."""
+    here = os.path.realpath(str(out.parent))
+    for d in os.environ.get("WE_STATE_FORBIDDEN", "").split(os.pathsep):
+        if not d.strip():
+            continue
+        live = os.path.realpath(os.path.expanduser(d.strip()))
+        if here == live or here.startswith(live.rstrip(os.sep) + os.sep):
+            leaks = os.environ.get("WE_STATE_LEAKS", "").strip()
+            if leaks:
+                with open(leaks, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"path": str(out), **line}, ensure_ascii=False) + "\n")
+            return True
+    return False
+
+
 def brake_log(cwd: str | Path | None, record: dict) -> Path | None:
     """Append one JSON line to `<state dir>/brakes.jsonl` (`crew.state_dir`: `WE_STATE_DIR`, else
     the crew's `state_dir`, else `~/.claude/we-state`); best effort, None when nothing was written.
@@ -1003,16 +1106,7 @@ def brake_log(cwd: str | Path | None, record: dict) -> Path | None:
             path, crew = None, None
         out = crew_mod.state_dir(path, crew) / BRAKE_LOG
         line = {"ts": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), **record}
-        forbidden = {
-            os.path.realpath(os.path.expanduser(d))
-            for d in os.environ.get("WE_STATE_FORBIDDEN", "").split(os.pathsep)
-            if d.strip()
-        }
-        if os.path.realpath(str(out.parent)) in forbidden:
-            leaks = os.environ.get("WE_STATE_LEAKS", "").strip()
-            if leaks:
-                with open(leaks, "a", encoding="utf-8") as fh:
-                    fh.write(json.dumps({"path": str(out), **line}, ensure_ascii=False) + "\n")
+        if forbidden_write(out, line):
             return None
         out.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(out), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
@@ -1106,7 +1200,7 @@ PR_OWNER_ALLOW = (
 )
 
 
-def settings(repo: str | Path, key: str) -> dict:
+def settings(repo: str | Path, key: str, starter: str | None = None) -> dict:
     """The `--settings` document of a worker with `key` in `repo`: allow = the granted rights
     (with `build.pr_owner: worker` also `PR_OWNER_ALLOW`), deny = the never-list (and the crew's `deny_commands`, `deny_text`; a `deny_text` path also as a
     Read rule)."""
@@ -1115,6 +1209,8 @@ def settings(repo: str | Path, key: str) -> dict:
     if opted_in(rights, origin_slug(repo)):
         if rights.get("pr_ready"):
             allow.append("Bash(gh pr ready*)")
+            script = Path(__file__).resolve().with_name("pr_ready.sh")
+            allow += [f"Bash({script} *)", f"Bash(bash {script} *)"]
         if rights.get("pr_comment"):
             allow.append("Bash(gh pr comment*)")
         if rights.get("branch_rc"):
@@ -1128,10 +1224,10 @@ def settings(repo: str | Path, key: str) -> dict:
             deny.append(f"Bash(*{text}*)")
             if text.startswith("/"):
                 deny.append(f"Read(/{text}**)")
-    return {"permissions": {"allow": allow, "deny": deny}, "env": worker_env(key)}
+    return {"permissions": {"allow": allow, "deny": deny}, "env": worker_env(key, starter=starter)}
 
 
-def worker_env(key: str, environ: Any = None) -> dict:
+def worker_env(key: str, environ: Any = None, starter: str | None = None) -> dict:
     """The `env` block of a worker's `--settings`: what `we-worker` sets and clears at its start.
 
     A `claude --bg` session runs in the daemon's environment, not the launcher's (the daemon may
@@ -1140,8 +1236,10 @@ def worker_env(key: str, environ: Any = None) -> dict:
     also marks a deliberate worker (`materialize_on_start.py` skips its user warning). The
     launcher's own start variables (`WE_START`, `WE_WORKER_STARTER`) are cleared the same way: a
     worker never runs its starter's start check, and its own workers name it, not its starter, as
-    theirs. `WE_HUMAN` passes on when the launcher has it. Never a credential: this block is
-    written to a file."""
+    theirs. `WE_STARTER` is the starter's session name, the address a worker's question names for
+    its answer (`process/L0-worker.md`): the starter outlives the worker, so an answer that arrives
+    after the worker ended still lands; "" when the launcher knows no name. `WE_HUMAN` passes on
+    when the launcher has it. Never a credential: this block is written to a file."""
     env = os.environ if environ is None else environ
     doc = {
         "WE_ROLE": "worker",
@@ -1150,6 +1248,7 @@ def worker_env(key: str, environ: Any = None) -> dict:
         "WE_ROLE_ID": "",
         "WE_START": "",
         "WE_WORKER_STARTER": "",
+        "WE_STARTER": starter or "",
     }
     if env.get("WE_HUMAN"):
         doc["WE_HUMAN"] = env["WE_HUMAN"]

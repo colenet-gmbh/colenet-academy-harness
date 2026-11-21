@@ -23,8 +23,11 @@ Invocation: `/we:harness-review` (14 days) · `--since <n>d` · `--no-ask` (skip
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/flow_report.py" --since 14d --md
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/flow_intervals.py" --since 14d --html "${TMPDIR:-/tmp}/flow.html"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/flow_intervals.py" --since 14d --html "${TMPDIR:-/tmp}/flow.html" --no-ci
 ```
+
+`--no-ci`: a cold CI read over 14 days outlasts the Bash tool's two-minute timeout; the report above
+reads the required checks per head itself.
 
 Read from the report: `Flow efficiency` and `Waiting by kind` (who waits on whom, in hours), the
 heads and rounds per code PR, `Required checks: red heads` (`rerun green` is a false alarm),

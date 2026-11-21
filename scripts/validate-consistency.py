@@ -685,7 +685,14 @@ ROOT_CHECKS["install-resolver"] = check_install_resolver
 
 
 # --- Check 12: AGENTS.md § Layout names every file it maps -------------------------------------
-LAYOUT_GLOBS = ("we/hooks/*.py", "we/scripts/*", "we/agents/*.md", "we/process/*.md", "scripts/*")
+LAYOUT_GLOBS = (
+    "we/hooks/*.py",
+    "we/scripts/*",
+    "we/scripts/command_center/*",
+    "we/agents/*.md",
+    "we/process/*.md",
+    "scripts/*",
+)
 
 
 def check_agents_layout(root: Path = REPO) -> None:

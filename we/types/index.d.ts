@@ -36,6 +36,41 @@ export type FlowView = {
   isLoading: boolean
 }
 
+// /flow's section Crew flow: the fields of `flow_intervals.py --snapshot` it shows (the script owns them).
+export type CrewFlowNow = {
+  who: string
+  group?: string | null
+  starter?: string | null
+  kind: string
+  since: string
+  waiting_on?: string | null
+  key?: string | null
+  label?: string | null
+}
+
+export type CrewFlowHead = {
+  pr: number
+  start: string
+  end: string
+  queue_s: number
+  run_s: number
+  open: boolean
+}
+
+export type CrewFlowView = {
+  path?: string
+  project?: string
+  generatedAt?: string
+  // `CI wait: …`, the snapshot's own header line
+  ciLine?: string
+  now: CrewFlowNow[]
+  ci: { number: number; title?: string; heads: CrewFlowHead[] }[]
+  gaps: string[]
+  page?: string
+  error?: string
+  isRefreshing: boolean
+}
+
 // /board: the file an orchestrator session keeps (docs/board.md), as the pane reads it.
 export type BoardQueueItem = {
   id?: string
@@ -46,7 +81,7 @@ export type BoardQueueItem = {
   recommendation?: string | null
   // `merge-go`, `plan`, … (`board.py ask --cause`).
   cause?: string | null
-  // The open PR a merge question is about, and its one-way class: Accept reads "Yes, I'll do it" beside the link.
+  // The open PR a merge question is about, and its one-way class: Accept reads Go beside the link.
   pr_url?: string | null
   one_way?: string | null
   // `task` (`board.py ask --kind task`): the pane offers Taken instead of Accept.
@@ -207,8 +242,9 @@ export type BoardAnswerKind = 'accept' | 'deny' | 'discuss' | 'info' | 'update' 
 export type BoardDeliveredKind = Exclude<BoardAnswerKind, 'read'>
 // The texts a delivery sends, each overridable by the board's `answer_prompts`: one per delivered kind
 // for the orchestrator (and the asker), `update_asker`, what Update asks of the asking session, and the
-// two Accepts that mean "I do it myself": `accept_hand` ("Yes, I'll do it" on a one-way merge-go with its
-// PR, `{pr}` standing for the PR link) and `accept_task` (Taken on a task).
+// two Accepts with a meaning of their own: `accept_hand` (Go on a one-way merge-go with its PR, `{pr}`
+// standing for the PR link: the asking session arms with `arm_pr.sh <PR>`) and `accept_task`
+// (Taken on a task).
 export type BoardAcceptVariant = 'accept_hand' | 'accept_task'
 export type BoardPromptKind = BoardDeliveredKind | 'update_asker' | BoardAcceptVariant
 
@@ -262,10 +298,99 @@ export type LiveView = {
   error?: string
 }
 
+// One live session of `scripts/crew_view.py --json` (its docstring owns the fields), schema 1; `age` is
+// added by `command_center/zentrale.py` (crew_view.py age_text), the one age format the pane prints.
+export type CrewEntry = {
+  name: string
+  session_id: string
+  kind: string
+  role: string
+  state: string
+  doing: string | null
+  keys: string[]
+  waiting_on: string | null
+  blocked_kind: string | null
+  since: string | null
+  age_s: number | null
+  age?: string
+  plugin: string
+  starter: string | null
+  group: string | null
+  waits: boolean
+}
+
+// One open end of `command_center/open_ends.py` (its docstring owns the row contract), schema 1.
+export type ZentraleRow = {
+  kind: string
+  item: string
+  title: string
+  holder: string
+  for: string
+  master: string
+  since: string
+  since_note: string
+  age_s: number | null
+  age?: string
+  source: string
+  classes: string[]
+  red: boolean
+}
+
+export type ZentraleAccount = {
+  name: string
+  active: boolean
+  in_rotation: boolean
+  five_hour: { pct: number | null; resets_at: string | null }
+  seven_day: { pct: number | null; resets_at: string | null }
+  threshold: number | null
+  status: string
+  measured_at: string | null
+  age_s: number | null
+  stale: boolean
+  red: boolean
+}
+
+// `command_center/zentrale.py --json` (its docstring owns the fields), schema 1.
+export type ZentraleDoc = {
+  schema_version: number
+  project: string | null
+  built_at: string
+  fast: boolean
+  header: string[]
+  gaps: string[]
+  sources: Record<string, { fetched_at: string | null; gap: string | null }>
+  sections: {
+    owner: ZentraleRow[]
+    red: ZentraleRow[]
+    waiting: ZentraleRow[]
+    working: CrewEntry[]
+    ci: {
+      repos: { repo: string; fetched_at: string | null; default_head: string; checks: { pr: number; name: string; status: string; since: string | null; age_s: number | null; age?: string }[] }[]
+      locks: string
+    }
+    accounts: ZentraleAccount[]
+  }
+}
+
+// The Zentrale pane's view: the last document, the board it read, when it was read; the swimlanes'
+// intervals (`flow_intervals.py --json`) once asked; which face shows.
+export type ZentraleView = {
+  board?: string
+  doc?: ZentraleDoc
+  at: number
+  error?: string
+  lanes?: { intervals: { who: string; kind: string; start: string; end: string }[]; at: number; error?: string }
+  face: 'sections' | 'lanes'
+  hours: 8 | 24
+  // the web view (`scripts/command_center/crewd.py probe`): its configured URL and whether it answers here
+  web?: { url: string | null; alive: boolean }
+}
+
 declare module 'claude-code' {
   interface PluginState {
     we: {
       flowBoard: FlowView | null
+      flowCrew: CrewFlowView | null
       boardView: Shaped<BoardView | null>
       boardLive: Shaped<LiveView | null>
       boardAnswers: Shaped<BoardAnswersView | null>
@@ -276,6 +401,8 @@ declare module 'claude-code' {
       boardLogOpen: boolean
       boardWork: Shaped<BoardWorkView | null>
       boardWorkOpen: Shaped<string[]>
+      zentraleView: Shaped<ZentraleView | null>
+      zentraleOpen: boolean
     }
   }
 }

@@ -91,7 +91,9 @@ template in force; the master's boot check and `/we:accept` read it there.
 
 `we-worker` and `worker_launch.py launch` refuse a start (exit 2, before any file or session) whose
 name does not start with the story key (crew `naming.key`, `<KEY>-<chunk>`; `worker_launch.py check`,
-its docstring owns the grammar). The brief's shape is not checked. A brief carries four Markdown
+its docstring owns the grammar), and a start without a brief (the last argument; a `--resume` needs
+none), with `--bg` or `--queue`, where nobody hands the task in later; a window worker may
+start empty. The brief's shape is not checked. A brief carries four Markdown
 headings, each with a body: `Ziel`/`Goal`, `Ausgabe`/`Output`, `Werkzeuge und Quellen`/`Tools and
 sources`, `Grenzen und wann stoppen`/`Limits and when to stop`.
 
@@ -128,7 +130,7 @@ drops `CLAUDE_CONFIG_DIR`, so a pinned master sees the global login's sessions.
 `Account: uncritical`) and puts its `env` and its `token_command` as `apiKeyHelper` into that settings
 file (mode 0600), never a secret on a command line and never a `CLAUDE*` (but the CLI's `CLAUDE_CODE_*`), `WE_*` or `WESIDE_*` variable; a critical worker on a non-Claude account refuses (`worker_launch.py choose_account`).
 The brake is the PreToolUse hook `hooks/worker_rights_gate.py`, which holds under `bypassPermissions`:
-in a repo the crew's `worker_rights.repos` names, a worker on its own keyed branch runs `gh pr ready`,
+in a repo the crew's `worker_rights.repos` names, a worker on its own keyed branch runs `gh pr ready` (or `pr_ready.sh`),
 `gh pr comment` on its own PR and the crew's `branch_rc` without asking; every worker is denied the
 never-list (secrets, delete, `main`, guard bypasses). Rules and limits: `scripts/worker_rights.py`
 (its docstring). A denial names the Lead; the worker reports it and the Lead acts. A brake against a
@@ -305,7 +307,8 @@ parked: <branch> (<why>)   time limit, quota or a stop: checkpoint pushed to wip
 ```
 
 The starter acts on that line alone: `armed` → `watch-pr-checks.sh <PR> --sha <sha> --until-merged`,
-on its merge `/we:merged <PR>` (it runs `we-worker close <KEY> --pr <n>`); `held` → the PR continues
+on its merge (`merged`, `merged-green`) `/we:merged <PR>` (it runs `we-worker close <KEY> --pr <n>`), on
+`merged-red` (exit 15) the fix first; `held` → the PR continues
 at `/we:master` § Push, PR, CI step 5 or the one-way row; `parked` → resume per the line. The Stop
 hook `worker_report_gate.py` sends a report with any other last line back once.
 

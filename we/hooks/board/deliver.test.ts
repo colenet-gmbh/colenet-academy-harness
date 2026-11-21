@@ -1,7 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
-import { answerLines, deliveryLine, isFinal, keyOf, ledgerState, markerRows, noticeMatches, rebuildWaits, versionAtLeast, writerNote } from './deliver'
+import { answerLines, BUSY_MAX_MS, deliveryLine, isFinal, keyOf, ledgerState, markerRows, noticeMatches, rebuildWaits, transcriptVerdict, versionAtLeast, writerNote } from './deliver'
+import type { Awaiting } from './deliver'
 
 type T$ = Parameters<TestBody>[0]
 type TOn = Parameters<TestBody>[1]
@@ -73,6 +74,9 @@ function home($: T$, on: TOn, o: Opts) {
   const toasts: string[] = []
   const logs: string[] = []
   let row = 0
+  // The transcript $.session.messages lists: every stored row, and what `aside` stores past our append hook.
+  const transcript: { role: string; text: string; toolUses: never[] }[] = []
+  on('session.messages', () => ({ value: transcript }))
   on('env.get', () => ({ value: '/home/me' }))
   on('fs.exists', (_$, e) => ({ value: files.has(String((e as { path?: unknown }).path)) }))
   on('fs.stat', (_$, e) => ({ value: { kind: 'file', size: 1, mtimeMs: mtimes.get(String((e as { path?: unknown }).path)) ?? 1, isLink: false } }))
@@ -123,6 +127,7 @@ function home($: T$, on: TOn, o: Opts) {
     submitted.push(text)
     if (o.stores?.(text, submitted.filter(t => t === text).length) ?? true) {
       row += 1
+      transcript.push({ role: 'user', text, toolUses: [] })
       await $.session.append({
         message: { type: 'user', role: 'user', content: [{ type: 'text', text }] },
         door: 'prompt',
@@ -166,6 +171,7 @@ function home($: T$, on: TOn, o: Opts) {
   // The engine storing a prompt that was queued earlier, as its turn begins.
   const store = async (...texts: string[]) => {
     row += 1
+    transcript.push({ role: 'user', text: texts.join('\n'), toolUses: [] })
     await $.session.append({
       message: { type: 'user', role: 'user', content: texts.map(text => ({ type: 'text', text })) },
       door: 'prompt',
@@ -173,8 +179,10 @@ function home($: T$, on: TOn, o: Opts) {
       uuid: `row-${row}`,
     } as never)
   }
+  // A row the engine stores while our session.append hook is skipped (another plugin's hook ran first).
+  const aside = (role: string, text: string) => transcript.push({ role, text, toolUses: [] })
   const rows = (id: string, role?: string) => ledger().filter(r => r.id === id && (!role || r.role === role))
-  return { files, submitted, sent, toasts, logs, ledger, rows, click, store, answersPath: ANSWERS }
+  return { files, submitted, sent, toasts, logs, ledger, rows, click, store, aside, answersPath: ANSWERS }
 }
 
 const turn = async ($: T$, id: string) => {
@@ -186,8 +194,8 @@ const pane = ($: T$) =>
   $.ui.mount({ plugin: 'we', surface: 'terminal', component: 'Pane', requestId: 'we-board', props: { bodyColumns: 80 } as never })
 
 // Q189: the press queued the coordinator's prompt and no user row followed. The deliverer must notice
-// at the end of the next turn and submit it once more.
-test('a coordinator prompt that is never stored is submitted once more after the next turn (Q189)', async ($, on) => {
+// once the session sits idle 30 s after the next turn and submit it once more.
+test('a coordinator prompt that is never stored is submitted once more after 30 s idle (Q189)', async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   mock.store(on)
   const h = home($, on, { self: { sessionId: 's-coord', name: 'coord' }, ledger: EPOCH, stores: (_text, n) => n > 1 })
@@ -200,6 +208,8 @@ test('a coordinator prompt that is never stored is submitted once more after the
   await clock.advance(3_000)
   await turn($, 't1')
   await clock.advance(3_000)
+  expect(h.submitted).toHaveLength(1) // a turn's end alone is no miss
+  await clock.advance(30_000)
   expect(h.submitted).toEqual(['Q1: proposal denied (answered from the board pane in coord)', 'Q1: proposal denied (answered from the board pane in coord)'])
   await ui.unmount()
 })
@@ -255,6 +265,43 @@ test('a busy coordinator: its row counts when the queued prompt is stored, well 
   expect(row.delivered).toBe(true)
   expect(latency(row)).toBe(42_000)
   expect(latency(row)).toBeLessThanOrEqual(60_000)
+})
+
+// Q891–Q893 (20.11.): the coordinator ran turns back to back for two minutes, cross-session messages
+// overtaking the queued answer; the turn clock counted it lost, the resubmit queued a second copy, and
+// each answer was stored twice, its confirming append hook skipped. The transcript decides instead.
+test('a queued answer in a busy session is neither resubmitted nor lost when its append hook is skipped (Q891–Q893)', async ($, on) => {
+  const { clock, h } = await coordinator($, on, { stores: () => false })
+  await h.click({ id: 'Q1', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
+  await clock.advance(3_000)
+  const prompt = 'Q1: proposal accepted (answered from the board pane in foxy)'
+  expect(h.submitted).toEqual([prompt])
+  // Other messages are stored meanwhile; no turn hook reaches the deliverer.
+  for (let i = 0; i < 4; i += 1) {
+    h.aside('user', `cross-session message ${i}`)
+    h.aside('assistant', `reply ${i}`)
+    await clock.advance(30_000)
+  }
+  expect(h.submitted).toEqual([prompt])
+  expect(h.rows('Q1', 'coordinator')).toEqual([])
+  // The queued answer is stored; our append hook does not see it.
+  h.aside('user', prompt)
+  await clock.advance(33_000)
+  expect(h.submitted).toEqual([prompt])
+  expect(h.rows('Q1', 'coordinator').map(r => [r.delivered, r.reason])).toEqual([[true, undefined]])
+})
+
+test('a prompt a busy session holds past ten minutes takes the resubmit path: a dropped one is retried', async ($, on) => {
+  const { clock, h } = await coordinator($, on, { stores: () => false })
+  await h.click({ id: 'Q1', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
+  await clock.advance(3_000)
+  const prompt = 'Q1: proposal accepted (answered from the board pane in foxy)'
+  for (let i = 0; i < 21; i += 1) {
+    h.aside('user', `cross-session message ${i}`)
+    await clock.advance(30_000)
+  }
+  expect(h.submitted).toEqual([prompt, prompt])
+  expect(h.rows('Q1', 'coordinator').map(r => r.reason)).toEqual(['resubmitted'])
 })
 
 // The engine merges two prompts queued behind a busy turn into one user row: each is confirmed once,
@@ -347,10 +394,10 @@ test('Q189 to the end: no row after the resubmit either is a refusal row and a t
   await h.click({ id: 'Q1', answer: 'info', ts: iso(T0 + 1_000), session: 'foxy' })
   await clock.advance(3_000)
   await turn($, 't1')
-  await clock.settle()
+  await clock.advance(30_000)
   expect(h.rows('Q1', 'coordinator').map(r => r.reason)).toEqual(['resubmitted'])
   await turn($, 't2')
-  await clock.settle()
+  await clock.advance(30_000)
   expect(h.submitted).toEqual(['Q1: I need more information (answered from the board pane in foxy)', 'Q1: I need more information (answered from the board pane in foxy)'])
   expect(h.rows('Q1', 'coordinator').map(r => [r.delivered, r.reason])).toEqual([
     [false, 'resubmitted'],
@@ -372,6 +419,34 @@ test('an idle coordinator whose prompt never started a turn resubmits after 30 s
     [true, null],
   ])
   expect(latency(h.rows('Q1', 'coordinator')[1]!)).toBeLessThanOrEqual(60_000)
+})
+
+// Measured: a turn ran after the submit (a notification, a message) and ended
+// without the row; the resubmit went out a second before the queued original was stored, and the
+// answer arrived twice. Red arm: with a turn's end counted as a miss, `submitted` has two entries.
+test('a turn that ends while the prompt waits queued resubmits nothing; the answer arrives once', async ($, on) => {
+  const { clock, h } = await coordinator($, on, { stores: () => false })
+  await h.click({ id: 'Q1', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
+  await clock.advance(3_000)
+  await turn($, 'notification')
+  await clock.advance(1_000)
+  await $.turn.start({ text: '', turnId: 'queued' } as never)
+  await h.store('Q1: proposal accepted (answered from the board pane in foxy)')
+  await clock.settle()
+  await $.turn.complete({ reason: 'answer', answer: '', durationMs: 1, isAborted: false, turnId: 'queued' } as never)
+  await clock.advance(60_000)
+  expect(h.submitted).toEqual(['Q1: proposal accepted (answered from the board pane in foxy)'])
+  expect(h.rows('Q1', 'coordinator').map(r => [r.delivered, r.reason ?? null])).toEqual([[true, null]])
+})
+
+test('a question the coordinator asked itself reaches it once, by prompt, not also by message', async ($, on) => {
+  const board = boardOf({ owner_queue: [{ id: 'Q3', session: 'coord', key: 'PROJ-42', since: '2026-11-03' }] })
+  const { clock, h } = await coordinator($, on, { board })
+  await h.click({ id: 'Q3', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
+  await clock.advance(12_000)
+  expect(h.submitted).toEqual(['Q3: proposal accepted (answered from the board pane in foxy)'])
+  expect(h.sent).toEqual([])
+  expect(h.rows('Q3').map(r => r.role)).toEqual(['coordinator'])
 })
 
 test('a ledger present at start: a delivered line is not sent again, a marker line is', async ($, on) => {
@@ -728,7 +803,7 @@ test('a reply read from a ticket names the ticket as where it was written', asyn
   expect(writerNote(line)).toBe(' (answered from the board pane in ticket PROJ-12 (bob))')
 })
 
-test('a one-way "Yes, I\'ll do it" tells coordinator and asker the owner merges by hand, never "proposal accepted"', async ($, on) => {
+test('a one-way Go tells coordinator and asker the asking session arms on the go, never "proposal accepted"', async ($, on) => {
   const pr = 'https://github.com/acme/shop/pull/7'
   const board = boardOf({
     owner_queue: [
@@ -738,7 +813,7 @@ test('a one-way "Yes, I\'ll do it" tells coordinator and asker the owner merges 
   const { clock, h } = await coordinator($, on, { board })
   await h.click({ id: 'Q1', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
   await clock.advance(3_000)
-  const text = `Q1: the owner approves or merges ${pr} by hand — do not merge or arm it; the question stays open until the PR is merged (answered from the board pane in foxy)\nThe question: "Merge it?"\nThe recommendation accepted: "yes"`
+  const text = `Q1: the owner's go on ${pr} — the asking session arms that PR with \`arm_pr.sh\`; the question stays open until the PR is merged (answered from the board pane in foxy)\nThe question: "Merge it?"\nThe recommendation accepted: "yes"`
   expect(h.submitted).toEqual([text])
   expect(h.sent).toEqual([{ to: 'asker', text }])
   expect([...h.submitted, ...h.sent.map(s => s.text)].some(t => t.includes('proposal accepted'))).toBe(false)
@@ -747,7 +822,7 @@ test('a one-way "Yes, I\'ll do it" tells coordinator and asker the owner merges 
 test('Taken on a task says the owner does it; an accept_hand wording leaves the task text alone', async ($, on) => {
   const board = boardOf({
     owner_queue: [{ id: 'Q1', session: 'asker', key: 'PROJ-40', ask: 'Rotate the key', since: '2026-11-03', recommendation: 'today', kind: 'task' }],
-    answer_prompts: { accept_hand: '{id}: ich merge {pr} selbst' },
+    answer_prompts: { accept_hand: '{id}: Go für {pr}' },
   })
   const { clock, h } = await coordinator($, on, { board })
   await h.click({ id: 'Q1', answer: 'accept', ts: iso(T0 + 1_000), session: 'foxy' })
@@ -872,4 +947,16 @@ test('answer_to asker: asker and starter both gone, the coordinator gets the rou
   await clock.advance(9_000)
   expect(h.sent.map(s => s.to)).toEqual(['asker', 'lead'])
   expect(h.submitted.filter(t => t.includes('did not reach lead'))).toHaveLength(1)
+})
+
+test('transcriptVerdict without a seen mark: the stored prompt counts, anything else is lost, never busy', () => {
+  const a = { key: 'k', delivery: {} as never, text: 'answer Q4', ledgerPath: '/l', submittedAt: 1_000, tries: 1 } as Awaiting
+  const said = (role: 'user' | 'assistant', text: string) => ({ role, text, toolUses: [] })
+  // without `seen` the whole transcript is read: an older copy of the prompt is stored
+  expect(transcriptVerdict(a, [said('user', 'answer Q4'), said('assistant', 'ok')] as never, 2_000)).toBe('stored')
+  // new rows but no `seen`: the session cannot be judged busy, so the prompt is lost, however young
+  expect(transcriptVerdict(a, [said('assistant', 'working')] as never, 2_000)).toBe('lost')
+  expect(transcriptVerdict({ ...a, seen: 0 }, [said('assistant', 'working')] as never, 2_000)).toBe('busy')
+  expect(transcriptVerdict({ ...a, seen: 0 }, [said('assistant', 'working')] as never, 1_000 + BUSY_MAX_MS)).toBe('lost')
+  expect(transcriptVerdict(a, undefined, 2_000)).toBe('lost')
 })

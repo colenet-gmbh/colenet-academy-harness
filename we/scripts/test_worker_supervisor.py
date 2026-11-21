@@ -57,9 +57,10 @@ def _feed(*frames):
 
 
 @pytest.fixture
-def box(tmp_path):
+def box(tmp_path, monkeypatch):
     state, projects = tmp_path / "state", tmp_path / "projects"
     state.mkdir()
+    monkeypatch.setenv("WE_WORKER_STATE_DIR", str(state))  # write_marker's launched.jsonl
     (state / f"{NAME}.settings.json").write_text("{}")
     (state / f"{NAME}.json").write_text(json.dumps({"deadline": "2999-01-01T00:00:00Z"}))
     sent, items = [], []
@@ -535,3 +536,12 @@ def test_a_path_is_no_worker_name_for_the_state_dir(tmp_path, monkeypatch, name)
     (tmp_path / "AC-1.json").write_text("{}")
     assert ws.main(["unqueue", "--name", name]) == 2
     assert (tmp_path / "AC-1.json").exists()
+
+
+def test_remove_files_takes_the_brief_and_keeps_the_starter_log(tmp_path):
+    """A worker's end removes its settings, marker and brief file; `launched.jsonl` stays."""
+    for f in (f"{NAME}.settings.json", f"{NAME}.json", f"{NAME}.brief.md", "launched.jsonl"):
+        (tmp_path / f).write_text("x")
+    gone = ws._remove_files(tmp_path, NAME)
+    assert sorted(gone) == sorted([f"{NAME}.settings.json", f"{NAME}.json", f"{NAME}.brief.md"])
+    assert [p.name for p in tmp_path.iterdir()] == ["launched.jsonl"]

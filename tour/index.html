@@ -105,8 +105,7 @@
       <tr><td><code>T0</code></td><td>the master arms auto-merge</td><td>the repo's required checks</td></tr>
       <tr><td><code>T2</code></td><td>the master</td><td>as T0, plus a green T2 lens panel on the PR head (<code>/we:lens t2</code>)</td></tr>
       <tr><td><code>T2</code> with a card hit (trust loosening, money path, brake review)</td><td>the master</td><td>as T2; a security card worker's verdict lands on the PR for you to read</td></tr>
-      <tr><td><code>T2 one-way</code> (money, destructive migration, Terraform or secrets)</td><td>nobody arms</td><td>the repo's self-merge window (2 h after the green panel, a <code>veto</code> label stops it), else you: your board card offers <b>Yes, I'll do it</b></td></tr>
-      <tr><td>one-way in the brake's own code</td><td>only you</td><td>your merge</td></tr>
+      <tr><td><code>T2 one-way</code> (money, destructive migration, Terraform or secrets)</td><td>the master, on your go</td><td>your answer to its merge question (your board card offers <b>Go</b>), then <code>arm_pr.sh &lt;PR&gt;</code> (it names the class on the PR) and the required checks</td></tr>
     </table>
   </div>
 

@@ -8,6 +8,7 @@ type On = Parameters<Register>[0]
 import type { FlowGroup, FlowLight, FlowPhase, FlowRow, FlowView } from '../../types'
 import { openBoard } from '../board/register'
 import { defaultBranch, git, loadPrs, planGrep } from '../plans/plans'
+import { crewFlowLines, loadCrewFlow, readCrewFlow } from './crewflow'
 import { PHASE_COLOR as COLOR, PHASE_URGENCY as URGENCY, keysIn, matchesKey, parsePlans, phaseOf, stagesOf } from './phase'
 import type { Plan } from './phase'
 
@@ -234,6 +235,7 @@ export async function startFlow($: $) {
   if (current) void $.ui.open({ id: PANE, title: title(current.keys) })
   $.clock.every(REFRESH_MS, () => {
     void read($, view).then(v => v && refresh($, v.keys, v.source))
+    void readCrewFlow($).then(c => c && loadCrewFlow($))
   })
 }
 
@@ -241,7 +243,13 @@ export async function startFlow($: $) {
 export async function openFlow($: $, args: string): Promise<string> {
   const asked = keysIn(args.toUpperCase()).slice(0, MAX_KEYS)
   const found = asked.length ? { keys: asked, source: undefined } : await detect($)
-  if (!found) return 'No ticket key found in this session. Usage: /flow PROJ-123 (a story or an epic)'
+  // Crew flow first: read from the last snapshot, so it shows within the press.
+  await loadCrewFlow($)
+  if (!found) {
+    const opened = await $.ui.open({ id: PANE, title: 'Flow' })
+    if (!opened.isPlaced) return `Flow pane waits undrawn: ${opened.reason}`
+    return 'Flow pane opened with Crew flow; no ticket key found in this session for the story lights (/flow PROJ-123).'
+  }
   const opened = await $.ui.open({ id: PANE, title: title(found.keys) })
   later($, found.keys, found.source)
   const from = found.source ? ` (from ${found.source})` : ''
@@ -256,7 +264,23 @@ export const registerFlow = (on: On, options: PluginOptions) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const v = await read($, view)
     const width = Math.max(30, e.props.bodyColumns ?? e.viewport?.columns ?? 80)
-    if (!v) return <Text dimColor>/flow shows what this session works on; /flow PROJ-123 a story or an epic.</Text>
+    const crew = await readCrewFlow($)
+    const now = await $.clock.now()
+    const crewSection = crew && (
+      <Box flexDirection="column" borderStyle="round" borderColor="claude" paddingX={1}>
+        {crewFlowLines(crew, now).map(line => (
+          <Text color={line.color} dimColor={line.dim} bold={line.bold}>{clip(line.text, width - 4)}</Text>
+        ))}
+      </Box>
+    )
+    if (!v) {
+      return (
+        <Box flexDirection="column" gap={1}>
+          {crewSection}
+          <Text dimColor>/flow shows what this session works on; /flow PROJ-123 a story or an epic.</Text>
+        </Box>
+      )
+    }
 
     const rows = allRows(v)
     const merged = rows.filter(r => r.phase === 'merged').length
@@ -325,6 +349,7 @@ export const registerFlow = (on: On, options: PluginOptions) => {
 
     return (
       <Box flexDirection="column" gap={1}>
+        {crewSection}
         <Box flexDirection="column">
           <Box flexDirection="row" gap={2}>
             <Text bold>{`◆ ${v.keys.join(' · ')}`}</Text>

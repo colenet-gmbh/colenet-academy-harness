@@ -18,13 +18,14 @@ import {
 import type { Lamp, Liveness, SessionGroup, StartMode } from './board'
 import {
   NOTICE, REBUILD_ID, RESUBMITTED, STUCK_MS, answerLines, stuckAnswers, askerText, ownerText, starterText, deliveryLine, isMissed, keyOf, ledgerState, markerRows, noticeMatches, pendingLines, promptTextOf, rebuildWaits, rowOf,
-  storedHits, versionAtLeast,
+  storedHits, transcriptVerdict, versionAtLeast,
 } from './deliver'
-import type { Awaiting, Delivery, Ledger } from './deliver'
+import type { Awaiting, Delivery, Ledger, Seen } from './deliver'
 import { buildWork, groupKeys, layoutWork, storiesInScope, storyKey, storyPhase, widthOf, workOf } from './work'
 import type { Part } from './work'
 import { matchesKey } from '../flow/phase'
 import { openFlow } from '../flow/register'
+import { openZentrale } from './zentrale-pane'
 import { ALL_PLANS, defaultBranch, git, loadPrs, parsePlanFiles, planGrep } from '../plans/plans'
 
 const PANE = 'we-board'
@@ -247,11 +248,9 @@ const delivery = {
   // Prompts submitted and not yet seen stored, oldest first; the keys an asker send holds while it runs.
   awaiting: [] as Awaiting[],
   sending: new Set<string>(),
-  // The main loop's turns: when the running one started, and the start of the last one that ended.
-  turnStarts: new Map<string, number>(),
+  // The main loop's turns: when the running one started, when the last one ended.
   runningSince: undefined as number | undefined,
   lastEndedAt: undefined as number | undefined,
-  lastEndedStart: undefined as number | undefined,
 }
 
 const isoOf = (ms: number) => new Date(ms).toISOString()
@@ -308,7 +307,8 @@ async function coordinatorOf($: $, file: string) {
 // before the submit resolves.
 async function submitAwaited($: $, ledgerPath: string, d: Delivery, text: string, tries: number) {
   const key = keyOf(d.line.id, d.line.ts, d.role)
-  delivery.awaiting.push({ key, delivery: d, text, ledgerPath, submittedAt: await $.clock.now(), tries })
+  const seen = (await transcript($))?.length
+  delivery.awaiting.push({ key, delivery: d, text, ledgerPath, submittedAt: await $.clock.now(), tries, ...(seen === undefined ? {} : { seen }) })
   try {
     await $.prompt.submit({ text, asUser: true })
   } catch (err) {
@@ -361,11 +361,29 @@ async function settleMissed($: $, a: Awaiting) {
   $.ui.toast(`board: ${a.delivery.line.id} did not reach this session (${reason})`)
 }
 
+// The session's transcript, undefined when the engine gives none.
+async function transcript($: $): Promise<Seen[] | undefined> {
+  try {
+    return (await $.session.messages()).map(m => ({ role: m.role, text: m.text }))
+  } catch {
+    return undefined
+  }
+}
+
+// A prompt the turn clock counts lost is checked against the transcript first (deliver.ts
+// transcriptVerdict): stored means delivered, a busy session keeps waiting from now.
 async function checkAwaiting($: $) {
   const now = await $.clock.now()
   const missed = delivery.awaiting.filter(a => isMissed(a, now, delivery))
+  if (!missed.length) return
   delivery.awaiting = delivery.awaiting.filter(a => !missed.includes(a))
-  for (const a of missed) await settleMissed($, a)
+  const messages = await transcript($)
+  for (const a of missed) {
+    const verdict = transcriptVerdict(a, messages, now)
+    if (verdict === 'stored') await recordStored($, a)
+    else if (verdict === 'busy') delivery.awaiting.push({ ...a, submittedAt: now, seen: messages!.length, firstAt: a.firstAt ?? a.submittedAt })
+    else await settleMissed($, a)
+  }
 }
 
 async function recordStored($: $, a: Awaiting) {
@@ -708,19 +726,14 @@ export const registerBoard = (on: On, options: PluginOptions) => {
   }).catch(($, e, next) => next(e))
   on('turn.start', async ($, e, next) => {
     if (delivery.isOn && e.agentId === undefined) {
-      const now = await $.clock.now()
-      delivery.turnStarts.set(e.turnId, now)
-      delivery.runningSince = now
+      delivery.runningSince = await $.clock.now()
     }
     return next(e)
   })
   on('turn.complete', async ($, e, next) => {
     if (delivery.isOn && e.agentId === undefined) {
-      const started = delivery.turnStarts.get(e.turnId)
-      delivery.turnStarts.delete(e.turnId)
       delivery.runningSince = undefined
       delivery.lastEndedAt = await $.clock.now()
-      if (started !== undefined) delivery.lastEndedStart = started
       if (delivery.awaiting.length) $.clock.after(0, () => void checkAwaiting($))
     }
     return next(e)
@@ -797,13 +810,13 @@ export const registerBoard = (on: On, options: PluginOptions) => {
         q.session ? [{ text: q.session, dim: struck }] : [],
         q.key ? [{ text: q.key, dim: true }] : [],
       ]
-      // A one-way merge waits for the owner's approve (repo with an approve gate) or hand merge: the PR link, and
-      // Accept as "Yes, I'll do it" (board.py close-merged drops the question once the PR merged).
-      const handMerge = q.one_way && q.pr_url ? `approve or merge (${q.one_way}): ${q.pr_url}` : undefined
+      // A one-way merge waits for the owner's go: the PR link, and Accept as Go (the asking session arms
+      // with `arm_pr.sh <PR>`; board.py close-merged drops the question once the PR merged).
+      const handMerge = q.one_way && q.pr_url ? `merge go (${q.one_way}): ${q.pr_url}` : undefined
       // A question sent to a human on another machine (board.py ask --to): its answer comes from the ticket, so
       // the local human only withdraws it.
       const remote = q.to ? `waiting on ${q.to_name || q.to}${q.label ? ` (label ${q.label})` : ''}` : undefined
-      const acceptLabel = handMerge ? "Yes, I'll do it" : q.kind === 'task' ? 'Taken' : 'Accept'
+      const acceptLabel = handMerge ? 'Go' : q.kind === 'task' ? 'Taken' : 'Accept'
       const buttons = q.id && !struck
         ? remote
           ? [{ key: `withdraw-${q.id}`, label: 'Withdraw', on: press('withdraw') }]
@@ -1123,13 +1136,15 @@ export const registerBoard = (on: On, options: PluginOptions) => {
         )}
         {l?.error && <Text color="warning">{`Live column: ${l.error}`}</Text>}
 
-        {pack([{ key: 'refresh', width: 11 }, { key: 'flow', width: 8 }, { key: 'stamp', width: stampText.length }], b => b.width, width).map((line, i) => (
+        {pack([{ key: 'refresh', width: 11 }, { key: 'flow', width: 8 }, { key: 'zentrale', width: 12 }, { key: 'stamp', width: stampText.length }], b => b.width, width).map((line, i) => (
           <Box key={`foot-${i}`} flexDirection="row" gap={2} marginTop={i ? 0 : 1}>
             {line.map(b =>
               b.key === 'refresh' ? (
                 <Button key="refresh" hotkey="r" label="Refresh" onPress={() => refreshPressed($, file)} />
               ) : b.key === 'flow' ? (
                 <Button key="flow" label="Flow" onPress={() => void openFlow($, '')} />
+              ) : b.key === 'zentrale' ? (
+                <Button key="zentrale" label="Zentrale" onPress={() => void openZentrale($, v?.path)} />
               ) : (
                 <Text key="stamp" dimColor>{stampText}</Text>
               ),

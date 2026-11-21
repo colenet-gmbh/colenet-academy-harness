@@ -10,6 +10,6 @@ expect:
   next_verb: [board, master]
   waits: [human]
   not_waits: [product, architecture, acceptance]
-  route: "board item"
-  forbidden: ["gh pr merge --auto", "arm_pr.sh"]
+  route: "(?i)ask via \\w+ \\(PR, class, panel verdict\\)"
+  forbidden: ["gh pr merge --auto", "gh pr review --approve", "please approve", "arm_pr.sh --go"]
 judge: null

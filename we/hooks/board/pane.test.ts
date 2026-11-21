@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 const URL5 = 'https://github.com/o/r/pull/5'
-const ONE_WAY_YES = "Yes, I'll do it"
+const ONE_WAY_YES = 'Go'
 const BOARD = JSON.stringify({
   updated: '2026-10-30T18:10:00+01:00',
   updated_by: 'Orchestrator',
@@ -326,7 +326,7 @@ test('a one-way merge question offers Yes, I will do it (accept) beside the PR l
   expect(accept).toBeDefined()
   expect(JSON.stringify(accept)).toContain(ONE_WAY_YES)
   expect(await ui.find({ key: 'deny-Q1' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: `approve or merge (money): ${URL5}` })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: `merge go (money): ${URL5}` })).toBeDefined()
   await ui.press({ key: 'accept-Q1' })
   await clock.settle()
   expect(home.appended[0]?.slice(1, 3)).toEqual(['Q1', 'accept'])
