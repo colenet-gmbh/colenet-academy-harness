@@ -277,7 +277,7 @@ A worker briefed `PR owner: worker` runs steps 2–3 and its fix rounds; you act
     coordinator with the PR link, the class and both verdicts (its board item:
     `board.py ask --cause merge-go --pr <url> --one-way <class>`). On the yes it passes back with the
     question number, arm with `arm_pr.sh <PR>` and watch `--until-merged`. No approve on GitHub is the
-    go; without the yes you do not arm it. A go holds for the head it was asked on: a later push
+    yes; without the yes you do not arm it. A yes holds for the head it was asked on: a later push
     touching a file of the one-way class asks again. `arm_pr.sh` checks no board line (a session
     could write one itself): it names the class on its output and in a PR comment, and refuses it
     only to a worker, so the yes is yours to wait for.

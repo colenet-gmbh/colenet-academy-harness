@@ -275,7 +275,7 @@ const DEFAULT_PROMPT: Record<BoardPromptKind, string> = {
   update: '{id}: please check whether this question is still current and correctly worded (goal still active? needs an update?)',
   withdraw: '{id}: withdrawn on the board; take its label off the ticket and say so in one comment there',
   update_asker: 'check whether {id} is still current and well worded; re-ask it with a new id or withdraw it',
-  accept_hand: "{id}: the owner's go on {pr} — the asking session arms it with `arm_pr.sh <PR>`; the question stays open until the PR is merged",
+  accept_hand: "{id}: the owner's go on {pr} — the asking session arms that PR with `arm_pr.sh`; the question stays open until the PR is merged",
   accept_task: '{id}: taken — the owner does this task; do not do it yourself',
   rebuild:
     'Rebuild the board: check the session lines, the open questions and the news against the ticketing system, git and the PRs, and correct every stale line (board.py set --for, withdraw, prune)',
