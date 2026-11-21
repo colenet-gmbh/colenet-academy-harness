@@ -1,7 +1,7 @@
 # Risk rules of this repo, read by the classifier from the default branch only.
 # A PR touching a path of a one-way section is `T2 one-way <section>`: it merges on the owner's go
-# (`human.name` in the crew), asked as a question; the asking session then arms it with
-# `arm_pr.sh <PR> --go Q<nr>`. `[t2]` paths print `T2` and auto-merge after CI.
+# (`human.name` in the crew), asked as a question; after the yes the asking session arms it with
+# `arm_pr.sh <PR>`, which names the class. `[t2]` paths print `T2` and auto-merge after CI.
 # A file without any one-way section is valid: the brake is empty on purpose.
 # Grammar: `[section]`, `path <glob>` lines (`**`, `*`, `?`, `{a,b}`) and `json <file> <key>` lines
 # (the top-level key's value changed).

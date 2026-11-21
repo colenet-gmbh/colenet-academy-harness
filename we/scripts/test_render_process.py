@@ -23,8 +23,8 @@ INBOX = (
     "**The board is Hal's only inbox:** the push line, the bundle and an escalation each point at "
     "a board item."
 )
-ONE_WAY = "A one-way PR merges\n  on Hal's go: ask via"
-DECIDED_3 = "3. One-way merges on Hal's go, no approve gate."
+ONE_WAY = "A one-way PR merges\n  on Hal's board yes: ask via"
+DECIDED_3 = "3. One-way merges on Hal's yes, no gate."
 
 
 @pytest.fixture(autouse=True)

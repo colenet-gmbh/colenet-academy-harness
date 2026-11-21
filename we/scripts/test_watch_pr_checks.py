@@ -21,6 +21,8 @@ SCRIPT = HERE / "watch-pr-checks.sh"
 REAL = json.loads((HERE / "fixtures" / "pr-checks-rollup.json").read_text())
 SHA = REAL["headRefOid"]
 MERGE = "merge: UNKNOWN/UNKNOWN"
+RISK_RULES = HERE.parents[1] / ".weside" / "risk-paths"
+UNKNOWN_CLASS = "arm: arm_pr.sh 57 (class unknown: a one-way class arms only after the human's yes on the board)"
 RUN_URL = "https://github.com/o/r/actions/runs/{}/job/{}"
 
 pytestmark = pytest.mark.skipif(not shutil.which("jq"), reason="the stub gh delegates --jq to jq")
@@ -551,7 +553,7 @@ def test_until_merged_stops_on_green_that_will_not_merge(tmp_path, patch, note):
             {"labels": [{"name": "docs"}, {"name": "review"}]},
             "label review: the human merges",
         ),
-        ({"hold_labels": ["review"]}, {"labels": [{"name": "docs"}]}, "arm: arm_pr.sh 57"),
+        ({"hold_labels": ["review"]}, {"labels": [{"name": "docs"}]}, UNKNOWN_CLASS),
     ],
     ids=["workflow-ready", "workflow-draft", "hold-label", "other-label"],
 )
@@ -578,9 +580,61 @@ def test_until_merged_says_auto_merge_off_once_and_watches_to_the_merge(tmp_path
     assert (code, out) == (
         0,
         [
-            f"waiting {SHA}: green · {MERGE} · auto-merge off — arm: arm_pr.sh 57 — watching to the merge",
+            f"waiting {SHA}: green · {MERGE} · auto-merge off — {UNKNOWN_CLASS} — watching to the merge",
             f"final {SHA}: merged",
         ],
+    )
+
+
+def _risk_clone(tmp_path, path):
+    """A clone whose origin/main carries the plugin's risk rules and a PR head commit touching
+    `path` beside it (not checked out); returns the head SHA."""
+
+    def git(*args):
+        return subprocess.run(
+            ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    (tmp_path / ".weside").mkdir()
+    shutil.copy(RISK_RULES, tmp_path / ".weside" / "risk-paths")
+    git("init", "-q", "-b", "main")
+    git("add", ".weside/risk-paths")
+    git("commit", "-q", "-m", "rules")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("checkout", "-q", "-b", "pr")
+    (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / path).write_text("x\n")
+    git("add", path)
+    git("commit", "-q", "-m", "head")
+    head = git("rev-parse", "HEAD")
+    git("checkout", "-q", "main")
+    return head
+
+
+@pytest.mark.parametrize(
+    ("path", "step"),
+    [
+        (
+            "we/scripts/arm_pr.sh",
+            "one-way brake-change: arm only after the human's yes on the board",
+        ),
+        ("README.md", "arm: arm_pr.sh 57"),
+    ],
+    ids=["one-way", "two-way"],
+)
+def test_auto_merge_off_names_a_one_way_class(tmp_path, path, step):
+    """Red arm: the hint said `arm: arm_pr.sh <PR>` for a one-way head too, an arm the human's yes
+    on the board has to come first for."""
+    head = _risk_clone(tmp_path, path)
+    unarmed = {**_green(), "headRefOid": head, "baseRefName": "main"}
+    code, out = run(tmp_path, [unarmed] * 3 + [{**unarmed, "state": "MERGED"}], "--until-merged")
+    assert (code, out[0]) == (
+        0,
+        f"waiting {head}: green · {MERGE} · auto-merge off — {step} — watching to the merge",
     )
 
 
