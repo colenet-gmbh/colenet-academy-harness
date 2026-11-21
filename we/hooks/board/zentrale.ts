@@ -81,27 +81,36 @@ export const sectionLines = (doc: ZentraleDoc): Line[] => {
 
 export type Interval = { who: string; kind: string; start: string; end: string }
 
-// One glyph and colour per kind; `waiting:human` alone is `claude`, so waiting on the owner stands out.
+// One glyph and colour per lane kind of `flow_intervals.py` (its `LANE_KINDS`; `test_lane_kinds.py`
+// binds the two lists); `waiting:human` alone is `claude`, so waiting on the owner stands out, and a
+// blocked session is `error`, so a stuck worker never draws as an empty cell.
 const GLYPH: Record<string, { glyph: string; color?: string; label: string }> = {
   working: { glyph: '█', color: 'success', label: 'working' },
   'waiting:human': { glyph: '▓', color: 'claude', label: 'waits on the owner' },
-  waiting: { glyph: '▒', color: 'warning', label: 'waits on a session' },
+  'waiting:<role>': { glyph: '▒', color: 'warning', label: 'waits on a session' },
+  'waiting:ci': { glyph: '░', color: 'suggestion', label: 'waits on CI' },
+  blocked: { glyph: '▚', color: 'error', label: 'blocked' },
+  'idle-after-end': { glyph: '-', color: 'inactive', label: 'idle after its worker ended' },
   idle: { glyph: '·', color: 'inactive', label: 'idle' },
+  parked: { glyph: '_', color: 'inactive', label: 'parked' },
   'no-data': { glyph: ' ', label: 'no data' },
 }
 
-export const glyphOf = (kind: string) => GLYPH[kind] ?? (kind.startsWith('waiting:') ? GLYPH.waiting! : GLYPH['no-data']!)
+export const glyphOf = (kind: string) => GLYPH[kind] ?? (kind.startsWith('waiting:') ? GLYPH['waiting:<role>']! : GLYPH['no-data']!)
 
-export const LEGEND = ['working', 'waiting:human', 'waiting', 'idle'].map(k => `${GLYPH[k]!.glyph} ${GLYPH[k]!.label}`).join('  ')
+export const LEGEND = Object.keys(GLYPH)
+  .filter(k => k !== 'no-data')
+  .map(k => `${GLYPH[k]!.glyph} ${GLYPH[k]!.label}`)
+  .join('  ')
 
 export type Lane = { who: string; cells: { glyph: string; color?: string }[] }
 
 // One lane per session over the last `hours` before `now`, `width` columns: each column takes the
-// kind that covers most of its slice (a waiting kind wins a tie over working, waiting:human over all).
+// kind that covers most of its slice (on a tie waiting:human wins, then blocked, a wait, working).
 export const lanes = (intervals: readonly Interval[], now: number, hours: number, width: number): Lane[] => {
   const from = now - hours * 3_600_000
   const slice = (now - from) / width
-  const rank = (k: string) => (k === 'waiting:human' ? 3 : k.startsWith('waiting:') ? 2 : k === 'working' ? 1 : 0)
+  const rank = (k: string) => (k === 'waiting:human' ? 4 : k === 'blocked' ? 3 : k.startsWith('waiting:') ? 2 : k === 'working' ? 1 : 0)
   const byWho = new Map<string, Interval[]>()
   for (const iv of intervals) {
     if (iv.kind.startsWith('holding:') || iv.kind.startsWith('stage:')) continue

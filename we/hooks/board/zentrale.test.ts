@@ -189,6 +189,21 @@ test('lanes: one lane per session, one glyph per kind, waiting:human in a colour
   expect([...colours].sort()).toEqual(['claude', 'inactive', 'success', 'warning'])
   const human = drawn[0]!.cells.at(-1)!.color
   expect(drawn.flatMap(l => l.cells).filter(c => c.color === human).every(c => c.glyph === '▓')).toBe(true)
+  // a blocked or parked session and a wait on CI draw a glyph of their own, never an empty cell
+  const more = lanes(
+    [
+      { who: 'w-stuck', kind: 'blocked', start: iso(8), end: iso(4) },
+      { who: 'w-stuck', kind: 'waiting:ci', start: iso(4), end: iso(0) },
+      { who: 'w-done', kind: 'idle-after-end', start: iso(8), end: iso(4) },
+      { who: 'w-done', kind: 'parked', start: iso(4), end: iso(0) },
+    ],
+    NOW, 8, 4,
+  )
+  expect(more.map(l => [l.who, l.cells.map(c => c.glyph).join('')])).toEqual([
+    ['w-done', '--__'],
+    ['w-stuck', '▚▚░░'],
+  ])
+  expect(more[1]!.cells[0]!.color).toBe('error')
   // 24 h: beta-3's wait starts 20 h back
   expect(lanes(INTERVALS, NOW, 24, 12).find(l => l.who === 'beta-3')!.cells.map(c => c.glyph).join('')).toBe('  ▒▒▒▒▒▒▒▒▒·')
 })

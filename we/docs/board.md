@@ -198,22 +198,11 @@ queue and run per open PR, stories waiting on acceptance, every gap, and the swi
 read from the last snapshot of `scripts/flow_intervals.py --snapshot` with its age shown; a snapshot
 older than 5 min starts one refresh in the background. Below it come the story lights for what this
 session works on, when the session names a key. The board's **Zentrale** button opens the
-command centre, one pane in six sections: **With the owner** (open questions, user-merge PRs),
-**Red** (main's verdict, red required checks, exited or limited workers, accounts), **Waiting** (who
-waits on whom, escalations, stories in progress, drafts, green PRs nobody arms, required checks
-waiting over 60 min), **Working** (one line per live session of the crew, as `scripts/crew_view.py`
-reads them), **CI** (running checks per repo, the default head's rollup, gate lock and test slot)
-and **Accounts** (cswap's store, never a refresh). Every row names its holder and age, an empty
-section reads "nothing", an unread source stands as a gap at the top. It renders
-`scripts/command_center/zentrale.py --json` (that script's docstring owns the sections, the sources
-and `schema_version`; `open_ends.py` owns the row contract and the PR classes): first `--fast` (the
-board, its logs, the sessions; the slow sources from the last full read with their age), then the
-full read in the background, again every 30 s while open; the stamp reads `(loading)` until the full
-read arrived and `(stale)` once the last read is older than two refreshes. **Swimlanes** draws the
-last 8 h of `scripts/flow_intervals.py --json` as one lane per session (`2` shows 24 h, `1` 8 h
-again), one glyph and colour per kind, waiting on the owner in a colour of its own; **Sections**
-returns. A crew names its main verdict with `flow.main_state_command` (`crew.py`); without it the
-pane says `main state: not read (no source)`. Until `/board` runs in a session the pane polls
+command centre in six sections: **With the owner**, **Red**, **Waiting**, **Working**, **CI** and
+**Accounts**. It renders `scripts/command_center/zentrale.py --json`; that script's docstring owns
+what each section holds, its sources, thresholds and `schema_version`, and `open_ends.py` owns the
+row contract. **Swimlanes** draws `scripts/flow_intervals.py --json` as one lane per session (keys
+`1` and `2`: 8 h and 24 h); **Sections** returns. Until `/board` runs in a session the pane polls
 nothing; the deliverer (§ Answers) checks the board file every three seconds in every session, pane or not, and acts only in the orchestrator's. Once open, the pane checks the file's modification time every three seconds and re-reads it
 when it moved; every minute it re-reads the file and the live column whatever happened.
 
