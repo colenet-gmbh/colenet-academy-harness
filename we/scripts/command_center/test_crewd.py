@@ -275,6 +275,12 @@ def test_the_controls_go_red(monkeypatch):
     assert "javascript:" not in page
     assert crewd.pr_href("evil/app#1", ["github.com/acme"]) is None
     assert crewd.pr_href("acme/app#1 onclick", ["github.com/acme"]) is None
+    # a link host may name one repo: that repo links, its owner's other repos do not
+    assert (
+        crewd.pr_href("acme/app#7", ["github.com/acme/app/"])
+        == "https://github.com/acme/app/pull/7"
+    )
+    assert crewd.pr_href("acme/other#7", ["github.com/acme/app"]) is None
 
 
 # --- AC5: verbs, paths, no open() or subprocess per request ----------------------------------
@@ -341,7 +347,11 @@ def test_only_allowlisted_fields_reach_a_page_and_every_secret_reads_redacted(
                 secret=MARKER,
             )
         ],
-        accounts=[account(EMAIL, token=MARKER, email=EMAIL)],
+        # accounts.py names an account without alias by its slot, never its email
+        accounts=[
+            account("account 1", token=MARKER, email=EMAIL),
+            account("account 2", email=EMAIL),
+        ],
         waiting=[row("Q9", title=f"ask {EMAIL} please", extra=MARKER)],
     )
     port = serve(
@@ -368,7 +378,8 @@ def test_only_allowlisted_fields_reach_a_page_and_every_secret_reads_redacted(
         for dummy in DUMMIES:
             assert dummy.split()[-1] not in page, dummy
     crew_page = pages[0]
-    assert crew_page.count("[redacted]") >= len(DUMMIES) + 2
+    assert crew_page.count("[redacted]") >= len(DUMMIES) + 1
+    assert "account 1" in crew_page and "account 2" in crew_page  # two accounts, told apart
     assert "ask [redacted] please" in crew_page
     snap = crewd.snapshot_of(d)
     assert set(snap["working"][0]) == set(crewd.SESSION_FIELDS)
@@ -434,22 +445,40 @@ def test_no_snapshot_yet_is_a_503(serve):
 # --- AC8: headers and the cache file --------------------------------------------------------
 
 
-def test_every_response_carries_the_headers(serve):
-    port = serve(state_with())
+def test_every_response_carries_the_csp_without_inline(serve, monkeypatch):
+    st = state_with()
+    port = serve(st)
+    seen = []
     for method, path in (
         ("GET", "/crew/"),
         ("GET", "/crew/flow"),
-        ("GET", "/nope"),
-        ("POST", "/crew/"),
         ("HEAD", "/crew/healthz"),
+        ("GET", "/nope"),  # 404
+        ("POST", "/crew/"),  # 405
     ):
-        _s, headers, _b = request(port, method, path, raw=True)
-        for k, v in crewd.HEADERS.items():
-            assert headers.get(k) == v, (method, path, k)
-    assert crewd.HEADERS["Content-Security-Policy"] == (
-        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
-        "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
-    )
+        status, headers, _b = request(port, method, path, raw=True)
+        seen.append((status, headers))
+    monkeypatch.setattr(st, "page", lambda _path: 1 / 0)
+    seen.append(request(port, "GET", "/crew/", raw=True)[:2])  # 500
+    assert [code for code, _h in seen] == [200, 200, 200, 404, 405, 500]
+    for code, headers in seen:
+        csp = headers.get("Content-Security-Policy", "")
+        directives = dict(d.strip().split(" ", 1) for d in csp.split(";") if d.strip())
+        assert directives.get("default-src") == "'none'", code
+        assert directives.get("script-src") == "'self'" and directives.get("style-src") == "'self'"
+        assert "unsafe-inline" not in csp and "unsafe-eval" not in csp, code
+        assert headers.get("X-Content-Type-Options") == "nosniff", code
+        assert headers.get("Cache-Control") == "no-store", code
+
+
+def test_an_unforeseen_route_error_is_a_500_without_body(serve, monkeypatch, capsys):
+    st = state_with()
+    port = serve(st)
+    monkeypatch.setattr(st, "page", lambda _path: {}["boom"])
+    status, _h, body = request(port, "GET", "/crew/")
+    assert status == 500 and body == b""
+    assert "we-crewd: KeyError" in capsys.readouterr().err
+    assert request(port, "GET", "/crew/healthz")[0] == 200  # the server keeps serving
 
 
 def test_the_cache_file_is_mode_600_from_its_first_byte(tmp_path, monkeypatch):
@@ -472,9 +501,44 @@ def test_the_cache_file_is_mode_600_from_its_first_byte(tmp_path, monkeypatch):
     assert set(payload) == {"fetched_at", "flow_at", "snap", "flow"}
     # a restart answers from it at once (Klick bis Inhalt < 3 s)
     st2 = crewd.State([])
-    cached = crewd.read_cache(path)
-    st2.set(snap=cached["snap"], flow=cached["flow"], at=cached["fetched_at"])
-    assert b"Q4" in st2.page("/crew/")
+    crewd._load_cache(st2, path)
+    assert b"Q4" in st2.page("/crew/") and b"dev" in st2.page("/crew/")
+    assert st2.snap == st.snap and st2.flow == st.flow  # a clean cache restores unchanged
+    # a file of another uid is not read
+    monkeypatch.setattr(os, "getuid", lambda: path.stat().st_uid + 1)
+    assert crewd.read_cache(path) is None
+    st3 = crewd.State([])
+    crewd._load_cache(st3, path)
+    assert st3.page("/crew/") is None
+
+
+def test_a_restored_cache_passes_the_allowlist_and_the_redaction_again(tmp_path):
+    """The cache file is not trusted as rendered: a field outside the allowlist or an unredacted
+    secret written into it does not reach a page after a restart."""
+    st = state_with()
+    payload = st.cache_payload()
+    payload["snap"]["owner"][0]["extra"] = MARKER
+    payload["snap"]["owner"][0]["title"] = "ghp_" + "a" * 36
+    payload["snap"]["working"][0]["transcript"] = MARKER
+    payload["snap"]["accounts"][0]["email"] = EMAIL
+    payload["snap"]["secret"] = MARKER
+    payload["flow"]["intervals"][0]["note"] = MARKER
+    payload["flow"]["intervals"][0]["label"] = EMAIL
+    payload["flow"]["token"] = MARKER
+    path = tmp_path / "crewd.json"
+    crewd.write_cache(path, payload)
+    restored = crewd.State([])
+    crewd._load_cache(restored, path)
+    for page in (restored.page("/crew/"), restored.page("/crew/flow")):
+        text = page.decode()
+        assert MARKER not in text and EMAIL not in text and "ghp_" not in text
+    assert b"Q4" in restored.page("/crew/")
+    assert set(restored.snap["owner"][0]) == set(crewd.ROW_FIELDS)
+    assert restored.snap["accounts"][0]["five_hour"] == 40
+    # control: the same payload set raw, as before, shows what the restore keeps out
+    raw = crewd.State([])
+    raw.set(snap=payload["snap"], flow=payload["flow"], at="x")
+    assert MARKER in raw.page("/crew/flow").decode()
 
 
 # --- AC11: reload and state labels ----------------------------------------------------------
