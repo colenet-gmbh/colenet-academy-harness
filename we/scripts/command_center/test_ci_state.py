@@ -163,3 +163,19 @@ def test_main_state_key_strict(tmp_path, flow, ok):
 
 def test_crew_without_the_key_reads_none():
     assert crew_mod.DEFAULTS["flow"]["main_state_command"] is None
+
+
+@pytest.mark.parametrize(
+    ("first", "line"),
+    [
+        ("::error::red: run 123", "main: red: run 123"),
+        ("::warning file=x.yml::flaky net", "main: flaky net"),
+        ("::notice::frozen", "main: frozen"),
+        ("red:: no annotation", "main: red:: no annotation"),
+    ],
+)
+def test_main_state_cuts_an_annotation(tmp_path, first, line):
+    script = tmp_path / "verdict"
+    script.write_text(f"#!/bin/sh\necho '{first}'\nexit 1\n")
+    script.chmod(0o755)
+    assert ci_state.main_state(str(script), UNTIL, tmp_path / "c")["line"] == line

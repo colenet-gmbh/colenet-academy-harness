@@ -69,7 +69,8 @@ we/                               plugin root
                                   waiting, working, CI, accounts; fast and slow sources), open_ends.py (open ends and
                                   PR classes by arm_pr.sh's rule), ci_state.py (main verdict, workers, running
                                   checks, locks), accounts.py (cswap --store-only through an allowlist),
-                                  gh_source.py (open PRs per repo through flow_report's gh cache)
+                                  gh_source.py (open PRs per repo through flow_report's gh cache),
+                                  ticket_snapshot.py (the ticket snapshot's one atomic writer and its reader)
     PR and plan                   pr-body-receipt.py, plan_push.py (plans land by push), arm_pr.sh (arms
                                   auto-merge, never merges), required_checks.sh (a branch's required checks,
                                   read by arm_pr.sh and flow_report.py), test-delta.py,
