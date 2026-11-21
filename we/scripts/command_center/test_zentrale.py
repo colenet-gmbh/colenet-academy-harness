@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
+import subprocess
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -83,6 +85,10 @@ def world(tmp_path, monkeypatch):
     return {"repo": repo, "state": state, "gh": gh, "cache": tmp_path / "cache"}
 
 
+# build binds `ci_source.CACHE` as its default at import: a CLI test hands its own cache in
+BUILD = zentrale.build
+
+
 def zbuild(w, until=UNTIL, **kw):
     kw.setdefault("cswap", str(w["gh"] / "no-cswap"))
     return zentrale.build(
@@ -129,10 +135,95 @@ def test_cli_exits_zero_on_unread_sources(world, monkeypatch, capsys):
     monkeypatch.chdir(world["repo"])
     monkeypatch.setattr(zentrale.worker_launch, "sessions", list)
     monkeypatch.setattr(gh_source, "repos_of", lambda *_a: ["acme/app"])
-    monkeypatch.setattr(zentrale.ci_source, "CACHE", world["cache"])
+    monkeypatch.setattr(zentrale, "build", functools.partial(BUILD, cache=world["cache"]))
     assert zentrale.main(["--json", "--until", "2026-04-01T12:00:00Z"]) == 0
     doc = json.loads(capsys.readouterr().out)
     assert any(g.startswith("PRs acme/app: not read") for g in doc["gaps"])
+
+
+# --- flow.repos ---------------------------------------------------------------------------------
+
+FAKE_GH_BY_REPO = r"""#!/usr/bin/env python3
+import json, os, sys
+d = os.environ["FAKE_GH_DIR"]
+body = json.loads(sys.stdin.read() or "{}")
+name = body.get("variables", {}).get("name", "")
+with open(os.path.join(d, "calls"), "a") as fh:
+    fh.write(name + "\n")
+kind = "list" if "pullRequests(" in body.get("query", "") else "states"
+path = os.path.join(d, name + "." + kind + ".json")
+empty = {"list": {"data": {"repository": {"pullRequests": {"nodes": []}}}},
+         "states": {"data": {"repository": {}}}}
+print(open(path).read() if os.path.exists(path) else json.dumps(empty[kind]))
+"""
+
+
+def git_repo(path: Path, origin: str) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    for args in (["init", "-q"], ["remote", "add", "origin", origin]):
+        subprocess.run(["git", "-C", str(path), *args], check=True)
+
+
+@pytest.fixture
+def crew_repos(world):
+    """The world's crew repo with origin acme/app; the fake gh has PR #7 only in acme/infra."""
+    git_repo(world["repo"], "https://github.com/acme/app.git")
+    gh = world["gh"]
+    (gh / "gh").write_text(FAKE_GH_BY_REPO)
+    seven = pr(7, [], body="Story: ABC-7\n\nuser merge: secrets\n")
+    (gh / "infra.list.json").write_text(
+        json.dumps({"data": {"repository": {"pullRequests": {"nodes": [{"number": 7}]}}}})
+    )
+    (gh / "infra.states.json").write_text(json.dumps({"data": {"repository": {"pr7": seven}}}))
+    return world
+
+
+def write_crew(w, **flow) -> None:
+    crew = {
+        "version": 2,
+        "roles": {"coordinator": "coord"},
+        "members": {"coord": {"name": "Coord"}},
+        **({"flow": flow} if flow else {}),
+    }
+    (w["repo"] / ".weside" / "crew.json").write_text(json.dumps(crew))
+
+
+def zentrale_cli(w, monkeypatch, capsys, cache: str) -> dict:
+    monkeypatch.chdir(w["repo"])
+    monkeypatch.setattr(zentrale.worker_launch, "sessions", list)
+    monkeypatch.setattr(zentrale, "build", functools.partial(BUILD, cache=w["cache"] / cache))
+    monkeypatch.setattr(gh_source.fr, "required_checks", lambda *_a: [])
+    monkeypatch.setattr(accounts, "read", lambda *_a: {"state": "ok", "accounts": []})
+    assert zentrale.main(["--json", "--until", "2026-04-01T12:00:00Z"]) == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def test_flow_repos_feed_the_owner_section(crew_repos, monkeypatch, capsys):
+    """AC 1: the real `repos_of` reads `flow.repos`; without the key acme/infra is never asked."""
+    write_crew(crew_repos, repos=["acme/infra"])
+    named = zentrale_cli(crew_repos, monkeypatch, capsys, "with")
+    assert "acme/infra#7" in [r["item"] for r in named["sections"]["owner"]]
+    assert "github acme/infra" in named["sources"]
+    write_crew(crew_repos)
+    (crew_repos["gh"] / "calls").unlink()
+    plain = zentrale_cli(crew_repos, monkeypatch, capsys, "without")
+    assert "acme/infra#7" not in [r["item"] for r in plain["sections"]["owner"]]
+    assert "github acme/infra" not in plain["sources"]
+    assert (crew_repos["gh"] / "calls").read_text().split() == ["app"]
+
+
+def test_repos_of_orders_origin_then_flow_repos_then_extra_repos_each_once(world):
+    """`flow.repos` goes through `norm_slug`: a spelling of the origin's slug adds nothing."""
+    git_repo(world["repo"], "git@github.com:Acme/App.git")
+    git_repo(world["repo"].parent / "zed", "https://github.com/acme/zed")
+    crew_path = world["repo"] / ".weside" / "crew.json"
+    crew = {
+        "members": {"coord": {"name": "Coord", "workplace": ".", "extra_repos": ["../zed"]}},
+        "flow": {"repos": ["ACME/app.git", "acme/infra", "acme/zed", "acme/infra"]},
+    }
+    assert gh_source.repos_of(crew_path, crew) == ["acme/app", "acme/infra", "acme/zed"]
+    del crew["flow"]
+    assert gh_source.repos_of(crew_path, crew) == ["acme/app", "acme/zed"]
 
 
 # --- warning 2: the first draw waits on no slow source --------------------------------------

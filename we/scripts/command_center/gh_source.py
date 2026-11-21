@@ -7,8 +7,8 @@ cache directory (made 0700 by `ci_source.own_cache`), keyed by a `TTL_S` bucket,
 inside the bucket asks GitHub nothing and carries the same `fetched_at` (the cached file's
 mtime). The required names go through `ci_source.cached_required` with `REQUIRED_TTL_S`.
 
-Repos (`repos_of`): the GitHub `origin` of the crew's repo, then every member's `extra_repos` that
-exists here and has a GitHub `origin`.
+Repos (`repos_of`): the GitHub `origin` of the crew's repo, then the crew's `flow.repos`, then every
+member's `extra_repos` that exists here and has a GitHub `origin`.
 """
 
 from __future__ import annotations
@@ -97,7 +97,11 @@ def read_all(repos: list, now: datetime, cache: Path = ci_source.CACHE, reader=N
 
 
 def repos_of(crew_path: Path | None, crew: dict) -> list:
-    """The crew repo's GitHub `origin`, then each member's existing extra repo with one."""
+    """The crew repo's GitHub `origin`, then the crew's `flow.repos`, then each member's existing
+    extra repo with one; every slug through `flow_report.norm_slug` and once.
+
+    Every reader of the command centre takes its repos from here, so a `flow.repos` entry feeds the
+    sections owner, red and waiting (`open_ends`) and the CI section alike."""
     roots = [Path.cwd()] if crew_path is None else [crew_path.parent.parent]
     for slug in (crew.get("members") or {}) if crew_path is not None else []:
         try:
@@ -105,10 +109,13 @@ def repos_of(crew_path: Path | None, crew: dict) -> list:
         except crew_mod.CrewError:
             continue
         roots += present
-    out = []
+    slugs = []
     for root in roots:
         url = fr.git(root, "remote", "get-url", "origin") or ""
-        slug = fr.norm_slug(url) if "github.com" in url or url.count("/") == 1 else None
+        slugs.append(fr.norm_slug(url) if "github.com" in url or url.count("/") == 1 else None)
+    named = [fr.norm_slug(repo) for repo in (crew.get("flow") or {}).get("repos") or []]
+    out = []
+    for slug in [*slugs[:1], *named, *slugs[1:]]:
         if slug and slug not in out:
             out.append(slug)
     return out

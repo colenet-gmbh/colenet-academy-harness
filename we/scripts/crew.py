@@ -110,7 +110,9 @@ question urgent, never whether it is asked); ``load`` validates both, but no rea
 yet: the part-1b detector will; ``main_state_command`` (null or a command line whose exit code and
 first line are the default branch's verdict: exit 0 green, else red; the command centre's
 ``command_center/ci_state.py`` runs it); ``tickets_stale_min`` (minutes after which the ticket snapshot
-``command_center/ticket_snapshot.py`` writes counts as stale); ``flow_log.py`` owns the line format), ``worker_rights`` (what a
+``command_center/ticket_snapshot.py`` writes counts as stale); ``repos`` (``owner/name`` GitHub slugs the
+command centre reads beside the crew repo's ``origin``, without loading them into a session like
+``extra_repos``; ``command_center/gh_source.py`` ``repos_of`` reads it); ``flow_log.py`` owns the line format), ``worker_rights`` (what a
 process worker may do without asking and what it never does, all off by default: ``repos`` the
 ``owner/name`` slugs whose ``origin`` grants the rights, ``pr_ready``, ``pr_comment``, ``branch_rc``
 (a command prefix or null), ``deny_commands`` (command prefixes added to the never-list),
@@ -364,6 +366,7 @@ DEFAULTS: dict[str, Any] = {
         "urgent_commands": [],
         "main_state_command": None,
         "tickets_stale_min": 45,
+        "repos": [],
     },
     "worker_rights": {
         "repos": [],
@@ -758,6 +761,7 @@ def _validate(path: Path, data: dict[str, Any], *, paths: bool) -> None:
     _validate_choices(path, data)
     _validate_local_rules(path, data.get("local_rules", []))
     _validate_urgent_commands(path, data.get("flow", {}).get("urgent_commands", []))
+    _validate_flow_repos(path, data.get("flow", {}).get("repos", []))
     for key, text in data.get("labels", {}).items():
         if not _is_label(text):
             raise _fail(
@@ -809,6 +813,16 @@ def _validate_urgent_commands(path: Path, patterns: list[str]) -> None:
             raise _fail(
                 path, f"flow.urgent_commands[{i}] {pattern!r} is no regex ({exc})"
             ) from None
+
+
+REPO_SLUG = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+
+
+def _validate_flow_repos(path: Path, repos: list[str]) -> None:
+    """``_check`` already refused a non-list or a non-string entry; each entry is ``owner/name``."""
+    for i, repo in enumerate(repos):
+        if not REPO_SLUG.fullmatch(repo):
+            raise _fail(path, f"flow.repos[{i}] {repo!r} must be an owner/name GitHub slug")
 
 
 def _validate_local_rules(path: Path, rules: list[str]) -> None:

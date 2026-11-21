@@ -613,6 +613,34 @@ def test_the_ready_gate_keys_default_and_are_typed(tmp_path):
         assert out.returncode == 1 and message in out.stderr, (changes, out.stderr)
 
 
+@pytest.mark.parametrize(
+    ("repos", "message"),
+    [
+        (["not a slug", 3], "flow.repos must be a list of strings"),
+        (["not a slug"], "flow.repos[0] 'not a slug' must be an owner/name GitHub slug"),
+        (["acme/infra", "acme"], "flow.repos[1] 'acme' must be an owner/name GitHub slug"),
+        ("acme/infra", "flow.repos must be a list"),
+    ],
+)
+def test_flow_repos_is_refused_on_every_load_unless_owner_name_slugs(tmp_path, repos, message):
+    """The type check runs in ``_validate``, so every ``load`` refuses, not only ``--strict``."""
+    core, _ = workspace(tmp_path, with_(flow__repos=repos))
+    path = core / ".weside" / "crew.json"
+    with pytest.raises(crew.CrewError, match=r"flow\.repos") as exc:
+        crew.load(path)
+    assert str(exc.value) == f"{path}: {message}"
+    for args in (("validate",), ("validate", "--strict")):
+        out = run(core, *args)
+        assert out.returncode == 1 and message in out.stderr, (args, out.stderr)
+
+
+def test_flow_repos_of_owner_name_slugs_passes_strict(tmp_path):
+    core, _ = workspace(tmp_path, with_(flow__repos=["acme/infra", "Acme/Web.site"]))
+    out = run(core, "validate", "--strict")
+    assert out.returncode == 0 and out.stderr == "", out.stderr
+    assert json.loads(run(core, "show").stdout)["flow"]["repos"] == ["acme/infra", "Acme/Web.site"]
+
+
 def test_the_flow_block_defaults_merges_and_is_typed(tmp_path):
     minimal = {"version": 2, "roles": CREW["roles"], "members": CREW["members"]}
     core, _ = workspace(tmp_path, minimal)
@@ -624,6 +652,7 @@ def test_the_flow_block_defaults_merges_and_is_typed(tmp_path):
         "urgent_commands": [],
         "main_state_command": None,
         "tickets_stale_min": 45,
+        "repos": [],
     }
     bound = with_(flow__log_dir="~/flow", flow__urgent_commands=["gh secret", r"eas build"])
     core.joinpath(".weside", "crew.json").write_text(json.dumps(bound))
