@@ -263,7 +263,8 @@ export const shownAnswer = (last: BoardAnswer | undefined, updated: string | und
 }
 
 // The texts the deliverer sends: per kind to the orchestrator and the asker, `update_asker` to the asker
-// on Update, and for an Accept that means "I do it myself" (`accept_hand`, `accept_task`) in place of
+// on Update, and for the two Accepts with a meaning of their own (`accept_hand`: the go on a one-way PR,
+// `accept_task`: the owner does it) in place of
 // `accept`; the board's `answer_prompts` replaces a default, `{id}` standing for the question's id and
 // `{pr}` for its PR link.
 const DEFAULT_PROMPT: Record<BoardPromptKind, string> = {
@@ -274,7 +275,7 @@ const DEFAULT_PROMPT: Record<BoardPromptKind, string> = {
   update: '{id}: please check whether this question is still current and correctly worded (goal still active? needs an update?)',
   withdraw: '{id}: withdrawn on the board; take its label off the ticket and say so in one comment there',
   update_asker: 'check whether {id} is still current and well worded; re-ask it with a new id or withdraw it',
-  accept_hand: '{id}: the owner approves or merges {pr} by hand — do not merge or arm it; the question stays open until the PR is merged',
+  accept_hand: "{id}: the owner's go on {pr} — the asking session arms that PR with `arm_pr.sh`; the question stays open until the PR is merged",
   accept_task: '{id}: taken — the owner does this task; do not do it yourself',
   rebuild:
     'Rebuild the board: check the session lines, the open questions and the news against the ticketing system, git and the PRs, and correct every stale line (board.py set --for, withdraw, prune)',
@@ -283,7 +284,7 @@ const DEFAULT_PROMPT: Record<BoardPromptKind, string> = {
 export const answerPrompt = (answer: BoardPromptKind, id: string, own?: Partial<Record<BoardPromptKind, string>>, pr?: string) =>
   (own?.[answer] ?? DEFAULT_PROMPT[answer]).split('{id}').join(id).split('{pr}').join(pr ?? 'its PR')
 
-// Which Accept a question's Accept is: "Yes, I'll do it" on a one-way merge-go with its PR (the pane's
+// Which Accept a question's Accept is: Go on a one-way merge-go with its PR (the pane's
 // label), Taken on a task, else the plain Accept (undefined).
 export const acceptVariantOf = (q: Pick<BoardQueueItem, 'one_way' | 'pr_url' | 'kind'> | undefined): BoardAcceptVariant | undefined =>
   !q ? undefined : q.one_way && q.pr_url ? 'accept_hand' : q.kind === 'task' ? 'accept_task' : undefined

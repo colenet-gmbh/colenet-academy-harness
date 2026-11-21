@@ -193,6 +193,8 @@ def hook(world, command, cwd=None, session="s-1", **env):
     [
         "gh pr ready",
         "gh pr ready 7",
+        "/plugin/scripts/pr_ready.sh 7 ready --sha 0123abc",
+        "bash pr_ready.sh 7 undo 'waits on the lens — ready when it passes'",
         "gh pr comment --body x",
         "gh pr comment 7 --body x",
         "gh pr comment -R acme/app 7 -b x",
@@ -223,6 +225,10 @@ def test_a_held_right_in_a_compound_command_only_passes(world):
         ("echo x | gh pr ready 8", "not this branch's PR"),
         ("cd .\ngh pr ready 8", "not this branch's PR"),
         ("gh pr ready && gh pr comment 8 --body x", "not this branch's PR"),
+        ("pr_ready.sh 8 ready", "not this branch's PR"),
+        ("bash pr_ready.sh -R acme/other 7 ready", "another repo"),
+        ("pr_ready.sh --sha 0123abc", "pr_ready.sh without a PR"),
+        ("cd . && pr_ready.sh 8 ready", "not this branch's PR"),
     ],
 )
 def test_a_right_inside_a_command_chain_is_judged_on_its_segment(world, command, why):
@@ -696,6 +702,8 @@ def test_settings_grant_exactly_the_repos_rights_and_deny_the_never_list(world):
     doc = wr.settings(world["repo"], KEY)
     assert doc["permissions"]["allow"] == [
         "Bash(gh pr ready*)",
+        f"Bash({SCRIPTS / 'pr_ready.sh'} *)",
+        f"Bash(bash {SCRIPTS / 'pr_ready.sh'} *)",
         "Bash(gh pr comment*)",
         "Bash(a release staging*)",
     ]
@@ -715,7 +723,9 @@ def test_settings_grant_exactly_the_repos_rights_and_deny_the_never_list(world):
         "WE_ROLE_ID": "",
         "WE_START": "",
         "WE_WORKER_STARTER": "",
+        "WE_STARTER": "",
     }
+    assert wr.settings(world["repo"], KEY, starter="Samu")["env"]["WE_STARTER"] == "Samu"
     plain = make_repo(world["tmp"], name="plain", rights=None)
     assert wr.settings(plain, KEY)["permissions"]["allow"] == []
 
@@ -788,7 +798,7 @@ needs_jq = pytest.mark.skipif(not shutil.which("jq"), reason="the fake gh delega
 GREEN = [["Tests", "COMPLETED", "SUCCESS", True], ["Claude Review", "COMPLETED", "SUCCESS", True]]
 
 
-def _merge_line(world, read=None, required=("Tests", "Claude Review"), repo=None):
+def _merge_line(world, read=None, required=("Tests", "Claude Review"), repo=None, **env):
     """The worker's own merge line on its HEAD, with the PR read and the base's required names
     `arm_pr.sh --check` sees."""
     repo = repo or world["repo"]
@@ -800,6 +810,7 @@ def _merge_line(world, read=None, required=("Tests", "Claude Review"), repo=None
         cwd=repo,
         FAKE_GH_READ=str(world["tmp"] / "read.json"),
         FAKE_GH_REQUIRED=str(world["tmp"] / "required.json"),
+        **env,
     )
 
 
@@ -1000,8 +1011,24 @@ def test_the_merge_line_check_refuses_once_the_deadline_is_spent(world):
     assert wr._own_pr("7", "acme/app", BRANCH, str(world["repo"]), time.monotonic() - 1)[0]
 
 
+def _marker_worker(world, session="s-w"):
+    """The `worker_launch.py` marker naming `session` as the worker of this tree."""
+    gd = subprocess.run(
+        ["git", "-C", str(world["repo"]), "rev-parse", "--absolute-git-dir"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    Path(gd, "we-worker.json").write_text(
+        json.dumps({"name": "ABC-12-hook", "key": KEY, "lead": "LEAD-1", "session_id": session})
+    )
+
+
 @needs_jq
-def test_under_worker_the_merge_line_is_denied_on_a_one_way_class(world):
+@pytest.mark.parametrize("by", ["env", "marker"])
+def test_under_worker_the_merge_line_is_denied_on_a_one_way_class(world, by):
+    """Red arm (marker): `arm_pr.sh --check` ran with the worker's env, and a worker known by its
+    marker only got `ready` for a one-way class, which `arm_pr.sh` no longer refuses by itself."""
     repo = world["repo"]
     (repo / ".weside" / "risk-paths").write_text("[brake-change]\npath src/brake.py\n")
     _git(repo, "add", ".weside/risk-paths")
@@ -1011,13 +1038,64 @@ def test_under_worker_the_merge_line_is_denied_on_a_one_way_class(world):
     (repo / "src" / "brake.py").write_text("x = 1\n")
     _git(repo, "add", "src/brake.py")
     _commit(repo, "brake")
-    decision, reason = _merge_line(world, {"checks": GREEN})
+    env = {}
+    if by == "marker":
+        _marker_worker(world)
+        env = {"session": "s-w", "WE_ROLE": None, "WE_STORY_KEY": None}
+    decision, reason = _merge_line(world, {"checks": GREEN}, **env)
     assert decision == "deny" and "refused: one-way brake-change" in reason, reason
 
 
-def test_a_spent_hook_deadline_refuses_every_gated_gh_read(world):
+def test_a_worker_known_by_its_marker_only_arms_nothing(world):
+    """`arm_pr.sh` refuses a worker's one-way class by `WE_ROLE=worker`; without it in the env the
+    arm would pass as a session's, so the gate denies the right."""
+    _pr_owner(world["repo"], "worker")
+    _marker_worker(world)
+    decision, reason = hook(world, "arm_pr.sh 7", session="s-w", WE_ROLE=None, WE_STORY_KEY=None)
+    assert decision == "deny" and "arm_pr.sh without WE_ROLE=worker" in reason, reason
+
+
+ROLE_CHANGES = [
+    "unset WE_ROLE; arm_pr.sh 7",
+    "export WE_ROLE=master && arm_pr.sh 7",
+    "export WE_ROLE=master\narm_pr.sh 7 --method squash",
+    "WE_ROLE= bash /plugin/scripts/arm_pr.sh 7",
+    "env -u WE_ROLE arm_pr.sh 7",
+    "env -i PATH=/usr/bin arm_pr.sh 7",
+    "bash -c 'unset WE_\"ROLE\"; arm_pr.sh 7'",
+    "declare +x WE_ROLE; eval arm_pr.sh 7",
+    "sudo -u x arm_pr.sh 7",
+]
+
+
+@pytest.mark.parametrize("owner", ["master", "worker"])
+@pytest.mark.parametrize("command", ROLE_CHANGES)
+def test_arm_pr_beside_a_change_of_we_role_is_denied(world, owner, command):
+    """Red arm: the gate reads `WE_ROLE` of its own process, `arm_pr.sh` that of the shell the chain
+    leaves it; a segment that unsets or exports the variable before the arm passed the gate and
+    armed a one-way PR as a session's."""
+    _pr_owner(world["repo"], owner)
+    decision, reason = hook(world, command)
+    assert decision == "deny", reason
+    assert "never for a worker (merge (arm_pr.sh beside a change of WE_ROLE))" in reason, reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -n WE_ROLE we/scripts/arm_pr.sh",
+        "sed -n 1,9p we/scripts/arm_pr.sh; echo $WE_ROLE",
+        "unset WE_ROLE; echo arm_pr.sh",
+    ],
+)
+def test_reading_arm_pr_beside_we_role_passes(world, command):
+    assert hook(world, command) == (None, "")
+
+
+def test_a_spent_hook_deadline_refuses_every_gated_gh_read(world, monkeypatch):
     """The hook passes one deadline to every command of a call: a second `gh pr edit` after the
     first spent the budget refuses instead of running past the hook's timeout (which lets it by)."""
+    monkeypatch.setenv("WE_ROLE", "worker")  # the arm right holds only with it
     repo = str(world["repo"])
     _pr_owner(world["repo"], "worker")
     rights = wr.crew_rights(repo)

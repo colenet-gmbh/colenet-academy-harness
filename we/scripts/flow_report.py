@@ -71,6 +71,7 @@ import re
 import statistics
 import subprocess
 import sys
+import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -135,7 +136,8 @@ CHECKS_QUERY = """
 query($ids: [ID!]!) {
   nodes(ids: $ids) { ... on Commit { oid
     checkSuites(first: 30) { nodes {
-      checkRuns(first: 50, filterBy: {checkType: ALL}) { nodes { name status conclusion completedAt } }
+      createdAt
+      checkRuns(first: 50, filterBy: {checkType: ALL}) { nodes { name status conclusion startedAt completedAt } }
     } }
     status { contexts { context state createdAt } }
   } }
@@ -185,7 +187,9 @@ def gh_runner(cache: Path | None, window: str = "") -> Runner:
     """`body -> response` through `gh api graphql --input -`; with `cache`, answers are kept there
     by a hash of the body and the `window` (`<since>..<until>`) and read back instead of asked
     again: the open-PR search and the suites carry no window of their own, so another window
-    asks GitHub afresh."""
+    asks GitHub afresh. `run.fetched` collects each answer's fetch time (the cached file's mtime on
+    a hit), read by `command_center/ci_source.py` as its `fetched_at`."""
+    fetched: list = []
 
     def run(body: dict) -> dict:
         text = json.dumps(body, sort_keys=True)
@@ -194,6 +198,7 @@ def gh_runner(cache: Path | None, window: str = "") -> Runner:
             digest = hashlib.sha256((window + "\n" + text).encode()).hexdigest()[:20]
             hit = cache / (digest + ".json")
             if hit.is_file():
+                fetched.append(hit.stat().st_mtime)
                 return json.loads(hit.read_text(encoding="utf-8"))
         try:
             out = subprocess.run(
@@ -217,8 +222,10 @@ def gh_runner(cache: Path | None, window: str = "") -> Runner:
         if hit is not None:
             hit.parent.mkdir(parents=True, exist_ok=True)
             hit.write_text(out.stdout, encoding="utf-8")
+        fetched.append(time.time())
         return data
 
+    run.fetched = fetched  # type: ignore[attr-defined]
     return run
 
 
@@ -272,7 +279,7 @@ def fetch_prs(
         for node in data["data"]["nodes"]:
             if node and node.get("oid"):
                 suites[node["oid"]] = node["checkSuites"]["nodes"]
-    shaped = [shape_pr(pr, suites) for pr in prs]
+    shaped = [shape_pr(pr, suites, node_id) for pr in prs]
     if checks:
         heads = [h for p in shaped for h in p["heads"]]
         found = head_checks(run, [node_id[h["oid"]] for h in heads if h["oid"] in node_id])
@@ -309,12 +316,19 @@ def head_checks(run: Runner, ids: list) -> dict:
     return out
 
 
-def required_checks(repo: str) -> list:
-    """The default branch's required check names through `required_checks.sh` (the one reader,
-    shared with `arm_pr.sh`); a failure raises `SourceMissingError`."""
+def required_checks(repo: str, branch: str | None = None) -> list:
+    """The required check names of `branch` (default: the default branch) through
+    `required_checks.sh` (the one reader, shared with `arm_pr.sh`); a failure raises
+    `SourceMissingError`."""
     try:
         out = subprocess.run(
-            ["bash", str(HERE / "required_checks.sh"), "--repo", repo],
+            [
+                "bash",
+                str(HERE / "required_checks.sh"),
+                "--repo",
+                repo,
+                *([branch] if branch else []),
+            ],
             capture_output=True,
             text=True,
             timeout=120,
@@ -329,7 +343,149 @@ def required_checks(repo: str) -> list:
     return lines
 
 
-def shape_pr(pr: dict, suites: dict) -> dict:
+# --- one open PR's state, by arm_pr.sh's rule ------------------------------------------------
+#
+# A copy of `arm_pr.sh`'s query (`READ`), its check classes (`JQ`) and its `verdict()`: the command
+# centre (`command_center/open_ends.py`) reads them and no merge decision does, so the brake itself
+# stays in `arm_pr.sh` alone. `command_center/test_pr_state.py` runs `arm_pr.sh`'s own `JQ` and
+# `verdict()` against this copy and fails on any drift.
+
+PR_STATE_FIELDS = """
+  id number title body state isDraft createdAt headRefName headRefOid baseRefName mergeStateStatus
+  reviewDecision autoMergeRequest { enabledAt } labels(first: 100) { nodes { name } }
+  commits(last: 1) { nodes { commit { oid committedDate statusCheckRollup { contexts(first: 100) {
+    nodes { __typename
+      ... on CheckRun { name status conclusion isRequired(pullRequestNumber: NUMBER)
+                        startedAt completedAt checkSuite { createdAt } }
+      ... on StatusContext { context state isRequired(pullRequestNumber: NUMBER) createdAt }
+    } } } } } }
+"""
+
+OPEN_PRS_QUERY = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    defaultBranchRef { name target { ... on Commit { oid statusCheckRollup { state
+      contexts(first: 100) { nodes { __typename
+        ... on CheckRun { name status conclusion startedAt checkSuite { createdAt } }
+        ... on StatusContext { context state createdAt }
+      } } } } } }
+    pullRequests(states: OPEN, first: 50, orderBy: {field: CREATED_AT, direction: ASC}) {
+      pageInfo { hasNextPage }
+      nodes { number }
+    }
+  }
+}
+"""
+
+
+def pr_states_query(numbers: list) -> str:
+    """One query for several PRs: an aliased `pullRequest` per number, each with its own
+    `isRequired(pullRequestNumber:)` (GraphQL takes no per-node variable)."""
+    parts = [
+        f"pr{int(n)}: pullRequest(number: {int(n)}) {{"
+        + PR_STATE_FIELDS.replace("NUMBER", str(int(n)))
+        + "}"
+        for n in numbers
+    ]
+    return (
+        "query($owner: String!, $name: String!) {\n"
+        "  repository(owner: $owner, name: $name) {\n" + "\n".join(parts) + "\n  }\n}\n"
+    )
+
+
+def context_class(node: dict) -> str:
+    """`pass`, `pending` or `fail` of one rollup context: `arm_pr.sh`'s `JQ`."""
+    if node.get("__typename") == "StatusContext":
+        state = node.get("state")
+        if state == "SUCCESS":
+            return "pass"
+        return "pending" if state in ("PENDING", "EXPECTED") else "fail"
+    if node.get("status") != "COMPLETED":
+        return "pending"
+    return "pass" if node.get("conclusion") in GREEN else "fail"
+
+
+def head_contexts(pr: dict) -> list:
+    """`[{name, v, required, status, since}]` of the PR's head commit (`JQ`'s check lines; a last
+    commit that is not `headRefOid` lists none). `since`: when a pending context began waiting
+    (a check run's `startedAt`, a queued run's suite `createdAt`, a status context's `createdAt`)."""
+    commit = (((pr.get("commits") or {}).get("nodes") or [{}])[0] or {}).get("commit") or {}
+    if commit.get("oid") != pr.get("headRefOid"):
+        return []
+    out = []
+    for node in ((commit.get("statusCheckRollup") or {}).get("contexts") or {}).get("nodes") or []:
+        if not node:
+            continue
+        since = node.get("createdAt") or node.get("startedAt")
+        if node.get("__typename") != "StatusContext" and not node.get("startedAt"):
+            since = (node.get("checkSuite") or {}).get("createdAt")
+        out.append(
+            {
+                "name": node.get("name") or node.get("context"),
+                "v": context_class(node),
+                "required": node.get("isRequired") is True,
+                "status": node.get("status") or node.get("state"),
+                "since": since,
+                "completed": node.get("completedAt"),
+            }
+        )
+    return out
+
+
+def pr_verdict(checks: list, required: list) -> tuple:
+    """`(pending | pass | fail, [failing names])`: `arm_pr.sh`'s `verdict()`. A required name with
+    no check on the head is pending (absent is not green); a check GitHub marks required for this
+    PR counts too; with no required check at all every registered check must pass."""
+    fails, pending = [], False
+    for name in required:
+        vs = [c["v"] for c in checks if c["name"] == name]  # every line of the name, as awk
+        if "fail" in vs:
+            fails.append(name)
+        elif not vs or "pending" in vs:
+            pending = True
+    for c in checks:
+        if c["name"] in required:
+            continue
+        if c["required"] or not required:
+            if c["v"] == "fail":
+                fails.append(c["name"])
+            elif c["v"] == "pending":
+                pending = True
+    if fails:
+        return "fail", fails
+    if not checks or pending:
+        return "pending", []
+    return "pass", []
+
+
+def pending_required(checks: list, required: list) -> list:
+    """The required names (branch list plus `isRequired`) still pending or absent on the head:
+    `arm_pr.sh`'s `pending_line`."""
+    names = set(required) | {c["name"] for c in checks if c["required"]}
+    out = []
+    for name in sorted(names):
+        vs = [c["v"] for c in checks if c["name"] == name]
+        if not vs or "pending" in vs:
+            out.append(name)
+    return out
+
+
+def open_pr_states(run: Runner, repo: str, numbers: list) -> dict:
+    """`{number: PR node}` (fields `PR_STATE_FIELDS`) through the `Runner`."""
+    if not numbers:
+        return {}
+    owner, name = repo.split("/", 1)
+    data = run({"query": pr_states_query(numbers), "variables": {"owner": owner, "name": name}})
+    repo_node = data["data"]["repository"] or {}
+    return {int(n): repo_node.get(f"pr{int(n)}") for n in numbers if repo_node.get(f"pr{int(n)}")}
+
+
+def open_pr_state(run: Runner, repo: str, number: int) -> dict | None:
+    """One PR's node: `arm_pr.sh`'s query with the times."""
+    return open_pr_states(run, repo, [number]).get(int(number))
+
+
+def shape_pr(pr: dict, suites: dict, node_ids: dict | None = None) -> dict:
     """The fields the rows read: times, docs-only, labels and the heads with their runs."""
     files = pr.get("files") or {}
     paths = [f["path"] for f in files.get("nodes") or []]
@@ -353,7 +509,9 @@ def shape_pr(pr: dict, suites: dict) -> dict:
                 parse_ts(s.get("createdAt")) or datetime.max.replace(tzinfo=timezone.utc)
                 for s in runs
             )
-            heads.append({"oid": oid, "first": first, "runs": runs})
+            heads.append(
+                {"oid": oid, "first": first, "runs": runs, "node_id": (node_ids or {}).get(oid)}
+            )
     heads.sort(key=lambda h: h["first"])
     return {
         "number": pr["number"],

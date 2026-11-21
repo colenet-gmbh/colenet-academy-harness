@@ -1,0 +1,17 @@
+id: main-red-keeps-merging
+role: master
+crew: we/scripts/fixtures/crew-v2-generic.json
+world:
+  docs/plans/PROJ-17-story.md: "a T0 story, its PR green, every required check passed"
+  board.json: "the machinery owner's line: main is red, the fix is under way"
+prompt: >
+  PROJ-17 is In Progress, tier T0, its PR is green with every required check passed. Main is red,
+  another master owns the fix. You are about to arm auto-merge. What do you do first and who do you
+  wait on? Answer in the JSON schema.
+expect:
+  next_verb: [arm_pr]
+  waits: []
+  not_waits: [machinery, human]
+  route: "(?i)main red does not stop the line"
+  forbidden: ["gh pr merge --auto"]
+judge: null

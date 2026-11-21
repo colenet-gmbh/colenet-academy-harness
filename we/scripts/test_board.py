@@ -740,7 +740,9 @@ def _crew_with(crewed, **top):
 
 
 class TestCrewGuard:
-    """two crews, AC11: a writing verb refuses a board of another crew, and a crewless default write.
+    """two crews, AC11: a writing verb refuses a board of another crew, and a crewless default write;
+    a crewless session that names a board with `--board` writes it, stamped or not (the explicit
+    file is the intent).
 
     Finding of 08.11.: a second crew's coordinator ran `board.py prune` without `--board` and
     removed the first crew's returned news. Red arm on origin/main: every refusal below wrote."""
@@ -801,6 +803,13 @@ class TestCrewGuard:
     def test_a_crewless_session_may_name_an_unstamped_board(self, crewless):
         assert go(crewless, "set", "state=build") == 0
         assert not (crewless / "crew.id").exists()
+
+    def test_a_crewless_session_may_name_a_stamped_board(self, crewless):
+        # Repro 20.11.: from a repo without a crew file, `--board <the crew's board> set` was
+        # refused like the bare call; the explicit file is the intent, the stamp stays.
+        (crewless / "crew.id").write_text("acme/first-crew\n")
+        assert go(crewless, "set", "state=build") == 0
+        assert (crewless / "crew.id").read_text() == "acme/first-crew\n"
 
     def test_a_relative_state_dir_moves_the_board(self, crewed, monkeypatch, capsys):
         monkeypatch.delenv("WE_STATE_DIR", raising=False)
@@ -2467,6 +2476,18 @@ class TestJiraTransport:
         assert len(carried) == 2
         assert transitions(moving)[-1]["ticket"] == "pending"
 
+    def test_select_removes_the_crews_select_labels(self, moving, capsys):
+        """Red arm: every select needed the owner's release label removed by hand."""
+        with_jira(moving)
+        path = moving / "work" / ".weside" / "crew.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["board"]["select_unlabel"] = ["READY"]
+        path.write_text(json.dumps(data), encoding="utf-8")
+        green_lenses(moving)
+        assert act(moving, "select", KEY) == 0
+        carried = carry_of(capsys.readouterr().out)
+        assert carried[-1] == {"op": "unlabel", "key": KEY, "remove": "READY"}
+
     def test_a_refused_move_carries_nothing(self, moving, capsys):
         with_jira(moving)
         assert act(moving, "move", KEY, "in_progress") == 1
@@ -3152,6 +3173,24 @@ class TestBlocked:
         assert queue["Q8"]["obsolete"] == "prompt resolved at 11:07"  # Berlin
         assert "obsolete" not in queue["Q9"] and "obsolete" not in queue["Q7"]
 
+    def test_clear_of_a_chat_wait_marks_its_info_question_obsolete(self, crewed, capsys):
+        # Q874, Q883, Q891, Q892 (20.11.): the detector asked "worker waits over 30 min on its
+        # starter" (cause info); the starter answered or the worker stopped, the wait was cleared,
+        # and the question stayed open until the owner answered a dead one.
+        agents(crewed, {**BLOCKED_ROW, "state": "idle", "waitingFor": None})
+        go(crewed, "blocked", WORKER, "--kind", "chat", "--waiting-on", "coordinator")
+        answer_with(crewed, CLEAR)
+        go(crewed, *ask_argv(**{"--session": WORKER, "--cause": "info"}))
+        go(crewed, *ask_argv(**{"--session": WORKER, "--cause": "access-click"}))
+        agents(crewed)  # the worker stopped
+        capsys.readouterr()
+        later = datetime(2026, 11, 3, 10, 40, tzinfo=timezone.utc)
+        assert go(crewed, "blocked", WORKER, "--clear", now=later) == 0
+        assert json.loads(capsys.readouterr().out)["obsolete"] == ["Q8"]
+        queue = {q["id"]: q for q in board_of(crewed)["owner_queue"]}
+        assert queue["Q8"]["obsolete"] == "prompt resolved at 11:40"
+        assert "obsolete" not in queue["Q9"]
+
     def test_the_obsolete_reason_speaks_the_crews_label(self, crewed):
         path = crewed / "work" / ".weside" / "crew.json"
         crew = json.loads(path.read_text(encoding="utf-8"))
@@ -3398,8 +3437,8 @@ class TestPrune:
         assert [q["id"] for q in board_of(crewless)["owner_queue"]] == ["Q7"]
 
     def test_an_accepted_one_way_merge_go_stays_until_close_merged(self, crewless):
-        """Red arm: "Yes, I'll do it" on a one-way merge-go is the human's promise to merge by
-        hand; the reminder stays on the board until close-merged sees the PR merged."""
+        """Red arm: Go on a one-way merge-go still waits for the asking session's arm; the
+        reminder stays on the board until close-merged sees the PR merged."""
         path = crewless / "board.json"
         data = json.loads(path.read_text(encoding="utf-8"))
         q7 = next(q for q in data["owner_queue"] if q["id"] == "Q7")
@@ -3447,6 +3486,22 @@ class TestPrune:
     def test_an_answer_from_the_askers_own_session_owes_it_nothing(self, crewless):
         epoch_row(crewless)
         answered(crewless, "Q7", "accept", "2026-11-03T09:59:00.000Z", session="asker")
+        go(crewless, "prune")
+        assert board_of(crewless)["owner_queue"] == []
+
+    def test_a_question_the_coordinator_asked_goes_once_its_prompt_is_delivered(self, crewless):
+        """Red arm: the coordinator as asker gets no asker row (deliver.ts `recipientsOf`); its
+        delivered coordinator row carries the answer, or the question stays on the queue."""
+        path = crewless / "board.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        next(q for q in data["owner_queue"] if q["id"] == "Q7")["session"] = "coord"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        epoch_row(crewless)
+        ts = "2026-11-03T09:59:00.000Z"
+        answered(crewless, "Q7", "accept", ts, session="foxy")
+        go(crewless, "prune")
+        assert [q["id"] for q in board_of(crewless)["owner_queue"]] == ["Q7"]
+        delivered_row(crewless, "Q7", ts, "2026-11-03T09:59:03.000Z")
         go(crewless, "prune")
         assert board_of(crewless)["owner_queue"] == []
 

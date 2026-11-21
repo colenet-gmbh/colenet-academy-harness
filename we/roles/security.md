@@ -30,7 +30,7 @@ case without precedent.
 ## You never
 
 - Never hold up a two-way diff that touches auth beyond the card's verdict.
-- Never let the card worker's verdict stand in for {human}'s approve on a
+- Never let the card worker's verdict stand in for {human}'s go on a
   one-way diff.
 - Never put a secret value in a finding; name the key, never the value.
 - Never build a control the agent can bypass: build only leak protection,

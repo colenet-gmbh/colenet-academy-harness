@@ -21,6 +21,8 @@ SCRIPT = HERE / "watch-pr-checks.sh"
 REAL = json.loads((HERE / "fixtures" / "pr-checks-rollup.json").read_text())
 SHA = REAL["headRefOid"]
 MERGE = "merge: UNKNOWN/UNKNOWN"
+RISK_RULES = HERE.parents[1] / ".weside" / "risk-paths"
+UNKNOWN_CLASS = "arm: arm_pr.sh 57 (class unknown: a one-way class arms only after the human's yes on the board)"
 RUN_URL = "https://github.com/o/r/actions/runs/{}/job/{}"
 
 pytestmark = pytest.mark.skipif(not shutil.which("jq"), reason="the stub gh delegates --jq to jq")
@@ -62,9 +64,11 @@ def run(
     quiet="0",
     env_extra=None,
     cwd=None,
+    required=(),
 ):
     """`answers` replays `gh pr view`, `runs` `gh run list --commit <sha>`, `comments` the
-    `gh pr view --json comments` read. Every call's argv and cwd land in `calls.log`."""
+    `gh pr view --json comments` read, `required` the base branch's required check names (its
+    ruleset). Every call's argv and cwd land in `calls.log`."""
     gh = tmp_path / "gh"
     log = tmp_path / "calls.log"
     gh.write_text(
@@ -78,7 +82,9 @@ def run(
         'if [ "$1 $2" = "run view" ]; then printf "%s\\n" "${GH_LOG_FAILED:-}"; exit 0; fi\n'
         'if [ "$1 $2" = "run rerun" ]; then exit 0; fi\n'
         'if [ "$1 $2" = "pr view" ] && [[ " $* " == *" files "* ]]; then [ -n "$GH_FILES_FAIL" ] && exit 1; printf "%s\\n" ${GH_PR_FILES:-we/x.py}; exit 0; fi\n'
-        'if [ "$1" = api ]; then f=$(mktemp); case "$2" in rate_limit) n=$(cat "$GH_RATE_DIR/count" 2>/dev/null || echo 0); echo $((n+1)) > "$GH_RATE_DIR/count"; r="$GH_RATE_DIR/$n.json"; [ -f "$r" ] || r="$GH_RATE_DIR/last.json"; cp "$r" "$f" 2>/dev/null || echo "{}" > "$f" ;; *annotations*) printf "%s" "${GH_ANNOTATIONS:-[]}" > "$f" ;; *compare*) printf "%s" "${GH_COMPARE:-{\\"ahead_by\\":0,\\"commits\\":[]\\}}" > "$f" ;; *) echo \'{"default_branch":"main"}\' > "$f" ;; esac; '
+        'if [ "$1" = api ]; then f=$(mktemp); case "$2" in rate_limit) n=$(cat "$GH_RATE_DIR/count" 2>/dev/null || echo 0); echo $((n+1)) > "$GH_RATE_DIR/count"; r="$GH_RATE_DIR/$n.json"; [ -f "$r" ] || r="$GH_RATE_DIR/last.json"; cp "$r" "$f" 2>/dev/null || echo "{}" > "$f" ;; *annotations*) printf "%s" "${GH_ANNOTATIONS:-[]}" > "$f" ;; *compare*) printf "%s" "${GH_COMPARE:-{\\"ahead_by\\":0,\\"commits\\":[]\\}}" > "$f" ;; '
+        '*rules/branches/*) [ -n "$GH_RULES_FAIL" ] && { echo "HTTP 403" >&2; exit 1; }; printf "%s" "${GH_RULES:-[]}" > "$f" ;; '
+        '*/branches/*) echo "{}" > "$f" ;; *) echo \'{"default_branch":"main"}\' > "$f" ;; esac; '
         'while [ $# -gt 0 ]; do [ "$1" = --jq ] && q=$2; shift; done; jq -r "$q" "$f"; exit 0; fi\n'
         'if [ "$1 $2" = "run list" ]; then '
         + _queue(tmp_path, "runs", list(runs))
@@ -104,6 +110,14 @@ def run(
         "WATCH_MIN_INTERVAL": "0",
         "WE_STATE_DIR": str(tmp_path / "state"),
         "GH_RATE_DIR": str(tmp_path / "rate"),
+        "GH_RULES": json.dumps(
+            [
+                {
+                    "type": "required_status_checks",
+                    "parameters": {"required_status_checks": [{"context": n} for n in required]},
+                }
+            ]
+        ),
         **(env_extra or {}),
     }
     env.pop("WATCH_REPO", None)
@@ -539,7 +553,7 @@ def test_until_merged_stops_on_green_that_will_not_merge(tmp_path, patch, note):
             {"labels": [{"name": "docs"}, {"name": "review"}]},
             "label review: the human merges",
         ),
-        ({"hold_labels": ["review"]}, {"labels": [{"name": "docs"}]}, "arm: arm_pr.sh 57"),
+        ({"hold_labels": ["review"]}, {"labels": [{"name": "docs"}]}, UNKNOWN_CLASS),
     ],
     ids=["workflow-ready", "workflow-draft", "hold-label", "other-label"],
 )
@@ -566,9 +580,61 @@ def test_until_merged_says_auto_merge_off_once_and_watches_to_the_merge(tmp_path
     assert (code, out) == (
         0,
         [
-            f"waiting {SHA}: green · {MERGE} · auto-merge off — arm: arm_pr.sh 57 — watching to the merge",
+            f"waiting {SHA}: green · {MERGE} · auto-merge off — {UNKNOWN_CLASS} — watching to the merge",
             f"final {SHA}: merged",
         ],
+    )
+
+
+def _risk_clone(tmp_path, path):
+    """A clone whose origin/main carries the plugin's risk rules and a PR head commit touching
+    `path` beside it (not checked out); returns the head SHA."""
+
+    def git(*args):
+        return subprocess.run(
+            ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    (tmp_path / ".weside").mkdir()
+    shutil.copy(RISK_RULES, tmp_path / ".weside" / "risk-paths")
+    git("init", "-q", "-b", "main")
+    git("add", ".weside/risk-paths")
+    git("commit", "-q", "-m", "rules")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("checkout", "-q", "-b", "pr")
+    (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / path).write_text("x\n")
+    git("add", path)
+    git("commit", "-q", "-m", "head")
+    head = git("rev-parse", "HEAD")
+    git("checkout", "-q", "main")
+    return head
+
+
+@pytest.mark.parametrize(
+    ("path", "step"),
+    [
+        (
+            "we/scripts/arm_pr.sh",
+            "one-way brake-change: arm only after the human's yes on the board",
+        ),
+        ("README.md", "arm: arm_pr.sh 57"),
+    ],
+    ids=["one-way", "two-way"],
+)
+def test_auto_merge_off_names_a_one_way_class(tmp_path, path, step):
+    """Red arm: the hint said `arm: arm_pr.sh <PR>` for a one-way head too, an arm the human's yes
+    on the board has to come first for."""
+    head = _risk_clone(tmp_path, path)
+    unarmed = {**_green(), "headRefOid": head, "baseRefName": "main"}
+    code, out = run(tmp_path, [unarmed] * 3 + [{**unarmed, "state": "MERGED"}], "--until-merged")
+    assert (code, out[0]) == (
+        0,
+        f"waiting {head}: green · {MERGE} · auto-merge off — {step} — watching to the merge",
     )
 
 
@@ -1059,3 +1125,145 @@ def test_the_interval_never_drops_under_60_seconds(tmp_path):
         if " | sleep " in c
     ]
     assert slept and min(slept) == 60, slept
+
+
+REQUIRED_EARLY = [REAL["statusCheckRollup"][0]["name"]]  # the check run 7 reports
+
+
+def _merged_early(conclusion):
+    """A PR merged by hand while CI run 7 on its head still runs; the run then ends `conclusion`."""
+    open_run = {"databaseId": 7, "attempt": 1, "status": "in_progress", "conclusion": ""}
+    closed_run = {**open_run, "status": "completed", "conclusion": conclusion.lower()}
+    running = _pending(_green())
+    running["statusCheckRollup"][0]["detailsUrl"] = RUN_URL.format(7, 1)
+    merged = {**running, "state": "MERGED", "mergeCommit": {"oid": "m" * 40}}
+    done = copy.deepcopy(merged)
+    done["statusCheckRollup"][0].update(status="COMPLETED", conclusion=conclusion)
+    return [running, merged, merged, done], [[open_run], [open_run], [open_run], [closed_run]]
+
+
+@pytest.mark.parametrize("mode", [(), ("--until-merged",)])
+def test_a_merge_before_ci_ended_is_watched_to_merged_green(tmp_path, mode):
+    """Red arm: the watcher ended `final … merged` at the hand merge, the head's run still open."""
+    views, runs = _merged_early("SUCCESS")
+    code, out = run(tmp_path, views, *mode, runs=runs, required=REQUIRED_EARLY)
+    assert (code, out) == (
+        0,
+        [
+            f"merged {SHA} · merge commit {'m' * 12} before its CI ended — watching the head's runs to their end",
+            f"final {SHA}: merged-green · merge commit {'m' * 12}",
+        ],
+    )
+
+
+def test_a_merge_before_ci_ended_that_turns_red_has_its_own_exit(tmp_path):
+    views, runs = _merged_early("FAILURE")
+    code, out = run(tmp_path, views, "--until-merged", runs=runs, required=REQUIRED_EARLY)
+    name = REAL["statusCheckRollup"][0]["name"]
+    assert code == 15, out
+    assert out[-1] == (
+        f"final {SHA}: merged-red · merge commit {'m' * 12} · failed: {name}"
+        " — the base branch carries it: fix it first"
+    )
+
+
+@pytest.mark.parametrize("verdict", ["WARNING", "BLOCKING"])
+def test_a_codex_verdict_after_a_merge_before_ci_ended_ends_merged_red(tmp_path, verdict):
+    """Red arm: exit 6 sent a PR already merged to /we:ci-review, the base branch unnamed."""
+    views, runs = _merged_early("SUCCESS")
+    views = [_with_codex(views[0], status="IN_PROGRESS", conclusion="")] + [
+        _with_codex(v, "FAILURE") for v in views[1:]
+    ]
+    code, out = run(
+        tmp_path,
+        views,
+        "--until-merged",
+        runs=runs,
+        comments=[_codex(verdict)],
+        required=REQUIRED_EARLY,
+    )
+    assert (code, out[-1]) == (
+        15,
+        f"final {SHA}: merged-red · merge commit {'m' * 12} · codex {verdict}"
+        " — the base branch carries it: fix it first",
+    ), out
+
+
+@pytest.mark.parametrize(
+    "required, env",
+    [(["Python Lint & Format"], {}), (["Python Lint & Format"], {"GH_RULES_FAIL": "1"}), ([], {})],
+    ids=["required-green", "required-unreadable", "none-required"],
+)
+def test_an_auto_merge_past_an_open_non_required_run_is_the_end(tmp_path, required, env):
+    """Red arm: GitHub merged on green required checks while a non-required run was still open,
+    and the watcher read the merge as one past the checks: merged-red (exit 15) on that run's red."""
+    views, runs = _merged_early("FAILURE")
+    code, out = run(tmp_path, views, runs=runs, required=required, env_extra=env)
+    assert (code, out) == (0, [f"final {SHA}: merged · merge commit {'m' * 12}"])
+
+
+def test_a_run_created_after_the_merge_counts_for_nothing(tmp_path):
+    """A `pull_request: closed` workflow on the head, even one whose job carries a required name,
+    is no CI of the merged head: the red non-required check stays the merge's `(red: …)`."""
+    armed = {
+        **_failed_with_run("auto-merge"),
+        "autoMergeRequest": {"enabledAt": "x"},
+        "mergeStateStatus": "UNSTABLE",
+    }
+    merged = copy.deepcopy({**armed, "state": "MERGED", "mergedAt": "2026-10-04T04:00:00Z"})
+    merged["statusCheckRollup"][1].update(  # Python Lint & Format, from the closed-event run 8
+        status="QUEUED", conclusion="", startedAt=None, detailsUrl=RUN_URL.format(8, 1)
+    )
+    done = {"databaseId": 123, "attempt": 1, "status": "completed", "conclusion": "failure"}
+    late = {
+        "databaseId": 8,
+        "attempt": 1,
+        "status": "queued",
+        "conclusion": "",
+        "event": "pull_request",
+        "createdAt": "2026-10-04T04:00:05Z",
+    }
+    code, out = run(
+        tmp_path,
+        [armed, armed, armed, merged],
+        "--until-merged",
+        runs=[[done], [done], [done, late]],  # the first view is read before the loop
+        required=["Python Lint & Format"],
+    )
+    assert code == 7, out
+    assert out[-1] == f"final {SHA}: merged (red: auto-merge)"
+
+
+def test_a_merge_after_ci_ended_names_its_merge_commit(tmp_path):
+    merged = {**_green(), "state": "MERGED", "mergeCommit": {"oid": "m" * 40}}
+    code, out = run(tmp_path, [merged])
+    assert (code, out) == (0, [f"final {SHA}: merged · merge commit {'m' * 12}"])
+
+
+def test_a_failed_draft_run_replaced_by_an_open_run_prints_no_failure(tmp_path):
+    """Red arm: the draft run's red ci-summary printed `fail: ci-summary` while the ready run ran."""
+    d = _green()
+    base = d["statusCheckRollup"][1]
+    old_sum = copy.deepcopy(base)
+    old_sum.update(name="ci-summary", conclusion="FAILURE", detailsUrl=RUN_URL.format(100, 2))
+    d["statusCheckRollup"].append(old_sum)
+    draft = {
+        "databaseId": 100,
+        "attempt": 1,
+        "status": "completed",
+        "conclusion": "failure",
+        "workflowName": "CI",
+        "event": "pull_request",
+    }
+    queued = {**draft, "databaseId": 101, "status": "queued", "conclusion": ""}
+    done = {**queued, "status": "completed", "conclusion": "success"}
+    ready = copy.deepcopy(d)
+    new = copy.deepcopy(base)
+    new.update(
+        name="ci-summary", startedAt="2026-10-05T00:00:00Z", detailsUrl=RUN_URL.format(101, 4)
+    )
+    ready["statusCheckRollup"].append(new)
+    code, out = run(
+        tmp_path, [d, d, ready], runs=[[draft, queued], [draft, queued], [draft, done]]
+    )
+    assert (code, out) == (0, [f"final {SHA}: green · {MERGE}"])

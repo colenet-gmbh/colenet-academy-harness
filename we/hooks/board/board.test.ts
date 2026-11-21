@@ -252,7 +252,7 @@ test('update_asker words the asker\'s Update; answer_prompts overrides it like t
   expect(deliveriesPathOf('/home/me/.claude/we-state/board.json')).toBe('/home/me/.claude/we-state/board-deliveries.jsonl')
 })
 
-test('acceptVariantOf: a one-way merge-go with its PR is a hand merge, a task is taken, the rest a plain Accept', () => {
+test('acceptVariantOf: a one-way merge-go with its PR is the go, a task is taken, the rest a plain Accept', () => {
   expect(acceptVariantOf({ one_way: 'money', pr_url: 'u', kind: null })).toBe('accept_hand')
   expect(acceptVariantOf({ one_way: 'money', pr_url: null, kind: null })).toBeUndefined()
   expect(acceptVariantOf({ one_way: null, pr_url: null, kind: 'task' })).toBe('accept_task')

@@ -70,7 +70,9 @@ or later whose red lenses stand on WARNINGs alone count green with those warning
 Selected row; a BLOCKING stays red, and a T2 panel never reads it; ``lens_verdict.py`` owns the
 round, and every new plan subject is one: pick N with that in mind; ``max_rounds``: 2, the
 default, is the last round lenses run in, above it the lens holder decides, null turns the cap
-off; a ``warning_ok_after_rounds`` above it never carries), ``select`` (``refiner``: true, the
+off; a ``warning_ok_after_rounds`` above it never carries; ``lenses_when_t2``: [], the default,
+lenses ``lens_verdict.py plan ready`` adds after ``ready_lenses`` when a file the plan names is on a
+``path`` rule of ``.weside/risk-paths`` on ``risk.rules_from``, e.g. ``["security"]``), ``select`` (``refiner``: true, the
 default, lets a refiner select its own story where its epic plan allows; false makes the product
 role select every story of the crew, ``board.py select --refiner`` refuses), ``t2_panel``, ``risk``,
 ``fallback`` (role key -> role key or ``human_bundle``), ``local_rules``, ``acceptance``,
@@ -81,7 +83,8 @@ role select every story of the crew, ``board.py select --refiner`` refuses), ``t
 a JQL clause every signal query starts with, null = signals refused; ``claim_hours``: how long a ticket claim
 lives; ``shared_accounts``: ticketing accounts several humans write from (email or account id); a
 comment signed ``<role>@<human>`` speaks for that human only from that human's own account or one
-of these, ``board_humans.py``), ``sla``, ``limits``, ``naming``, ``launch`` (``worker``: the command template that
+of these, ``board_humans.py``; ``select_unlabel``: labels ``board.py select`` removes from the ticket
+in its carry, e.g. the owner's release label once the story is Selected), ``sla``, ``limits``, ``naming``, ``launch`` (``worker``: the command template that
 starts a process worker, the one owner of it in a repo with a crew (``worker_launch.backend``);
 ``subagent_fallback``; ``allow_bypass``: true makes ``wclaude``, ``pin.sh`` and ``we-worker`` add
 ``--allow-dangerously-skip-permissions``, so bypass is one Shift+Tab away while the start mode stays
@@ -104,11 +107,19 @@ reader stays silent), ``stale_min`` (minutes after which the newest line counts 
 ``starter_wait_min`` (minutes a chat wait is to wait on its starter before it becomes a question
 for the human), ``urgent_commands`` (regexes; a blocked command matching one is to mark its
 question urgent, never whether it is asked); ``load`` validates both, but no reader acts on them
-yet: the part-1b detector will; ``flow_log.py`` owns the line format), ``worker_rights`` (what a
+yet: the part-1b detector will; ``main_state_command`` (null or a command line whose exit code and
+first line are the default branch's verdict: exit 0 green, else red; the command centre's
+``command_center/ci_state.py`` runs it); ``tickets_stale_min`` (minutes after which the ticket snapshot
+``command_center/ticket_snapshot.py`` writes counts as stale); ``repos`` (``owner/name`` GitHub slugs the
+command centre reads beside the crew repo's ``origin``, without loading them into a session like
+``extra_repos``; ``command_center/gh_source.py`` ``repos_of`` reads it); ``flow_log.py`` owns the line format), ``worker_rights`` (what a
 process worker may do without asking and what it never does, all off by default: ``repos`` the
 ``owner/name`` slugs whose ``origin`` grants the rights, ``pr_ready``, ``pr_comment``, ``branch_rc``
 (a command prefix or null), ``deny_commands`` (command prefixes added to the never-list),
-``deny_text`` (strings no worker command may contain); ``worker_rights.py`` owns the rules). A key of ``RETIRED_KEYS`` (no reader left) is skipped with one line on
+``deny_text`` (strings no worker command may contain); ``worker_rights.py`` owns the rules). ``zentrale`` (the command centre's web view, ``command_center/crewd.py``: ``web_url`` the https URL
+the Zentrale pane links to, null = no link; ``link_hosts`` the hosts with an optional path prefix a
+link on the page may point to, e.g. ``github.com/acme``; ``peers`` the IP networks the server
+answers besides its own address: the proxy in front of it). A key of ``RETIRED_KEYS`` (no reader left) is skipped with one line on
 stderr naming the file, never a ``CrewError``, so a crew file written for an older release loads.
 
 ``load`` reads an unknown key (a key the schema does not name, a ``roles`` or ``fallback`` key
@@ -159,6 +170,7 @@ holding several roles is the one ``WE_ROLE_ID`` names (``role_of_session``).
 from __future__ import annotations
 
 import copy
+import ipaddress
 import json
 import os
 import re
@@ -259,7 +271,7 @@ DEFAULTS: dict[str, Any] = {
         "acceptance": _lens("acceptance", 5),
     },
     "ready_lenses": ["product", "architecture", "acceptance"],
-    "ready_panel": {"warning_ok_after_rounds": None, "max_rounds": 2},
+    "ready_panel": {"warning_ok_after_rounds": None, "max_rounds": 2, "lenses_when_t2": []},
     # refiner: false — no refiner selects its own story in this crew, whatever an epic plan says
     # (the product role selects every story, e.g. after a ticket owner's yes)
     "select": {"refiner": True},
@@ -305,6 +317,7 @@ DEFAULTS: dict[str, Any] = {
         "jql_scope": None,
         "claim_hours": 4,
         "shared_accounts": [],
+        "select_unlabel": [],
     },
     "sla": {"hours": 4, "daytime": "08-20", "tz": "UTC", "t2_second_reviewer": None},
     "limits": {
@@ -350,7 +363,15 @@ DEFAULTS: dict[str, Any] = {
     # refresh_after_days: a session started that many days ago is offered a fresh start
     # (session_refresh.py), whatever changed
     "sessions": {"refresh_after_days": 3},
-    "flow": {"log_dir": None, "stale_min": 15, "starter_wait_min": 30, "urgent_commands": []},
+    "flow": {
+        "log_dir": None,
+        "stale_min": 15,
+        "starter_wait_min": 30,
+        "urgent_commands": [],
+        "main_state_command": None,
+        "tickets_stale_min": 45,
+        "repos": [],
+    },
     "worker_rights": {
         "repos": [],
         "pr_ready": False,
@@ -359,6 +380,8 @@ DEFAULTS: dict[str, Any] = {
         "deny_commands": [],
         "deny_text": [],
     },
+    # the web view of the command centre (command_center/crewd.py)
+    "zentrale": {"web_url": None, "link_hosts": [], "peers": []},
 }
 # a null default takes a string or null; these take a number or null
 NUMBER_OR_NULL = (
@@ -703,6 +726,51 @@ def _check_signals(path: Path, value: Any) -> None:
             raise _fail(path, f"{dotted}.jql_window must be a number with m, h or d, like 35m")
 
 
+def _validate_board_lists(path, data):
+    """`board.shared_accounts`, `board.select_unlabel` and `merge.hold_labels`: each a list of
+    non-empty strings."""
+    for section, key, what in (
+        ("board", "shared_accounts", "account"),
+        ("board", "select_unlabel", "label"),
+        ("merge", "hold_labels", "label"),
+    ):
+        block = data.get(section) if isinstance(data.get(section), dict) else {}
+        found = block.get(key)
+        if found is not None and not (
+            isinstance(found, list) and all(isinstance(a, str) and a.strip() for a in found)
+        ):
+            raise _fail(path, f"{section}.{key} must be a list of {what} strings")
+
+
+def _validate_zentrale(path, data):
+    """`zentrale.web_url` an https URL or null; `zentrale.link_hosts` hosts with an optional path
+    (`github.com/acme`), no scheme; `zentrale.peers` IP networks (`10.0.0.0/16`)."""
+    block = data.get("zentrale") if isinstance(data.get("zentrale"), dict) else {}
+    url = block.get("web_url")
+    if url is not None and not (
+        isinstance(url, str) and re.fullmatch(r"https://[A-Za-z0-9.-]+(?::\d+)?/[^\s<>\"']*", url)
+    ):
+        raise _fail(path, "zentrale.web_url must be an https URL with a path, or null")
+    hosts = block.get("link_hosts", [])
+    if not (
+        isinstance(hosts, list)
+        and all(
+            isinstance(h, str)
+            and re.fullmatch(r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?:/[A-Za-z0-9._-]+)*", h)
+            for h in hosts
+        )
+    ):
+        raise _fail(path, "zentrale.link_hosts must be a list of hosts like github.com/acme")
+    peers = block.get("peers", [])
+    if not isinstance(peers, list):
+        raise _fail(path, "zentrale.peers must be a list of IP networks")
+    for peer in peers:
+        try:
+            ipaddress.ip_network(peer)
+        except (TypeError, ValueError):
+            raise _fail(path, f"zentrale.peers: {peer!r} is no IP network") from None
+
+
 def _validate(path: Path, data: dict[str, Any], *, paths: bool) -> None:
     """The hard checks, on ``data`` without its unknown keys."""
     for key in ("roles", "members"):
@@ -712,15 +780,8 @@ def _validate(path: Path, data: dict[str, Any], *, paths: bool) -> None:
     _validate_roles(path, data["roles"], slugs)
     if "humans" in data:
         _validate_humans(path, data, slugs)
-    shared = (
-        (data.get("board") or {}).get("shared_accounts")
-        if isinstance(data.get("board"), dict)
-        else None
-    )
-    if shared is not None and not (
-        isinstance(shared, list) and all(isinstance(a, str) and a.strip() for a in shared)
-    ):
-        raise _fail(path, "board.shared_accounts must be a list of account strings")
+    _validate_board_lists(path, data)
+    _validate_zentrale(path, data)
     for key, value in data.items():
         if key in ("lenses", "fallback") or key not in DEFAULTS:
             continue
@@ -741,6 +802,7 @@ def _validate(path: Path, data: dict[str, Any], *, paths: bool) -> None:
     _validate_choices(path, data)
     _validate_local_rules(path, data.get("local_rules", []))
     _validate_urgent_commands(path, data.get("flow", {}).get("urgent_commands", []))
+    _validate_flow_repos(path, data.get("flow", {}).get("repos", []))
     for key, text in data.get("labels", {}).items():
         if not _is_label(text):
             raise _fail(
@@ -776,6 +838,12 @@ def _validate_lenses(path: Path, data: dict[str, Any], slugs: set[str]) -> None:
         for lens in data.get(key, []):
             if lens not in lens_keys and lens not in FORMER_DEFAULT_LENSES:
                 raise _fail(path, f"{key}: {lens!r} is no lens")
+    panel = data.get("ready_panel") or {}
+    if not isinstance(panel, dict):
+        raise _fail(path, "ready_panel must be an object")
+    for lens in panel.get("lenses_when_t2") or []:
+        if lens not in lens_keys:
+            raise _fail(path, f"ready_panel.lenses_when_t2: {lens!r} is no lens")
 
 
 def _validate_urgent_commands(path: Path, patterns: list[str]) -> None:
@@ -786,6 +854,16 @@ def _validate_urgent_commands(path: Path, patterns: list[str]) -> None:
             raise _fail(
                 path, f"flow.urgent_commands[{i}] {pattern!r} is no regex ({exc})"
             ) from None
+
+
+REPO_SLUG = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+
+
+def _validate_flow_repos(path: Path, repos: list[str]) -> None:
+    """``_check`` already refused a non-list or a non-string entry; each entry is ``owner/name``."""
+    for i, repo in enumerate(repos):
+        if not REPO_SLUG.fullmatch(repo):
+            raise _fail(path, f"flow.repos[{i}] {repo!r} must be an owner/name GitHub slug")
 
 
 def _validate_local_rules(path: Path, rules: list[str]) -> None:

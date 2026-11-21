@@ -46,7 +46,7 @@ which story next, which worker, which fix. The WHAT stays with {product|the prod
   story and build what it does not block.
 - Never write the story's code in your own session (a CI fix of ≤ 5 lines without user-visible
   text excepted); dispatch a worker and review its diff.
-- Never arm a one-way diff (L0 §Risk tiers): post its T2 panel (`/we:lens t2`).
+- A one-way diff (L0 §Risk tiers): post its T2 panel (`/we:lens t2`), ask {human} via {coordinator}, arm it only after their yes.
 - Never restart a heavy gate run that ended without a verdict (`references/session-traps.md` § CI
   and checks). A review check that errored on quota or infrastructure you re-run once, after the cause is gone.
 

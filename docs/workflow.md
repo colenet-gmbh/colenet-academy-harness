@@ -54,7 +54,7 @@ flowchart TD
 
     %% ---------- Close ----------
     subgraph CLOSE["Close"]
-        C1("auto-merge armed per class<br/>(one-way: the owner's approve)")
+        C1("auto-merge armed per class<br/>(one-way: on the owner's go)")
         C2{{"owner merges"}}
         C3("/we:merged<br/>verify · tear down worktrees, branches, ports<br/>tickets → In Review")
         C4[["auto retro<br/>we:dev-medium runs /we:retro --auto"]]
@@ -179,4 +179,4 @@ worker or you moved the story. Its buttons start the verb the state calls for (`
 
 ## Deliver
 
-Claude arms auto-merge right after it opens the PR; the repo's required checks hold the merge. The computed one-way class merges on your approve or by your hand (`/we:master` § Close the run). Plan first: a code PR of a story whose plan `docs/plans/<KEY>-story.md` is not on `origin/main` yet waits for it; no hook enforces that. `/we:merged` closes out: worktrees, branches, processes, each landed story to In Review once its PR is linked; Done follows acceptance.
+Claude arms auto-merge right after it opens the PR; the repo's required checks hold the merge. The computed one-way class merges on your go: the session asks you through the coordinator and arms with `arm_pr.sh <PR>` once your yes comes back; the helper names the class on its output and on the PR (`/we:master` § Close the run). Plan first: a code PR of a story whose plan `docs/plans/<KEY>-story.md` is not on `origin/main` yet waits for it; no hook enforces that. `/we:merged` closes out: worktrees, branches, processes, each landed story to In Review once its PR is linked; Done follows acceptance.
