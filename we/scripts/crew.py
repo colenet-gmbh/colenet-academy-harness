@@ -110,8 +110,7 @@ question urgent, never whether it is asked); ``load`` validates both, but no rea
 yet: the part-1b detector will; ``main_state_command`` (null or a command line whose exit code and
 first line are the default branch's verdict: exit 0 green, else red; the command centre's
 ``command_center/ci_state.py`` runs it); ``tickets_stale_min`` (minutes after which the ticket snapshot
-``command_center/ticket_snapshot.py`` writes counts as stale: the coordinator writes it twice an
-hour and a tick may fall out at night); ``flow_log.py`` owns the line format), ``worker_rights`` (what a
+``command_center/ticket_snapshot.py`` writes counts as stale); ``flow_log.py`` owns the line format), ``worker_rights`` (what a
 process worker may do without asking and what it never does, all off by default: ``repos`` the
 ``owner/name`` slugs whose ``origin`` grants the rights, ``pr_ready``, ``pr_comment``, ``branch_rc``
 (a command prefix or null), ``deny_commands`` (command prefixes added to the never-list),

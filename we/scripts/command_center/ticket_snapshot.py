@@ -58,11 +58,11 @@ def stories(data) -> dict:
     if isinstance(data, list):
         out = {}
         for item in data:
-            status = (item.get("fields") or {}).get("status") if isinstance(item, dict) else None
-            status = status if status is not None else (item or {}).get("status")
-            name = status.get("name") if isinstance(status, dict) else status
             if not isinstance(item, dict) or not isinstance(item.get("key"), str):
                 raise ValueError("an issue without a key")
+            status = (item.get("fields") or {}).get("status")
+            status = status if status is not None else item.get("status")
+            name = status.get("name") if isinstance(status, dict) else status
             if not isinstance(name, str):
                 raise ValueError(f"{item['key']}: no status name")
             out[item["key"]] = name

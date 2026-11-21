@@ -447,7 +447,7 @@ def build(
         q_rows, obsolete, merge_go = question_rows(state, doc_board, who, until)
         header.append(f"obsolete questions: {obsolete}")
         rows += q_rows + wait_rows(who, until) + escalation_rows(state, who, until)
-        snap_path = ticket_file or board.with_name(f"{board.stem}-tickets.json")
+        snap_path = ticket_file or ticket_snapshot.path_for(board)
         snapshot, line, fresh = ticket_snapshot.read(
             snap_path,
             until,

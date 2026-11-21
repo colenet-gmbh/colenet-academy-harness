@@ -71,7 +71,8 @@ def test_write_is_atomic_with_its_fields(tmp_path, monkeypatch):
 @pytest.mark.parametrize("stdin", ["[1]", '{"ABC-1": 3}', '"text"', "not json"])
 def test_a_strange_answer_writes_nothing(tmp_path, stdin):
     out = run_write(tmp_path / "board.json", stdin)
-    assert out.returncode != 0 and list(tmp_path.iterdir()) == []
+    assert list(tmp_path.iterdir()) == []
+    assert out.returncode == 2 and "refused, nothing written" in out.stderr, out.stderr
 
 
 def test_no_other_write_path():
