@@ -35,7 +35,8 @@ PR owner rights (`build.pr_owner: worker` of `.weside/config.json`, read from th
 origin like the crew; `pr_owner_on_default`): the worker carries its own PR, so under the same key and
 branch conditions it may also run `git push` (`push`: every destination branch carries its key),
 `gh pr create` (`pr_create`: no argument, `--head` only its branch), `gh pr edit` and `gh pr comment`
-(`pr_edit`, `pr_comment`: its own PR), `arm_pr.sh` (`arm`: its own PR, never `--go`), `gh pr merge` (`merge`: its
+(`pr_edit`, `pr_comment`: its own PR), `arm_pr.sh` (`arm`: its own PR, and only with `WE_ROLE=worker` in
+the environment, the variable `arm_pr.sh` refuses a one-way class by), `gh pr merge` (`merge`: its
 own PR, either `--disable-auto` alone or `--match-head-commit <its checkout's HEAD>`, the line
 `arm_pr.sh` prints as `ready`, and only when `arm_pr.sh --check` answers
 `ready` on that HEAD, the one owner of those facts (hold labels, one-way class, every required name
@@ -784,8 +785,8 @@ def _arm_refusal(
     argv: list[str], slug: str | None, branch: str, cwd: str | None, deadline: float | None = None
 ) -> str | None:
     run = _arm_argv(argv)
-    if any(t.split("=", 1)[0] == "--go" for t in run[1:]):
-        return "arm_pr.sh --go: the human's go on a one-way PR reaches the session that asked, never a worker"
+    if os.environ.get("WE_ROLE") != "worker":  # a worker known by its marker only
+        return "arm_pr.sh without WE_ROLE=worker: arm_pr.sh refuses a worker's one-way class by it"
     repo = _flag_value(run[1:], "--repo", "-R")
     if repo and slug_of(repo) != slug:
         return f"{repo} is another repo than {slug}"
@@ -929,7 +930,8 @@ def _merge_facts_refusal(  # noqa: PLR0911
     """`arm_pr.sh --check` on this checkout's HEAD, because a worker can type the merge line
     without running the helper: the gate holds exactly the facts `ready` stands on (crew merge
     block, hold labels, one-way class, every required name green with absent as pending, the merge
-    state, the review decision), from the one script that owns them. Only `ready` on that HEAD
+    state, the review decision), from the one script that owns them, run with `WE_ROLE=worker` so
+    a one-way class refuses for a worker known by its marker only too. Only `ready` on that HEAD
     passes; any other line, an unreadable PR, a failed call or the deadline refuses. The script
     runs in its own process group, so a timeout kills its `gh`, `git` and classifier children too."""
     if not isinstance(number, int):
@@ -949,6 +951,7 @@ def _merge_facts_refusal(  # noqa: PLR0911
             stderr=subprocess.PIPE,
             text=True,
             cwd=cwd or None,
+            env={**os.environ, "WE_ROLE": "worker"},  # a one-way class is no `ready` for a worker
             start_new_session=True,
         )
     except OSError as exc:

@@ -811,7 +811,7 @@ export const registerBoard = (on: On, options: PluginOptions) => {
         q.key ? [{ text: q.key, dim: true }] : [],
       ]
       // A one-way merge waits for the owner's go: the PR link, and Accept as Go (the asking session arms
-      // with `arm_pr.sh --go <id>`; board.py close-merged drops the question once the PR merged).
+      // with `arm_pr.sh <PR>`; board.py close-merged drops the question once the PR merged).
       const handMerge = q.one_way && q.pr_url ? `merge go (${q.one_way}): ${q.pr_url}` : undefined
       // A question sent to a human on another machine (board.py ask --to): its answer comes from the ticket, so
       // the local human only withdraws it.

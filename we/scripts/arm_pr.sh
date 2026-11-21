@@ -2,7 +2,7 @@
 # shellcheck disable=SC2016  # GraphQL and jq variables stay literal
 # Arm one PR's auto-merge on the head it read. It never merges, in any branch of its code.
 #
-# Usage: arm_pr.sh <PR> [--method merge|squash|rebase] [--repo <owner/repo>] [--go Q<nr> | --check [--sha <sha>]]
+# Usage: arm_pr.sh <PR> [--method merge|squash|rebase] [--repo <owner/repo>] [--check [--sha <sha>]]
 #
 # Arms only through the GraphQL mutation `enablePullRequestAutoMerge`, with the head SHA it read as
 # `expectedHeadOid`: GitHub then merges that head once the repo's required checks pass, and a push
@@ -22,17 +22,15 @@
 # helper runs: in a checkout whose HEAD is the PR head on the checkout itself (`risk_runner.py here`,
 # uncommitted risk paths included), elsewhere on the head commit after a fetch of `pull/<PR>/head`
 # into `refs/we-arm/pr-<PR>`, dropped again after the class (`risk_runner.py head`). Outside a git
-# clone there is no class. Fail closed: no class is a refusal. A one-way class arms only with
-# `--go Q<nr>`, the number of the question that brought the human's go (the merge question goes
-# through the coordinator, `/we:master` § Close the run). The helper does not take the number on
-# trust: `board.py show Q<nr>` (beside this script; the board the caller's crew resolves, or
-# `WE_STATE_DIR`) must print a `merge-go` question whose `pr_url` is this repo's PR <N> and whose
-# status is `answered: accept`, the latest closing answer an Accept; an open question, a Deny, another
-# PR, an unknown id or an unreadable ledger refuses (fail closed). `close-merged` takes a merge-go
-# question off the queue only once its PR is merged or closed, and `show` falls back to its
-# `posted` line, so a pruned question still checks. After the arm, or before the `ready` line, a PR
-# comment `one-way: the human's go Q<nr> (armed)` or `(… ready for the printed merge)` records it.
-# `--go` on a PR that is not one-way changes nothing.
+# clone there is no class. Fail closed: no class is a refusal. A one-way class is no refusal: it
+# merges only after the human's yes on the board (the merge question goes through the coordinator,
+# `/we:master` § Close the run), and the session that asked arms it. The helper cannot tell a yes
+# from a session's own board line, so it does not check one; it says the class loudly instead: the
+# line `one-way <class>: merges only after the human's yes on the board (L0)` before the verdict,
+# and after the arm, or before the `ready` line, a PR comment `one-way <class> armed (armed)` or
+# `(ready for the printed merge)` with that reminder and `(head <sha>)`, once per head (a run that
+# finds the comment for this head does not post it again). A process worker (`WE_ROLE=worker`)
+# never arms a one-way class and gets no `ready` for it: the session that asked the human does.
 #
 # One verdict line and its exit code:
 #   armed: auto-merge on <sha> (<method>)                                        exit 0
@@ -46,10 +44,8 @@
 #   refused: label <name> — only the human merges it                             exit 4
 #   refused: armed by workflow — the step is gh pr ready                         exit 4
 #   refused: head moved <old> -> <new>                                           exit 5
-#   refused: --go <value> is no question number (Q<nr>)                          exit 4
-#   refused: one-way <class> — ask the human (merge question), then arm with --go Q<nr>   exit 6
+#   refused: one-way <class> — the session that asked the human arms it        exit 6  (WE_ROLE=worker)
 #   refused: one-way not classified (<why>) — the classifier failed or printed no class   exit 6
-#   refused: go Q<nr> is not the human's go on this PR (<reason>)               exit 9
 #   red: <names> on <sha> — not armed                                            exit 7
 #   no checks on <sha> after <n>s — not armed, run again                         exit 8
 #   not armed on <sha> after <n>s (<mergeStateStatus>, review <decision>) — run again   exit 8
@@ -64,8 +60,8 @@
 # `--check` reads once and arms nothing: the same facts as above (crew merge block, hold labels,
 # one-way class, required names absent = pending, mergeStateStatus, reviewDecision) give one line
 # and exit 0 only on `ready`. `--sha` binds it to that head (a different head is `refused: head
-# moved`). It takes no `--go`: a one-way class refuses. The worker rights gate calls it before a
-# worker's own merge line:
+# moved`). A one-way class prints its line first and refuses only a worker. The worker rights gate
+# calls it, with `WE_ROLE=worker`, before a worker's own merge line:
 #   ready: … (as above)                                                         exit 0
 #   pending: <names> on <sha> — not ready                                        exit 8
 #   not ready on <sha> (<mergeStateStatus>, review <decision>)                   exit 8
@@ -75,16 +71,15 @@
 # Env: ARM_INTERVAL (seconds between reads, default 10), ARM_REGISTER_TIMEOUT (default 300).
 set -uo pipefail
 
-usage() { echo "gh failed: usage: arm_pr.sh <PR> [--method merge|squash|rebase] [--repo <owner/repo>] [--go Q<nr> | --check [--sha <sha>]]"; exit 2; }
+usage() { echo "gh failed: usage: arm_pr.sh <PR> [--method merge|squash|rebase] [--repo <owner/repo>] [--check [--sha <sha>]]"; exit 2; }
 
-PR="" METHOD=merge REPO="" CHECK="" SHA="" GO="" ONE_WAY=""
+PR="" METHOD=merge REPO="" CHECK="" SHA="" ONE_WAY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --method) METHOD=${2:-}; shift 2 || usage ;;
     --repo|-R) REPO=${2:-}; shift 2 || usage ;;
     --check) CHECK=1; shift ;;
     --sha) SHA=${2:-}; shift 2 || usage ;;
-    --go) GO=${2:-}; shift 2 || usage ;;
     -h|--help) sed -n '3,/^set -uo/p' "$0" | sed '$d'; exit 0 ;;
     -*) usage ;;
     *) [ -z "$PR" ] || usage; PR=$1; shift ;;
@@ -93,10 +88,6 @@ done
 [[ "$PR" =~ ^[0-9]+$ ]] || usage
 case "$METHOD" in merge|squash|rebase) ;; *) usage ;; esac
 [ -z "$SHA" ] || { [ -n "$CHECK" ] && [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; } || usage
-if [ -n "$GO" ]; then
-  [[ "$GO" =~ ^Q[0-9]+$ ]] || { echo "refused: --go $GO is no question number (Q<nr>)"; exit 4; }
-  [ -z "$CHECK" ] || usage
-fi
 INTERVAL=${ARM_INTERVAL:-10}
 TIMEOUT=${ARM_REGISTER_TIMEOUT:-300}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -194,67 +185,21 @@ one_way() {  # the PR head's class against its base, wherever this runs; fail cl
   case "$line" in
     "T2 one-way "*)
       ONE_WAY=${line#T2 one-way }
-      [ -n "$GO" ] || { echo "refused: one-way $ONE_WAY — ask the human (merge question), then arm with --go Q<nr>"; exit 6; }
-      go_check ;;
+      if [ "${WE_ROLE:-}" = worker ]; then echo "refused: one-way $ONE_WAY — the session that asked the human arms it"; exit 6; fi
+      echo "one-way $ONE_WAY: merges only after the human's yes on the board (L0)" ;;
     T0 | T2) ;;
     *) echo "refused: one-way not classified (line 1: ${line:-empty})"; exit 6 ;;
   esac
 }
 
-go_check() {  # --go on a one-way PR: the board's question Q<nr> is the human's Accept on this PR; fail closed
-  local why
-  why=$(python3 - "$HERE/board.py" "$GO" "$REPO" "$PR" <<'PY'
-import json, re, subprocess, sys
-board, qid, repo, pr = sys.argv[1:]
-def no(reason):
-    print(reason)
-    sys.exit(0)
-def run(*verb):
-    try:
-        return subprocess.run([sys.executable, board, *verb], capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError) as exc:
-        no(f"ledger unreadable: {exc}")
-def last(res):
-    lines = [l for l in (res.stderr or "").splitlines() if l.strip()]
-    return lines[-1] if lines else f"board.py exit {res.returncode}"
-path = run("path")
-if path.returncode != 0:
-    no(f"ledger unreadable: {last(path)}")
-where = path.stdout.strip()
-try:
-    open(where).close()
-except OSError:
-    no(f"ledger unreadable: no board at {where}")
-res = run("show", qid)
-if res.returncode != 0:
-    no(f"{qid} is not on the board" if "neither owner_queue nor the logs" in res.stderr else f"ledger unreadable: {last(res)}")
-try:
-    q = json.loads(res.stdout)
-except ValueError:
-    no("ledger unreadable: board.py show printed no JSON")
-if not isinstance(q, dict):
-    no("ledger unreadable: board.py show printed no question")
-if q.get("cause") != "merge-go":
-    no(f"a {q.get('cause') or 'cause-less'} question, not a merge-go")
-url = str(q.get("pr_url") or "")
-m = re.search(r"github\.com/([^/\s]+/[^/\s]+)/pull/(\d+)", url)
-if not m or m.group(1).lower() != repo.lower() or int(m.group(2)) != int(pr):
-    no(f"it asks about {url or 'no PR'}, not {repo}#{pr}")
-status = q.get("status")
-if status != "answered: accept":
-    no(f"status {status}")
-closing = [a.get("answer") for a in q.get("answers") or [] if isinstance(a, dict) and a.get("answer") in ("accept", "deny", "withdraw")]
-if not closing or closing[-1] != "accept":
-    no(f"the latest answer is {closing[-1] if closing else 'none'}")
-PY
-)
-  [ -z "$why" ] || { echo "refused: go $GO is not the human's go on this PR ($why)"; exit 9; }
-}
-
-go_comment() {  # after an arm or a ready line of a one-way PR on --go: the PR records the go; never exits
-  [ -n "$ONE_WAY" ] && [ -n "$GO" ] || return 0
-  gh pr comment "$PR" --repo "$REPO" --body "one-way: the human's go $GO ($1)" >/dev/null 2>"$GH_ERR" \
-    || echo "go comment failed: $(gh_err)" >&2
+one_way_comment() {  # after an arm or before a ready line of a one-way PR: the class on the PR, once per head; never exits
+  [ -n "$ONE_WAY" ] || return 0
+  local tail="(head $SHA)" bodies
+  bodies=$(gh pr view "$PR" --repo "$REPO" --json comments --jq '.comments[].body' 2>/dev/null) || bodies=""
+  if grep -F -- "$tail" <<<"$bodies" | grep -q "^one-way $ONE_WAY armed "; then return 0; fi
+  gh pr comment "$PR" --repo "$REPO" \
+    --body "one-way $ONE_WAY armed ($1) — merges only after the human's yes on the board $tail" >/dev/null 2>"$GH_ERR" \
+    || echo "one-way comment failed: $(gh_err)" >&2
 }
 
 REQUIRED=""
@@ -283,7 +228,7 @@ pending_line() {  # after `armed:`: the head's required checks still pending, by
 arm() {  # 0 armed (exits), 1 GitHub calls the PR clean, exits on any other answer
   local out
   if out=$(gh api graphql -f query="$ARM" -f id="$ID" -f sha="$SHA" -f method="$(tr "[:lower:]" "[:upper:]" <<<"$METHOD")" 2>"$GH_ERR"); then
-    echo "armed: auto-merge on $SHA ($METHOD)"; pending_line; go_comment armed; exit 0
+    echo "armed: auto-merge on $SHA ($METHOD)"; pending_line; one_way_comment armed; exit 0
   fi
   local why; why=$(gh_err)
   if grep -qiE 'is in (clean|unstable) status' "$GH_ERR"; then return 1; fi
@@ -361,6 +306,6 @@ while :; do
       # required) and HAS_HOOKS merge like CLEAN: the required checks were judged by name above.
       case "$MSTATE" in CLEAN|UNSTABLE|HAS_HOOKS) ;; *) arm; continue ;; esac
       [ "$REVIEW" != REVIEW_REQUIRED ] && [ "$REVIEW" != CHANGES_REQUESTED ] || { arm; continue; }
-      go_comment "ready for the printed merge"; ready_line; exit 3 ;;
+      one_way_comment "ready for the printed merge"; ready_line; exit 3 ;;
   esac
 done

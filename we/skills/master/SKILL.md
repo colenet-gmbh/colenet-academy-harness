@@ -261,7 +261,7 @@ A worker briefed `PR owner: worker` runs steps 2–3 and its fix rounds; you act
   |---|---|---|
   | `T0`, `T2` | you: `${CLAUDE_PLUGIN_ROOT}/scripts/arm_pr.sh <PR>`, right after `gh pr create` | the repo's required checks (GitHub waits) |
   | `T2` with a card hit (`trust-loosening:`, `brake-review:` hit line) | you, the same arm | as `T2`; the security card verdict is a PR comment for the human and the security owner |
-  | `T2 one-way <class>` | you, only on the human's go: `arm_pr.sh <PR> --go Q<nr>` | the go, passed back with its question number, then the required checks |
+  | `T2 one-way <class>` | you, only after the human's yes on the board: `arm_pr.sh <PR>` | the yes, passed back with its question number, then the required checks |
   | `T? uncommitted changes under <path>` (exit 3), any other line or exit | nobody yet: the class is not known | commit or remove the file, classify again; `arm_pr.sh` refuses it (exit 6) |
 
   - `--method squash|rebase` when `.weside/orchestrate.md` names it. The helper never merges; act on
@@ -275,12 +275,12 @@ A worker briefed `PR owner: worker` runs steps 2–3 and its fix rounds; you act
     unchanged. It is input for the people who read the PR, not a condition of the arm.
   - **One-way:** post the T2 panel and the card verdict, then ask the merge question through the
     coordinator with the PR link, the class and both verdicts (its board item:
-    `board.py ask --cause merge-go --pr <url> --one-way <class>`). On the go it passes back with the
-    question number, arm with `arm_pr.sh <PR> --go Q<nr>` (it comments the go on the PR) and watch
-    `--until-merged`. No approve on GitHub is the go; without the go nothing arms it. A go holds for
-    the head it was asked on: a later push touching a file of the one-way class asks again.
-    `arm_pr.sh` checks the question on the board (`board.py show`): a `merge-go` on this PR whose
-    latest answer is an Accept, else it refuses.
+    `board.py ask --cause merge-go --pr <url> --one-way <class>`). On the yes it passes back with the
+    question number, arm with `arm_pr.sh <PR>` and watch `--until-merged`. No approve on GitHub is the
+    go; without the yes you do not arm it. A go holds for the head it was asked on: a later push
+    touching a file of the one-way class asks again. `arm_pr.sh` checks no board line (a session
+    could write one itself): it names the class on its output and in a PR comment, and refuses it
+    only to a worker, so the yes is yours to wait for.
   - Drafts: `/we:pr` step 4; a draft is no merge brake. Non-destructive migrations auto-merge serially
     (owner 03.10.2026): the second PR arms only after the first landed, merging `origin/<default>`,
     checking for one migration head, and pushing first. A fix round on an armed PR starts with

@@ -798,7 +798,7 @@ needs_jq = pytest.mark.skipif(not shutil.which("jq"), reason="the fake gh delega
 GREEN = [["Tests", "COMPLETED", "SUCCESS", True], ["Claude Review", "COMPLETED", "SUCCESS", True]]
 
 
-def _merge_line(world, read=None, required=("Tests", "Claude Review"), repo=None):
+def _merge_line(world, read=None, required=("Tests", "Claude Review"), repo=None, **env):
     """The worker's own merge line on its HEAD, with the PR read and the base's required names
     `arm_pr.sh --check` sees."""
     repo = repo or world["repo"]
@@ -810,6 +810,7 @@ def _merge_line(world, read=None, required=("Tests", "Claude Review"), repo=None
         cwd=repo,
         FAKE_GH_READ=str(world["tmp"] / "read.json"),
         FAKE_GH_REQUIRED=str(world["tmp"] / "required.json"),
+        **env,
     )
 
 
@@ -832,7 +833,6 @@ def test_under_worker_the_ready_merge_line_on_the_own_head_is_allowed(world):
         ("gh pr merge 8 --disable-auto", "not this branch's PR"),
         ("bash arm_pr.sh 8", "not this branch's PR"),
         ("arm_pr.sh --repo other/app 7", "another repo"),
-        ("arm_pr.sh 7 --go Q812", "arm_pr.sh --go"),
         ("git push origin HEAD:feat/ABC-99-other", "pushes only branches carrying ABC-12"),
         ("gh pr create --head feat/ABC-99-other", "its own branch"),
         ("gh pr edit 8 --title x", "not this branch's PR"),
@@ -1011,8 +1011,24 @@ def test_the_merge_line_check_refuses_once_the_deadline_is_spent(world):
     assert wr._own_pr("7", "acme/app", BRANCH, str(world["repo"]), time.monotonic() - 1)[0]
 
 
+def _marker_worker(world, session="s-w"):
+    """The `worker_launch.py` marker naming `session` as the worker of this tree."""
+    gd = subprocess.run(
+        ["git", "-C", str(world["repo"]), "rev-parse", "--absolute-git-dir"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    Path(gd, "we-worker.json").write_text(
+        json.dumps({"name": "ABC-12-hook", "key": KEY, "lead": "LEAD-1", "session_id": session})
+    )
+
+
 @needs_jq
-def test_under_worker_the_merge_line_is_denied_on_a_one_way_class(world):
+@pytest.mark.parametrize("by", ["env", "marker"])
+def test_under_worker_the_merge_line_is_denied_on_a_one_way_class(world, by):
+    """Red arm (marker): `arm_pr.sh --check` ran with the worker's env, and a worker known by its
+    marker only got `ready` for a one-way class, which `arm_pr.sh` no longer refuses by itself."""
     repo = world["repo"]
     (repo / ".weside" / "risk-paths").write_text("[brake-change]\npath src/brake.py\n")
     _git(repo, "add", ".weside/risk-paths")
@@ -1022,13 +1038,27 @@ def test_under_worker_the_merge_line_is_denied_on_a_one_way_class(world):
     (repo / "src" / "brake.py").write_text("x = 1\n")
     _git(repo, "add", "src/brake.py")
     _commit(repo, "brake")
-    decision, reason = _merge_line(world, {"checks": GREEN})
+    env = {}
+    if by == "marker":
+        _marker_worker(world)
+        env = {"session": "s-w", "WE_ROLE": None, "WE_STORY_KEY": None}
+    decision, reason = _merge_line(world, {"checks": GREEN}, **env)
     assert decision == "deny" and "refused: one-way brake-change" in reason, reason
 
 
-def test_a_spent_hook_deadline_refuses_every_gated_gh_read(world):
+def test_a_worker_known_by_its_marker_only_arms_nothing(world):
+    """`arm_pr.sh` refuses a worker's one-way class by `WE_ROLE=worker`; without it in the env the
+    arm would pass as a session's, so the gate denies the right."""
+    _pr_owner(world["repo"], "worker")
+    _marker_worker(world)
+    decision, reason = hook(world, "arm_pr.sh 7", session="s-w", WE_ROLE=None, WE_STORY_KEY=None)
+    assert decision == "deny" and "arm_pr.sh without WE_ROLE=worker" in reason, reason
+
+
+def test_a_spent_hook_deadline_refuses_every_gated_gh_read(world, monkeypatch):
     """The hook passes one deadline to every command of a call: a second `gh pr edit` after the
     first spent the budget refuses instead of running past the hook's timeout (which lets it by)."""
+    monkeypatch.setenv("WE_ROLE", "worker")  # the arm right holds only with it
     repo = str(world["repo"])
     _pr_owner(world["repo"], "worker")
     rights = wr.crew_rights(repo)

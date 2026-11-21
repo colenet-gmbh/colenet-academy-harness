@@ -243,7 +243,7 @@ export type BoardDeliveredKind = Exclude<BoardAnswerKind, 'read'>
 // The texts a delivery sends, each overridable by the board's `answer_prompts`: one per delivered kind
 // for the orchestrator (and the asker), `update_asker`, what Update asks of the asking session, and the
 // two Accepts with a meaning of their own: `accept_hand` (Go on a one-way merge-go with its PR, `{pr}`
-// standing for the PR link: the asking session arms with `arm_pr.sh --go <id>`) and `accept_task`
+// standing for the PR link: the asking session arms with `arm_pr.sh <PR>`) and `accept_task`
 // (Taken on a task).
 export type BoardAcceptVariant = 'accept_hand' | 'accept_task'
 export type BoardPromptKind = BoardDeliveredKind | 'update_asker' | BoardAcceptVariant

@@ -66,6 +66,12 @@ if args[0] == "api" and "/rules/branches/" in args[1]:
         [{"context": c} for c in json.load(open(os.path.join(d, "required.json")))]}}])
 if args[0] == "api" and "/branches/" in args[1]:
     out({"name": "main", "protection": {"required_status_checks": {"contexts": []}}})
+said = os.path.join(d, "comments.json")  # the PR's comment bodies; `pr comment` adds one
+if args[:2] == ["pr", "view"]:
+    out({"comments": [{"body": b} for b in (json.load(open(said)) if os.path.exists(said) else [])]})
+if args[:2] == ["pr", "comment"]:
+    bodies = json.load(open(said)) if os.path.exists(said) else []
+    json.dump([*bodies, args[args.index("--body") + 1]], open(said, "w"))
 sys.exit(0)  # anything else, `gh pr merge` included, "succeeds": the log is the witness
 """
 
@@ -108,16 +114,17 @@ def run(
     for name, items in (("reads", reads), ("arms", arms), ("required", required)):
         (tmp_path / f"{name}.json").write_text(json.dumps(items))
     gh = tmp_path / "bin" / "gh"
-    gh.parent.mkdir()
+    gh.parent.mkdir(exist_ok=True)
     gh.write_text(f"#!{sys.executable}\n{FAKE}")
     gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
     env = {
-        **os.environ,
+        **{
+            k: v for k, v in os.environ.items() if k != "WE_ROLE"
+        },  # a worker's suite: no worker arm
         "PATH": f"{gh.parent}:{os.environ['PATH']}",
         "FAKE_DIR": str(tmp_path),
         "ARM_INTERVAL": "0",
         "ARM_REGISTER_TIMEOUT": "2",
-        "WE_STATE_DIR": str(tmp_path / "state"),  # the board `--go` reads; never the live one
         **(env_extra or {}),
     }
     res = subprocess.run(
@@ -457,46 +464,10 @@ def comment_calls(calls):
     return [c for c in calls if c[:2] == ["pr", "comment"]]
 
 
-def go_board(
-    where,
-    qid="Q812",
-    pr_url="https://github.com/o/r/pull/7",
-    answers=("accept",),
-    cause="merge-go",
-    queued=True,
-):
-    """The board `board.py show` reads under `WE_STATE_DIR` (`run` points it at `<where>/state`):
-    question `qid` with its `posted` line, on the queue or (queued=False) pruned off it, and its
-    answer lines in order."""
-    state = where / "state"
-    state.mkdir(exist_ok=True)
-    q = {
-        "id": qid,
-        "key": "PROJ-1",
-        "cause": cause,
-        "pr_url": pr_url,
-        "ask": "merge?",
-        "recommendation": "yes",
-        "session": "m",
-        "ts": "2026-11-21T00:00:00Z",
-    }
-    (state / "board.json").write_text(json.dumps({"owner_queue": [q] if queued else []}))
-    lines = [{**q, "outcome": "posted"}]
-    if not queued:
-        lines.append({"id": qid, "ts": "2026-11-21T01:00:00Z", "outcome": "pruned"})
-    (state / "board-questions.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
-    (state / "board-answers.jsonl").write_text(
-        "".join(
-            json.dumps(
-                {"id": qid, "answer": a, "ts": f"2026-11-21T00:0{i + 1}:00Z", "session": "o"}
-            )
-            + "\n"
-            for i, a in enumerate(answers)
-        )
-    )
+LOUD = "one-way brake-change: merges only after the human's yes on the board (L0)"
 
 
-def go_said(how):
+def one_way_said(sha, how="armed"):
     return [
         "pr",
         "comment",
@@ -504,23 +475,87 @@ def go_said(how):
         "--repo",
         "o/r",
         "--body",
-        f"one-way: the human's go Q812 ({how})",
+        f"one-way brake-change armed ({how}) — merges only after the human's yes on the board (head {sha})",
     ]
 
 
-@pytest.mark.parametrize("extra", [(), ("--check",)], ids=["arm", "check"])
-def test_a_one_way_head_is_classified_from_another_checkout(tmp_path, extra):
-    """Red arm: a checkout that is not the PR head left the class to the caller (a stderr note),
-    so a one-way PR armed from the master's main checkout."""
+def test_a_one_way_head_from_another_checkout_is_armed_and_said_loudly(tmp_path):
+    """Red arm: a one-way class refused the arm until a go number the board had to hold; the
+    human's yes on the board is the brake now, and the helper names the class on stdout and the PR."""
     sha = one_way_head(tmp_path)
-    got, out, calls = run(tmp_path, [{"head": sha, "checks": PENDING}], ["ok"], extra=extra)
+    got, out, calls = run(tmp_path, [{"head": sha, "checks": PENDING}], ["ok"])
     assert (got, out) == (
-        6,
+        0,
+        [LOUD, f"armed: auto-merge on {sha} (merge)", "pending: Claude Review"],
+    )
+    assert len(arm_calls(calls)) == 1
+    assert comment_calls(calls) == [one_way_said(sha)]
+
+
+def test_a_ready_one_way_pr_is_said_on_the_pr_too(tmp_path):
+    sha = one_way_head(tmp_path)
+    got, out, calls = run(tmp_path, [{"head": sha, "checks": GREEN}], [CLEAN])
+    assert (got, out) == (
+        3,
         [
-            "refused: one-way brake-change — ask the human (merge question), then arm with --go Q<nr>"
+            LOUD,
+            f"ready: all required checks green on {sha} — merge: gh pr merge 7 --merge --match-head-commit {sha}",
+        ],
+    )
+    assert comment_calls(calls) == [one_way_said(sha, "ready for the printed merge")]
+
+
+def test_the_one_way_comment_comes_once_per_head(tmp_path):
+    """Red arm: a second arm on the same head commented again; another head's comment does not count."""
+    sha = one_way_head(tmp_path)
+    other = one_way_said(OLD)[-1]
+    (tmp_path / "comments.json").write_text(json.dumps([other]))
+    for _ in range(2):
+        got, out, _calls = run(tmp_path, [{"head": sha, "checks": PENDING}], ["ok"])
+        assert (got, out[0]) == (0, LOUD), out
+    calls = [json.loads(x) for x in (tmp_path / "calls.log").read_text().splitlines()]
+    assert comment_calls(calls) == [one_way_said(sha)]
+
+
+def test_check_says_a_one_way_class_and_refuses_nothing_for_it(tmp_path):
+    """Red arm: `--check` refused every one-way head, so it never answered `ready` for one."""
+    sha = one_way_head(tmp_path)
+    got, out, calls = run(
+        tmp_path, [{"head": sha, "checks": GREEN}], ["ok"], extra=("--check", "--sha", sha)
+    )
+    assert (got, out) == (
+        0,
+        [
+            LOUD,
+            f"ready: all required checks green on {sha} — merge: gh pr merge 7 --merge --match-head-commit {sha}",
         ],
     )
     assert arm_calls(calls) == [] and comment_calls(calls) == []
+
+
+@pytest.mark.parametrize("extra", [(), ("--check",)], ids=["arm", "check"])
+def test_a_worker_never_arms_a_one_way_class(tmp_path, extra):
+    """Red arm: a worker's refusal pointed it at a go number, a way the worker rights gate denies anyway."""
+    sha = one_way_head(tmp_path)
+    got, out, calls = run(
+        tmp_path,
+        [{"head": sha, "checks": GREEN}],
+        ["ok"],
+        extra=extra,
+        env_extra={"WE_ROLE": "worker"},
+    )
+    assert (got, out) == (
+        6,
+        ["refused: one-way brake-change — the session that asked the human arms it"],
+    )
+    assert arm_calls(calls) == [] and comment_calls(calls) == []
+
+
+def test_a_worker_still_arms_a_two_way_pr(tmp_path):
+    code, out, _calls = run(
+        tmp_path, [{"head": NEW, "checks": PENDING}], ["ok"], env_extra={"WE_ROLE": "worker"}
+    )
+    assert (code, out[0]) == (0, f"armed: auto-merge on {NEW} (merge)")
 
 
 def test_a_two_way_head_from_another_checkout_still_arms(tmp_path):
@@ -540,90 +575,6 @@ def test_a_head_missing_from_the_clone_is_not_classified(tmp_path):
     assert arm_calls(calls) == []
 
 
-@pytest.mark.parametrize("queued", [True, False], ids=["queued", "pruned"])
-def test_the_humans_go_arms_a_one_way_pr_and_says_so_on_it(tmp_path, queued):
-    sha = one_way_head(tmp_path)
-    go_board(tmp_path, queued=queued)
-    code, out, calls = run(
-        tmp_path, [{"head": sha, "checks": PENDING}], ["ok"], extra=("--go", "Q812")
-    )
-    assert (code, out) == (0, [f"armed: auto-merge on {sha} (merge)", "pending: Claude Review"])
-    assert len(arm_calls(calls)) == 1
-    assert comment_calls(calls) == [go_said("armed")]
-
-
-def test_the_humans_go_is_said_on_the_pr_when_it_is_ready_too(tmp_path):
-    """Red arm: the comment came only after `armed:`; a PR GitHub calls clean went to the `ready`
-    line, and its one-way merge on the go left no trace on the PR."""
-    sha = one_way_head(tmp_path)
-    go_board(tmp_path)
-    code, out, calls = run(
-        tmp_path, [{"head": sha, "checks": GREEN}], [CLEAN], extra=("--go", "Q812")
-    )
-    assert (code, out) == (
-        3,
-        [
-            f"ready: all required checks green on {sha} — merge: gh pr merge 7 --merge --match-head-commit {sha}"
-        ],
-    )
-    assert comment_calls(calls) == [go_said("ready for the printed merge")]
-
-
-@pytest.mark.parametrize(
-    ("board", "reason"),
-    [
-        (
-            {"pr_url": "https://github.com/o/r/pull/8"},
-            "it asks about https://github.com/o/r/pull/8, not o/r#7",
-        ),
-        (
-            {"pr_url": "https://github.com/o/other/pull/7"},
-            "it asks about https://github.com/o/other/pull/7, not o/r#7",
-        ),
-        ({"answers": ("deny",)}, "status answered: deny"),
-        ({"answers": ()}, "status open"),
-        ({"answers": ("discuss",)}, "status open"),
-        ({"cause": "plan"}, "a plan question, not a merge-go"),
-        ({"qid": "Q811"}, "Q812 is not on the board"),
-        (None, "ledger unreadable: no board at {state}/board.json"),
-    ],
-    ids=[
-        "other-pr",
-        "other-repo",
-        "deny",
-        "unanswered",
-        "discuss",
-        "not-merge-go",
-        "unknown",
-        "no-board",
-    ],
-)
-def test_a_go_the_board_does_not_hold_refuses(tmp_path, board, reason):
-    """Red arm: `--go Q<nr>` was taken on trust; any number armed a one-way PR."""
-    sha = one_way_head(tmp_path)
-    if board is not None:
-        go_board(tmp_path, **board)
-    got, out, calls = run(
-        tmp_path, [{"head": sha, "checks": PENDING}], ["ok"], extra=("--go", "Q812")
-    )
-    why = reason.format(state=tmp_path / "state")
-    assert (got, out) == (9, [f"refused: go Q812 is not the human's go on this PR ({why})"])
-    assert arm_calls(calls) == [] and comment_calls(calls) == []
-
-
-def test_a_ledger_board_py_cannot_read_refuses(tmp_path):
-    sha = one_way_head(tmp_path)
-    go_board(tmp_path)
-    (tmp_path / "state" / "board.json").write_text("{not json")
-    got, out, calls = run(
-        tmp_path, [{"head": sha, "checks": PENDING}], ["ok"], extra=("--go", "Q812")
-    )
-    assert got == 9 and out[0].startswith(
-        "refused: go Q812 is not the human's go on this PR (ledger unreadable: "
-    ), out
-    assert arm_calls(calls) == [] and comment_calls(calls) == []
-
-
 def pr_head_on_origin(tmp_path):
     """`work`, a clone whose origin (a bare repo) holds the one-way PR head only as
     `refs/pull/7/head`: the arm has to fetch it. Returns (work, sha)."""
@@ -641,19 +592,11 @@ def pr_head_on_origin(tmp_path):
     return work, sha
 
 
-@pytest.mark.parametrize(
-    ("extra", "code"), [((), 6), (("--go", "Q812"), 0)], ids=["refused", "armed"]
-)
-def test_the_fetched_pr_head_ref_is_dropped_after_the_class(tmp_path, extra, code):
+def test_the_fetched_pr_head_ref_is_dropped_after_the_class(tmp_path):
     """Red arm: every arm from another checkout left `refs/we-arm/pr-<N>` behind."""
     work, sha = pr_head_on_origin(tmp_path)
-    go_board(work)
-    got, out, _calls = run(work, [{"head": sha, "checks": PENDING}], ["ok"], extra=extra)
-    assert got == code, out
-    if code == 6:  # classified on the fetched head, so the fetch happened
-        assert out == [
-            "refused: one-way brake-change — ask the human (merge question), then arm with --go Q<nr>"
-        ]
+    got, out, _calls = run(work, [{"head": sha, "checks": PENDING}], ["ok"])
+    assert (got, out[0]) == (0, LOUD), out  # classified on the fetched head, so the fetch happened
     left = subprocess.run(
         ["git", "for-each-ref", "refs/we-arm/"],
         cwd=work,
@@ -675,31 +618,6 @@ def test_outside_a_git_clone_it_refuses(tmp_path):
     )
     assert (got, out) == (6, ["refused: one-way not classified (not a git checkout)"])
     assert arm_calls(calls) == [] and comment_calls(calls) == []
-
-
-def test_go_on_a_two_way_pr_arms_without_a_comment(tmp_path):
-    code, out, calls = run(
-        tmp_path, [{"head": NEW, "checks": PENDING}], ["ok"], extra=("--go", "Q812")
-    )
-    assert (code, out[0]) == (0, f"armed: auto-merge on {NEW} (merge)")
-    assert comment_calls(calls) == []
-
-
-@pytest.mark.parametrize("go", ["812", "q812", "Q", "Q81x", "--check"])
-def test_go_takes_only_a_question_number(tmp_path, go):
-    sha = one_way_head(tmp_path)
-    got, out, calls = run(tmp_path, [{"head": sha, "checks": PENDING}], ["ok"], extra=("--go", go))
-    assert (got, out) == (4, [f"refused: --go {go} is no question number (Q<nr>)"])
-    assert calls == [] or arm_calls(calls) == []
-
-
-def test_check_takes_no_go(tmp_path):
-    sha = one_way_head(tmp_path)
-    got, out, calls = run(
-        tmp_path, [{"head": sha, "checks": GREEN}], ["ok"], extra=("--check", "--go", "Q812")
-    )
-    assert got == 2 and out[-1].startswith("gh failed: usage:")
-    assert arm_calls(calls) == []
 
 
 def real_crew_checkout(tmp_path):
@@ -838,11 +756,7 @@ def test_the_plugin_classifier_rejects_core_grammar(tmp_path):
     [
         ('[ "$1" = origin/main ] || exit 2\nprintf "T0\\nreview: standard\\n"\n', None, None),
         ('printf "T2\\nreview: high\\n"\n', None, None),
-        (
-            'printf "T2 one-way brake-change\\nreview: high\\n"\n',
-            6,
-            "refused: one-way brake-change — ask the human (merge question), then arm with --go Q<nr>",
-        ),
+        ('printf "T2 one-way brake-change\\nreview: high\\n"\n', None, LOUD),
         (
             'echo "risk-class: rules parse error" >&2; exit 2\n',
             6,
@@ -864,11 +778,15 @@ def test_the_plugin_classifier_rejects_core_grammar(tmp_path):
 def test_the_arm_runs_the_crews_risk_command(tmp_path, extra, classifier, code, line):
     sha = command_crew(tmp_path, classifier)
     got, out, calls = run(tmp_path, [{"head": sha, "checks": PENDING}], ["ok"], extra=extra)
-    if code is None:  # classified two-way: the arm goes on to the checks
+    if code is None:  # classified: the arm goes on to the checks, a one-way class said first
+        said = [line] if line else []
         if extra:
-            assert (got, out) == (8, [f"pending: Claude Review on {sha} — not ready"])
+            assert (got, out) == (8, [*said, f"pending: Claude Review on {sha} — not ready"])
         else:
-            assert (got, out[0]) == (0, f"armed: auto-merge on {sha} (merge)")
+            assert (got, out[: len(said) + 1]) == (
+                0,
+                [*said, f"armed: auto-merge on {sha} (merge)"],
+            )
         return
     assert (got, out) == (code, [line])
     assert arm_calls(calls) == []
