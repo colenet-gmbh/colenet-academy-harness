@@ -70,6 +70,8 @@ said = os.path.join(d, "comments.json")  # the PR's comment bodies; `pr comment`
 if args[:2] == ["pr", "view"]:
     out({"comments": [{"body": b} for b in (json.load(open(said)) if os.path.exists(said) else [])]})
 if args[:2] == ["pr", "comment"]:
+    if os.environ.get("FAKE_COMMENT_FAILS"):
+        sys.stderr.write("HTTP 502: comment failed\n"); sys.exit(1)
     bodies = json.load(open(said)) if os.path.exists(said) else []
     json.dump([*bodies, args[args.index("--body") + 1]], open(said, "w"))
 sys.exit(0)  # anything else, `gh pr merge` included, "succeeds": the log is the witness
@@ -136,6 +138,7 @@ def run(
         timeout=30,
         check=False,
     )
+    (tmp_path / "stderr.log").write_text(res.stderr)
     log = tmp_path / "calls.log"
     calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
     merges = [c for c in calls if c[:2] == ["pr", "merge"] or "mergePullRequest" in " ".join(c)]
@@ -475,7 +478,7 @@ def one_way_said(sha, how="armed"):
         "--repo",
         "o/r",
         "--body",
-        f"one-way brake-change armed ({how}) — merges only after the human's yes on the board (head {sha})",
+        f"one-way brake-change {how} — merges only after the human's yes on the board (head {sha})",
     ]
 
 
@@ -503,6 +506,25 @@ def test_a_ready_one_way_pr_is_said_on_the_pr_too(tmp_path):
         ],
     )
     assert comment_calls(calls) == [one_way_said(sha, "ready for the printed merge")]
+
+
+@pytest.mark.parametrize(
+    ("checks", "arms", "code", "how"),
+    [(PENDING, ["ok"], 0, "armed"), (GREEN, [CLEAN], 3, "ready for the printed merge")],
+    ids=["armed", "ready"],
+)
+def test_a_failed_one_way_comment_leaves_the_verdict(tmp_path, checks, arms, code, how):
+    """The comment is a reminder, not a step of the arm: a failed post is one stderr line, and the
+    verdict and its exit code stay what they were."""
+    sha = one_way_head(tmp_path)
+    got, out, calls = run(
+        tmp_path, [{"head": sha, "checks": checks}], arms, env_extra={"FAKE_COMMENT_FAILS": "1"}
+    )
+    assert got == code and out[0] == LOUD, out
+    assert out[1].startswith("armed: " if code == 0 else "ready: "), out
+    assert comment_calls(calls) == [one_way_said(sha, how)]
+    err = (tmp_path / "stderr.log").read_text().splitlines()
+    assert err == ["one-way comment failed: HTTP 502: comment failed"], err
 
 
 def test_the_one_way_comment_comes_once_per_head(tmp_path):

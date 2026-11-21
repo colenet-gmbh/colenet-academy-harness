@@ -20,7 +20,9 @@ a ref pattern, `--all`, `--mirror`, `--branches`, any `git push` from a checkout
 `--no-verify`, `git commit -n`, `core.hooksPath`); merge (`gh pr merge --admin` or `--auto`; any
 other `gh pr merge` than `--disable-auto` unless it is the merge line below, typed as a command of
 its own under `build.pr_owner: worker`; any `gh pr merge` in a compound command, `--disable-auto`
-included); the crew's `deny_text` anywhere in the command.
+included; `arm_pr.sh` run anywhere in a command that names `WE_ROLE` or clears the environment
+(`env -i`, `exec -c`, `sudo`): the script refuses a worker's one-way class by that variable, and the
+gate cannot tell which value the script will see); the crew's `deny_text` anywhere in the command.
 
 Rights (crew `worker_rights`, read from the default branch of origin, never from the worktree; opt-in
 per repo, all off by default): in a repo whose `origin` is one
@@ -428,6 +430,50 @@ def normalised(text: str) -> str:
     return re.sub(r"""\$(?=['"])|['"\\]""", "", text)
 
 
+# a text that names WE_ROLE (unset, export, env -u, an assignment) or clears the environment of what
+# it runs: beside `arm_pr.sh` the gate cannot know the role the script reads its one-way refusal by
+_ROLE_CHANGE = re.compile(
+    r"WE_ROLE|\benv\b[^\n;|&]*\s(?:-[a-zA-Z]*i[a-zA-Z]*|--ignore-environment|-)(?=\s|$)"
+    r"|\bexec\s+-[a-zA-Z]*c|(?<![\w-])(?:sudo|doas|su)(?![\w-])"
+)
+
+
+def _role_touched(text: str) -> bool:
+    return bool(_ROLE_CHANGE.search(text) or _ROLE_CHANGE.search(normalised(text)))
+
+
+def _runs_arm(text: str, depth: int = 0) -> bool:
+    """Whether `text` runs `arm_pr.sh` anywhere: as a chain part, behind a wrapper or an assignment,
+    in a `bash -c` string, an `eval` or a substitution body (`hidden_right`'s reach, for every
+    owner). Nested past `MAX_DEPTH` counts as running it."""
+    if depth > MAX_DEPTH:
+        return True
+    text = _QUOTED_HEREDOC.sub(lambda m: f"<<{m[1]}{m[2]}{m[1]}{m[3]}{m[5]}", text)
+    if any(_runs_arm(inner, depth + 1) for inner in _substitutions(text)):
+        return True
+    for part in segments(text):
+        argv = strip_keywords(part)
+        wrapped = bool(argv) and (
+            os.path.basename(argv[0]) in WRAPPERS or bool(ASSIGNMENT.fullmatch(argv[0]))
+        )
+        for k in range(len(argv) if wrapped else min(len(argv), 1)):
+            if _arm_argv(argv[k:]) or _nested_arm(argv[k:], depth):
+                return True
+    return False
+
+
+def _nested_arm(argv: list[str], depth: int) -> bool:
+    """`arm_pr.sh` in the `-c` string of a shell or in the arguments of `eval` that `argv` runs."""
+    name = os.path.basename(argv[0])
+    if name in SHELLS:
+        for j in range(1, len(argv) - 1):
+            if re.fullmatch(r"-[a-zA-Z]*c[a-zA-Z]*", argv[j]):
+                return _runs_arm(argv[j + 1], depth + 1)
+    elif name == "eval":
+        return _runs_arm(" ".join(argv[1:]), depth + 1)
+    return False
+
+
 def never(  # noqa: PLR0911, PLR0912
     command: str, cwd: str | None, rights: dict | None = None, owner: str = "master"
 ) -> str | None:
@@ -440,6 +486,8 @@ def never(  # noqa: PLR0911, PLR0912
         found = compiled.search(text) or compiled.search(normalised(text))
         if found:
             return item.format(*(found.groups() or ("",)))
+    if _runs_arm(text) and _role_touched(text):
+        return "merge (arm_pr.sh beside a change of WE_ROLE)"
     if re.search(_GIT_PUSH, text):
         for where in _push_dirs(text, cwd):
             branch = current_branch(where)

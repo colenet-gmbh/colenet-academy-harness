@@ -1055,6 +1055,43 @@ def test_a_worker_known_by_its_marker_only_arms_nothing(world):
     assert decision == "deny" and "arm_pr.sh without WE_ROLE=worker" in reason, reason
 
 
+ROLE_CHANGES = [
+    "unset WE_ROLE; arm_pr.sh 7",
+    "export WE_ROLE=master && arm_pr.sh 7",
+    "export WE_ROLE=master\narm_pr.sh 7 --method squash",
+    "WE_ROLE= bash /plugin/scripts/arm_pr.sh 7",
+    "env -u WE_ROLE arm_pr.sh 7",
+    "env -i PATH=/usr/bin arm_pr.sh 7",
+    "bash -c 'unset WE_\"ROLE\"; arm_pr.sh 7'",
+    "declare +x WE_ROLE; eval arm_pr.sh 7",
+    "sudo -u x arm_pr.sh 7",
+]
+
+
+@pytest.mark.parametrize("owner", ["master", "worker"])
+@pytest.mark.parametrize("command", ROLE_CHANGES)
+def test_arm_pr_beside_a_change_of_we_role_is_denied(world, owner, command):
+    """Red arm: the gate reads `WE_ROLE` of its own process, `arm_pr.sh` that of the shell the chain
+    leaves it; a segment that unsets or exports the variable before the arm passed the gate and
+    armed a one-way PR as a session's."""
+    _pr_owner(world["repo"], owner)
+    decision, reason = hook(world, command)
+    assert decision == "deny", reason
+    assert "never for a worker (merge (arm_pr.sh beside a change of WE_ROLE))" in reason, reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -n WE_ROLE we/scripts/arm_pr.sh",
+        "sed -n 1,9p we/scripts/arm_pr.sh; echo $WE_ROLE",
+        "unset WE_ROLE; echo arm_pr.sh",
+    ],
+)
+def test_reading_arm_pr_beside_we_role_passes(world, command):
+    assert hook(world, command) == (None, "")
+
+
 def test_a_spent_hook_deadline_refuses_every_gated_gh_read(world, monkeypatch):
     """The hook passes one deadline to every command of a call: a second `gh pr edit` after the
     first spent the budget refuses instead of running past the hook's timeout (which lets it by)."""

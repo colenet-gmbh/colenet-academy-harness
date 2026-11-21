@@ -27,8 +27,8 @@
 # `/we:master` § Close the run), and the session that asked arms it. The helper cannot tell a yes
 # from a session's own board line, so it does not check one; it says the class loudly instead: the
 # line `one-way <class>: merges only after the human's yes on the board (L0)` before the verdict,
-# and after the arm, or before the `ready` line, a PR comment `one-way <class> armed (armed)` or
-# `(ready for the printed merge)` with that reminder and `(head <sha>)`, once per head (a run that
+# and after the arm, or before the `ready` line, a PR comment `one-way <class> armed` or
+# `one-way <class> ready for the printed merge` with that reminder and `(head <sha>)`, once per head (a run that
 # finds the comment for this head does not post it again). A process worker (`WE_ROLE=worker`)
 # never arms a one-way class and gets no `ready` for it: the session that asked the human does.
 #
@@ -196,9 +196,9 @@ one_way_comment() {  # after an arm or before a ready line of a one-way PR: the 
   [ -n "$ONE_WAY" ] || return 0
   local tail="(head $SHA)" bodies
   bodies=$(gh pr view "$PR" --repo "$REPO" --json comments --jq '.comments[].body' 2>/dev/null) || bodies=""
-  if grep -F -- "$tail" <<<"$bodies" | grep -q "^one-way $ONE_WAY armed "; then return 0; fi
+  if grep -F -- "$tail" <<<"$bodies" | grep -q "^one-way $ONE_WAY .* — merges only after "; then return 0; fi
   gh pr comment "$PR" --repo "$REPO" \
-    --body "one-way $ONE_WAY armed ($1) — merges only after the human's yes on the board $tail" >/dev/null 2>"$GH_ERR" \
+    --body "one-way $ONE_WAY $1 — merges only after the human's yes on the board $tail" >/dev/null 2>"$GH_ERR" \
     || echo "one-way comment failed: $(gh_err)" >&2
 }
 
