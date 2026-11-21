@@ -77,13 +77,23 @@ def bucketed_runner(cache: Path, now: datetime):
     return run
 
 
-def cached_required(repo: str, cache: Path, now: datetime, reader=None) -> list:
-    """`required_checks` through a file per repo and day bucket in the same cache directory."""
-    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", repo)
-    path = cache / f"required-{slug}-{int(now.timestamp()) // CLOSED_TTL_S}.json"
+def cached_required(
+    repo: str,
+    cache: Path,
+    now: datetime,
+    reader=None,
+    *,
+    branch: str | None = None,
+    ttl: int = CLOSED_TTL_S,
+) -> list:
+    """`required_checks` through a file per repo, branch and `ttl` bucket in the same cache
+    directory (`branch` None: the default branch, `reader(repo)`; else `reader(repo, branch)`)."""
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", repo + (f"@{branch}" if branch else ""))
+    path = cache / f"required-{slug}-{ttl}-{int(now.timestamp()) // ttl}.json"
     if path.is_file():
         return json.loads(path.read_text(encoding="utf-8"))
-    names = sorted((reader or fr.required_checks)(repo))
+    read = reader or fr.required_checks
+    names = sorted(read(repo, branch) if branch else read(repo))
     cache.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(names), encoding="utf-8")
     return names

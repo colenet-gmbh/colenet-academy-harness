@@ -107,7 +107,9 @@ reader stays silent), ``stale_min`` (minutes after which the newest line counts 
 ``starter_wait_min`` (minutes a chat wait is to wait on its starter before it becomes a question
 for the human), ``urgent_commands`` (regexes; a blocked command matching one is to mark its
 question urgent, never whether it is asked); ``load`` validates both, but no reader acts on them
-yet: the part-1b detector will; ``flow_log.py`` owns the line format), ``worker_rights`` (what a
+yet: the part-1b detector will; ``main_state_command`` (null or a command line whose exit code and
+first line are the default branch's verdict: exit 0 green, else red; the command centre's
+``command_center/ci_state.py`` runs it); ``flow_log.py`` owns the line format), ``worker_rights`` (what a
 process worker may do without asking and what it never does, all off by default: ``repos`` the
 ``owner/name`` slugs whose ``origin`` grants the rights, ``pr_ready``, ``pr_comment``, ``branch_rc``
 (a command prefix or null), ``deny_commands`` (command prefixes added to the never-list),
@@ -354,7 +356,13 @@ DEFAULTS: dict[str, Any] = {
     # refresh_after_days: a session started that many days ago is offered a fresh start
     # (session_refresh.py), whatever changed
     "sessions": {"refresh_after_days": 3},
-    "flow": {"log_dir": None, "stale_min": 15, "starter_wait_min": 30, "urgent_commands": []},
+    "flow": {
+        "log_dir": None,
+        "stale_min": 15,
+        "starter_wait_min": 30,
+        "urgent_commands": [],
+        "main_state_command": None,
+    },
     "worker_rights": {
         "repos": [],
         "pr_ready": False,

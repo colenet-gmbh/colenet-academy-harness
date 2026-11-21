@@ -1939,7 +1939,7 @@ def cmd_signals(state, args, crew, now):
     _scope_guard(crew, wanted)
     board = state.board()
     remote = [  # only open questions: an Accept or Deny ends the read-back
-        q for q in _open_questions(state, board)[0] if q.get("to") and q.get("to") != slug
+        q for q in open_questions(state, board)[0] if q.get("to") and q.get("to") != slug
     ]
     hits, searches, tickets, keys = [], [], {}, []
     for sig in wanted:
@@ -2274,7 +2274,7 @@ def cmd_decision(state, args, crew, now):
     return 0
 
 
-def _open_questions(state, board):
+def open_questions(state, board):
     """`owner_queue` questions no Accept, Deny or Withdraw closed: (open, obsolete). Open ones
     urgent first, each group oldest `since` first; obsolete ones (a resolved prompt,
     `blocked --clear`) apart."""
@@ -2406,7 +2406,7 @@ def cmd_bundle(state, args, crew, now):
         lines = state.decisions()
         last_marker = max((i for i, d in enumerate(lines) if "bundle" in d), default=-1)
         fresh = [d for d in lines[last_marker + 1 :] if d.get("kind") == "decision"]
-        open_items, obsolete = _open_questions(state, board)
+        open_items, obsolete = open_questions(state, board)
         open_ids = [q["id"] for q in open_items]
         escalations = [
             r
