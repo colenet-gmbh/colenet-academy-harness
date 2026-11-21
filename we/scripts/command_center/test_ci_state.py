@@ -61,6 +61,8 @@ def test_main_state(tmp_path, monkeypatch):
         "fetched_at": hung["fetched_at"],
     }
     assert ci_state.main_state(None, UNTIL, cache)["line"] == "main state: not read (no source)"
+    # the same command run in another repo is its own cache entry, not the first one's verdict
+    assert ci_state.main_state(str(script), later, cache, cwd=tmp_path)["state"] != "green"
 
 
 def test_main_in_red_section_and_default_head_apart(tmp_path, monkeypatch):

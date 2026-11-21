@@ -40,6 +40,7 @@ def read_repo(run, repo: str, required_reader) -> dict:
     data = run({"query": fr.OPEN_PRS_QUERY, "variables": {"owner": owner, "name": name}})
     node = data["data"]["repository"] or {}
     numbers = [n["number"] for n in (node.get("pullRequests") or {}).get("nodes") or [] if n]
+    more = bool(((node.get("pullRequests") or {}).get("pageInfo") or {}).get("hasNextPage"))
     prs = fr.open_pr_states(run, repo, numbers)
     required: dict = {}
     for pr in prs.values():
@@ -52,6 +53,7 @@ def read_repo(run, repo: str, required_reader) -> dict:
     return {
         "repo": repo,
         "prs": prs,
+        "more": more,
         "required": required,
         "default": {
             "branch": head.get("name"),
