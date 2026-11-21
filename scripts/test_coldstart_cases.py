@@ -161,19 +161,21 @@ def test_the_unbound_t2_oneway_case_keeps_waiting_on_the_human_alone():
     assert _lists(case)["waits"] == ["human"]
 
 
-def test_the_t2_oneway_case_routes_a_question_and_arms_on_the_go():
-    """The one-way case's master asks the human through the coordinator and arms on the go it gets
-    back with the question number; no approve on GitHub is the go. Red arm: the L0 that made the
-    human's approve the go."""
+def test_the_t2_oneway_case_routes_a_question_and_arms_after_the_yes():
+    """The one-way case's master asks the human through the coordinator and arms with `arm_pr.sh`
+    once the yes is back; no approve on GitHub and no go number is the yes. The case's route must be
+    one the rendered L0 gives, and nothing the case forbids may stand in it. Red arm: the L0 that
+    made the master arm with `arm_pr.sh --go Q<nr>`."""
     case = REPO / "tests" / "coldstart" / "master" / "t2-oneway-human-merges.yaml"
     forbidden = _lists(case)["forbidden"]
-    assert "gh pr review --approve" in forbidden and "please approve" in forbidden
+    assert {"gh pr review --approve", "please approve", "arm_pr.sh --go"} <= set(forbidden)
     [route] = ROUTE.findall(case.read_text(encoding="utf-8"))
     l0, _card = _rendered(GENERIC_FIXTURE)
     one_way = l0.split("- **One-way is a computed class:**", 1)[1].split("\n- ", 1)[0]
     flat = " ".join(one_way.split())
     assert re.search(route.encode().decode("unicode_escape"), flat), flat
-    assert "on Hal's go" in flat and "`arm_pr.sh --go Q<nr>`" in flat
+    assert "`arm_pr.sh`" in flat
+    assert [f for f in forbidden if f in flat] == [], flat
     assert "approve" not in flat
 
 

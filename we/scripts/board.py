@@ -89,7 +89,7 @@ ask      posts a question for the owner after a cold reader (`cold_reader.py`) u
          PR (`gh pr view`), else it is refused before the reader; the item keeps `pr_url`.
          `--one-way <class>` (only with merge-go) stamps `one_way`: the pane then names Accept
          Go (it writes `accept`) beside the PR link; the asking session arms on it with
-         `arm_pr.sh --go <id>`.
+         `arm_pr.sh <PR>`.
          `--kind task` stamps `kind: task` (the pane labels
          Accept as Taken when the task carries a recommendation). `--source <command or link>` stamps where the ask's fact comes from (the
          pane shows it). `--owner <member>` or `--component <name>` (the member whose `components`

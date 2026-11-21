@@ -16,7 +16,7 @@
   a story on from it, and an In Test step exists only where the crew maps it.
   [docs/workflow.md](docs/workflow.md#several-humans) · tour page: [Several humans, one crew](https://plugin.weside.ai/tour/humans/)
 
-Claude arms auto-merge right after it opens the PR, unless the diff falls in the computed one-way class (money path, destructive migration, Terraform or secrets, the brake's own code): those merge on your go: the session asks you, and on your answer arms with `arm_pr.sh --go Q<nr>`. Who merges what: [`/we:master` § Close the run](we/skills/master/SKILL.md#close-the-run). These merge rules are instructions and permission prompts, not a boundary: what holds against outsiders is your repository's ruleset (required checks, code owners) and how you handle secrets. `/we:merged` cleans up afterwards.
+Claude arms auto-merge right after it opens the PR, unless the diff falls in the computed one-way class (money path, destructive migration, Terraform or secrets, the brake's own code): those merge on your go: the session asks you on the board and arms only after your yes; `arm_pr.sh` names the class on the PR. Who merges what: [`/we:master` § Close the run](we/skills/master/SKILL.md#close-the-run). These merge rules are instructions and permission prompts, not a boundary: what holds against outsiders is your repository's ruleset (required checks, code owners) and how you handle secrets. `/we:merged` cleans up afterwards.
 
 `/flow` shows where each story stands while this runs: a pane with one traffic light per pipeline
 step, refreshed from git and GitHub, with buttons for the next command.

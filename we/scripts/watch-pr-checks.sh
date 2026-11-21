@@ -12,7 +12,10 @@
 #                     no review does not end it while the PR can still merge (armed, mergeStateStatus
 #                     CLEAN, UNSTABLE or HAS_HOOKS: GitHub merges past a red non-required check).
 #                     Green with auto-merge off prints `waiting <sha>: green · merge: <state> · auto-merge
-#                     off — <who arms it> — watching to the merge` once per head and keeps polling (a
+#                     off — <who arms it> — watching to the merge` once per head and keeps polling
+#                     (`arm_step`: a one-way class of the head, by the classifier arm_pr.sh asks, says
+#                     `one-way <class>: arm only after the human's yes on the board`; a
+#                     head it cannot classify adds `(class unknown: …)` to `arm: arm_pr.sh <PR>`) (a
 #                     BLOCKED past WATCH_BLOCKED_GRACE still ends it, armed or not), and a
 #                     moved head prints `head moved <old> -> <new> — watching it` and is followed: a
 #                     watcher that ended there left its master sitting next to a PR that merged later.
@@ -294,7 +297,26 @@ arm_step() {  # who arms this unarmed PR: a hold label's human, the repo's workf
     else echo "the repo's workflow arms a ready PR"; fi
     return
   fi
-  echo "arm: arm_pr.sh $PR"
+  local class; class=$(one_way_of "$SHA" "$(field 8)")
+  case "$class" in
+    -) echo "arm: arm_pr.sh $PR" ;;
+    "") echo "arm: arm_pr.sh $PR (class unknown: a one-way class arms only after the human's yes on the board)" ;;
+    *) echo "one-way $class: arm only after the human's yes on the board" ;;
+  esac
+}
+one_way_of() {  # one_way_of <head> <base>: the head's one-way class, "-" for none, "" when unknown
+  # The classifier arm_pr.sh asks (risk_runner.py head, the head commit fetched first when this
+  # clone lacks it); a non-zero exit or an unknown line 1 is no class (fail closed).
+  local out line
+  [ -n "$1" ] && [ -n "$2" ] || return 0
+  git cat-file -e "$1^{commit}" 2>/dev/null \
+    || GIT_TERMINAL_PROMPT=0 git fetch -q --no-tags origin "$1" 2>/dev/null || true
+  out=$(python3 "$(dirname "${BASH_SOURCE[0]}")/risk_runner.py" head "$1" "origin/$2" 2>/dev/null) || return 0
+  line=$(head -n 1 <<<"$out")
+  case "$line" in
+    "T2 one-way "*) echo "${line#T2 one-way }" ;;
+    T0 | T2) echo "-" ;;
+  esac
 }
 merge_stuck() {  # green, but GitHub will not merge it by itself
   # BLOCKED while green and armed is normal for seconds before the merge; only after BLOCKED_GRACE
