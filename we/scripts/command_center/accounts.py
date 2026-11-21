@@ -10,7 +10,8 @@ reads cswap's stores without a network request, a token refresh or a write; a pl
 as a fallback either. A cswap that refuses the flag (exit 2 naming it) gives `accounts: not read
 (cswap without --store-only)`, a missing one `accounts: not read (no cswap)`.
 
-Each account passes `allow` and carries only `ALLOWED`: `name` (the alias, else the email),
+Each account passes `allow` and carries only `ALLOWED`: `name` (the alias, else `account <n>` from cswap's slot
+number; never the email, which the web view redacts to one indistinguishable marker),
 `active`, `in_rotation` (not `disabled`), `five_hour` and `seven_day` (`{pct, resets_at}`),
 `threshold`, `status` (cswap's `usageStatus`), `measured_at` and `age_s` (the store entry's
 `storeFetchedAt`/`storeAgeSeconds`, null without one). Every other key (tokens, organisation,
@@ -67,8 +68,10 @@ def allow(raw: dict) -> dict:
     age = raw.get("storeAgeSeconds")
     age = int(age) if isinstance(age, (int, float)) else None
     threshold = raw.get("threshold")
+    number = raw.get("number")
+    slot = number if isinstance(number, int) and not isinstance(number, bool) else "?"
     return {
-        "name": str(alias if isinstance(alias, str) and alias else raw.get("email") or "?"),
+        "name": alias if isinstance(alias, str) and alias else f"account {slot}",
         "active": raw.get("active") is True,
         "in_rotation": raw.get("disabled") is not True,
         "five_hour": window(raw.get("usage") or {}, "fiveHour"),
@@ -96,7 +99,8 @@ def judge(accounts: list) -> tuple:
     for a in accounts:
         if a["status"] != "ok":
             a["red"] = True
-            lines.append(f"account {a['name']}: {a['status']}")
+            label = a["name"] if a["name"].startswith("account ") else f"account {a['name']}"
+            lines.append(f"{label}: {a['status']}")
     rotation = [a for a in accounts if a["in_rotation"]]
     if rotation and all(at_limit(a) for a in rotation):
         lines.append("accounts: every account in rotation at its threshold")

@@ -128,8 +128,12 @@ def test_allowlist_red_arm(tmp_path, monkeypatch):
         "stale": False,
         "red": False,
     }
-    assert two["name"] == "two@example.com" and two["red"] and two["stale"]
-    assert doc["red"] == ["account two@example.com: token_expired"]
+    # without an alias the slot number names it, never the email (the web view redacts an email
+    # to one marker, so two such accounts would read the same)
+    assert two["name"] == "account 2" and two["red"] and two["stale"]
+    assert doc["red"] == ["account 2: token_expired"]
+    assert "two@example.com" not in json.dumps(doc)
+    assert accounts.allow({"email": "x@example.com"})["name"] == "account ?"
     assert (
         all(c == list(accounts.ARGV) for c in calls(tmp_path))
         and "--store-only" in calls(tmp_path)[0]

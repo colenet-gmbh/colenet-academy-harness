@@ -30,7 +30,7 @@ const doc = (fast: boolean, extra: Partial<ZentraleDoc['sections']> = {}, gaps: 
     waiting: [row('beta-3', { kind: 'wait', holder: 'release (no session)', for: 'beta-3', master: '', title: '', age: '1h00' })],
     working: [session('lead')],
     ci: { repos: [], locks: 'locks: not read (flow.log_dir unset)' },
-    accounts: [account('dev', { active: true }), account('two@example.com', { status: 'token_expired', red: true })],
+    accounts: [account('dev', { active: true }), account('account 2', { status: 'token_expired', red: true })],
     ...extra,
   },
 })
@@ -62,7 +62,7 @@ function world(on: Parameters<Parameters<typeof test>[1]>[1], full: () => Promis
     ran.push([...e.argv])
     const script = String(e.argv[2] ?? '')
     if (script.endsWith('/zentrale.py')) return e.argv.includes('--fast') ? RUN(JSON.stringify(doc(true, {}, ['github: loading']))) : full()
-    if (script.endsWith('/crewd.py')) return RUN(JSON.stringify(web))
+    if (script.endsWith('/crewd.py')) return typeof web === 'function' ? web() : RUN(JSON.stringify(web))
     if (script.endsWith('/flow_intervals.py')) return RUN(JSON.stringify({ intervals: INTERVALS }))
     if (e.argv[0] === 'python3') return RUN('{"sessions":[]}')
     return RUN('')
@@ -124,7 +124,7 @@ test('/board: Zentrale opens the sections in order, an empty one says nothing, a
     '  nothing',
     'Accounts',
     '  dev (active) · 5h 40 % · 7d 70 % · limit 80 % · ok',
-    '  two@example.com · 5h 40 % · 7d 70 % · limit 80 % · token_expired',
+    '  account 2 · 5h 40 % · 7d 70 % · limit 80 % · token_expired',
     '[ Refresh ]  [ Swimlanes ]  as of 21:10 UTC',
   ])
 })
@@ -146,6 +146,22 @@ for (const [name, web, line] of [
     expect(lines.join('\n').includes('https://')).toBe(web.url !== null)
   })
 }
+
+// readWeb's catch: a probe that prints no JSON keeps the last URL and says the server does not answer
+test('Zentrale: a broken probe keeps the url and reads not alive (AC9)', async ($, on) => {
+  let probe = () => RUN(JSON.stringify(WEB))
+  const { clock } = world(on, () => RUN(JSON.stringify(doc(false))), () => probe())
+  await openFromBoard($, clock)
+  await clock.settle()
+  probe = () => RUN('not json')
+  const pane = await $.ui.mount({ plugin: 'we', surface: 'terminal', component: 'Pane', requestId: 'we-zentrale', props: { bodyColumns: 110 } as never })
+  await pane.press({ key: 'refresh' })
+  await pane.unmount()
+  await clock.settle()
+  const { ui, lines } = await draw($)
+  await ui.unmount()
+  expect(lines[1]).toBe('Web: https://crew.example.org/crew/ · server does not answer')
+})
 
 test('the first draw waits on no slow source; a second read of a kind does not start while one runs', async ($, on) => {
   let release: (v: unknown) => void = () => undefined
