@@ -452,7 +452,9 @@ A `merge-go` question also needs `--pr <ref>` (a URL, `<owner>/<repo>#<n>` or a 
 `gh pr view` reads as `OPEN`; a merged or closed one is refused before the reader, so no question
 asks about a merge that already happened. `--one-way <class>` (merge-go only) marks a one-way PR:
 the card offers the link and **Go**: an Accept is the owner's go, and the asking session arms the
-PR with `arm_pr.sh --go <id>` (no approve on GitHub is the go). `board.py close-merged`
+PR with `arm_pr.sh --go <id>` (no approve on GitHub is the go); the helper reads `board.py show <id>`
+and arms only a `merge-go` on that PR with `status: answered: accept`, fail closed on any other
+answer, PR or an unreadable board. `board.py close-merged`
 (also run by `bundle` and `/we:merged`) removes every merge question still in `owner_queue` whose
 PR merged or closed, whatever its answer (a Go, the owner's hand merge) and in whichever repo
 its `pr_url` points, logs one `closed` line each in `board-questions.jsonl` and prints

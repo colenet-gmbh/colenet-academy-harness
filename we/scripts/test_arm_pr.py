@@ -117,6 +117,7 @@ def run(
         "FAKE_DIR": str(tmp_path),
         "ARM_INTERVAL": "0",
         "ARM_REGISTER_TIMEOUT": "2",
+        "WE_STATE_DIR": str(tmp_path / "state"),  # the board `--go` reads; never the live one
         **(env_extra or {}),
     }
     res = subprocess.run(
@@ -456,6 +457,57 @@ def comment_calls(calls):
     return [c for c in calls if c[:2] == ["pr", "comment"]]
 
 
+def go_board(
+    where,
+    qid="Q812",
+    pr_url="https://github.com/o/r/pull/7",
+    answers=("accept",),
+    cause="merge-go",
+    queued=True,
+):
+    """The board `board.py show` reads under `WE_STATE_DIR` (`run` points it at `<where>/state`):
+    question `qid` with its `posted` line, on the queue or (queued=False) pruned off it, and its
+    answer lines in order."""
+    state = where / "state"
+    state.mkdir(exist_ok=True)
+    q = {
+        "id": qid,
+        "key": "PROJ-1",
+        "cause": cause,
+        "pr_url": pr_url,
+        "ask": "merge?",
+        "recommendation": "yes",
+        "session": "m",
+        "ts": "2026-11-21T00:00:00Z",
+    }
+    (state / "board.json").write_text(json.dumps({"owner_queue": [q] if queued else []}))
+    lines = [{**q, "outcome": "posted"}]
+    if not queued:
+        lines.append({"id": qid, "ts": "2026-11-21T01:00:00Z", "outcome": "pruned"})
+    (state / "board-questions.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
+    (state / "board-answers.jsonl").write_text(
+        "".join(
+            json.dumps(
+                {"id": qid, "answer": a, "ts": f"2026-11-21T00:0{i + 1}:00Z", "session": "o"}
+            )
+            + "\n"
+            for i, a in enumerate(answers)
+        )
+    )
+
+
+def go_said(how):
+    return [
+        "pr",
+        "comment",
+        "7",
+        "--repo",
+        "o/r",
+        "--body",
+        f"one-way: the human's go Q812 ({how})",
+    ]
+
+
 @pytest.mark.parametrize("extra", [(), ("--check",)], ids=["arm", "check"])
 def test_a_one_way_head_is_classified_from_another_checkout(tmp_path, extra):
     """Red arm: a checkout that is not the PR head left the class to the caller (a stderr note),
@@ -488,22 +540,23 @@ def test_a_head_missing_from_the_clone_is_not_classified(tmp_path):
     assert arm_calls(calls) == []
 
 
-def test_the_humans_go_arms_a_one_way_pr_and_says_so_on_it(tmp_path):
+@pytest.mark.parametrize("queued", [True, False], ids=["queued", "pruned"])
+def test_the_humans_go_arms_a_one_way_pr_and_says_so_on_it(tmp_path, queued):
     sha = one_way_head(tmp_path)
+    go_board(tmp_path, queued=queued)
     code, out, calls = run(
         tmp_path, [{"head": sha, "checks": PENDING}], ["ok"], extra=("--go", "Q812")
     )
     assert (code, out) == (0, [f"armed: auto-merge on {sha} (merge)", "pending: Claude Review"])
     assert len(arm_calls(calls)) == 1
-    assert comment_calls(calls) == [
-        ["pr", "comment", "7", "--repo", "o/r", "--body", "one-way armed on the human's go Q812"]
-    ]
+    assert comment_calls(calls) == [go_said("armed")]
 
 
 def test_the_humans_go_is_said_on_the_pr_when_it_is_ready_too(tmp_path):
     """Red arm: the comment came only after `armed:`; a PR GitHub calls clean went to the `ready`
     line, and its one-way merge on the go left no trace on the PR."""
     sha = one_way_head(tmp_path)
+    go_board(tmp_path)
     code, out, calls = run(
         tmp_path, [{"head": sha, "checks": GREEN}], [CLEAN], extra=("--go", "Q812")
     )
@@ -513,9 +566,62 @@ def test_the_humans_go_is_said_on_the_pr_when_it_is_ready_too(tmp_path):
             f"ready: all required checks green on {sha} — merge: gh pr merge 7 --merge --match-head-commit {sha}"
         ],
     )
-    assert comment_calls(calls) == [
-        ["pr", "comment", "7", "--repo", "o/r", "--body", "one-way armed on the human's go Q812"]
-    ]
+    assert comment_calls(calls) == [go_said("ready for the printed merge")]
+
+
+@pytest.mark.parametrize(
+    ("board", "reason"),
+    [
+        (
+            {"pr_url": "https://github.com/o/r/pull/8"},
+            "it asks about https://github.com/o/r/pull/8, not o/r#7",
+        ),
+        (
+            {"pr_url": "https://github.com/o/other/pull/7"},
+            "it asks about https://github.com/o/other/pull/7, not o/r#7",
+        ),
+        ({"answers": ("deny",)}, "status answered: deny"),
+        ({"answers": ()}, "status open"),
+        ({"answers": ("discuss",)}, "status open"),
+        ({"cause": "plan"}, "a plan question, not a merge-go"),
+        ({"qid": "Q811"}, "Q812 is not on the board"),
+        (None, "ledger unreadable: no board at {state}/board.json"),
+    ],
+    ids=[
+        "other-pr",
+        "other-repo",
+        "deny",
+        "unanswered",
+        "discuss",
+        "not-merge-go",
+        "unknown",
+        "no-board",
+    ],
+)
+def test_a_go_the_board_does_not_hold_refuses(tmp_path, board, reason):
+    """Red arm: `--go Q<nr>` was taken on trust; any number armed a one-way PR."""
+    sha = one_way_head(tmp_path)
+    if board is not None:
+        go_board(tmp_path, **board)
+    got, out, calls = run(
+        tmp_path, [{"head": sha, "checks": PENDING}], ["ok"], extra=("--go", "Q812")
+    )
+    why = reason.format(state=tmp_path / "state")
+    assert (got, out) == (9, [f"refused: go Q812 is not the human's go on this PR ({why})"])
+    assert arm_calls(calls) == [] and comment_calls(calls) == []
+
+
+def test_a_ledger_board_py_cannot_read_refuses(tmp_path):
+    sha = one_way_head(tmp_path)
+    go_board(tmp_path)
+    (tmp_path / "state" / "board.json").write_text("{not json")
+    got, out, calls = run(
+        tmp_path, [{"head": sha, "checks": PENDING}], ["ok"], extra=("--go", "Q812")
+    )
+    assert got == 9 and out[0].startswith(
+        "refused: go Q812 is not the human's go on this PR (ledger unreadable: "
+    ), out
+    assert arm_calls(calls) == [] and comment_calls(calls) == []
 
 
 def pr_head_on_origin(tmp_path):
@@ -541,6 +647,7 @@ def pr_head_on_origin(tmp_path):
 def test_the_fetched_pr_head_ref_is_dropped_after_the_class(tmp_path, extra, code):
     """Red arm: every arm from another checkout left `refs/we-arm/pr-<N>` behind."""
     work, sha = pr_head_on_origin(tmp_path)
+    go_board(work)
     got, out, _calls = run(work, [{"head": sha, "checks": PENDING}], ["ok"], extra=extra)
     assert got == code, out
     if code == 6:  # classified on the fetched head, so the fetch happened

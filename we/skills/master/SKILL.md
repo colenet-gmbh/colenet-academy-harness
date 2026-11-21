@@ -279,6 +279,8 @@ A worker briefed `PR owner: worker` runs steps 2–3 and its fix rounds; you act
     question number, arm with `arm_pr.sh <PR> --go Q<nr>` (it comments the go on the PR) and watch
     `--until-merged`. No approve on GitHub is the go; without the go nothing arms it. A go holds for
     the head it was asked on: a later push touching a file of the one-way class asks again.
+    `arm_pr.sh` checks the question on the board (`board.py show`): a `merge-go` on this PR whose
+    latest answer is an Accept, else it refuses.
   - Drafts: `/we:pr` step 4; a draft is no merge brake. Non-destructive migrations auto-merge serially
     (owner 03.10.2026): the second PR arms only after the first landed, merging `origin/<default>`,
     checking for one migration head, and pushing first. A fix round on an armed PR starts with

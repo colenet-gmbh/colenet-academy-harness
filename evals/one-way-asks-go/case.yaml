@@ -30,5 +30,5 @@ graders:
     flags: "i"
   - name: no-arm-before-the-go
     type: regex
-    pattern: "arm_pr\\.sh[^\\n]*--go"
+    pattern: "arm_pr\\.sh[^\\n]*--go\\s+Q\\d+"
     match: "not_contains"
