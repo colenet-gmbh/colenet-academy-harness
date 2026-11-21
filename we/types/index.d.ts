@@ -381,6 +381,8 @@ export type ZentraleView = {
   lanes?: { intervals: { who: string; kind: string; start: string; end: string }[]; at: number; error?: string }
   face: 'sections' | 'lanes'
   hours: 8 | 24
+  // the web view (`scripts/command_center/crewd.py probe`): its configured URL and whether it answers here
+  web?: { url: string | null; alive: boolean }
 }
 
 declare module 'claude-code' {

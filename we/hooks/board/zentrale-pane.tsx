@@ -21,6 +21,7 @@ const STALE_MS = 2 * REFRESH_MS
 // cswap up to 10 s) follows in the background and stays below the refresh interval, so two never overlap.
 const FAST_TIMEOUT_MS = 15_000
 const FULL_TIMEOUT_MS = 28_000
+const WEB_TIMEOUT_MS = 5_000
 
 const view = atom({ plugin: 'we', key: 'zentraleView' } as const, null, { shape: 'zentrale-view-1' })
 const isOpen = atom({ plugin: 'we', key: 'zentraleOpen' } as const, false)
@@ -76,9 +77,25 @@ async function readLanes($: $, board: string | undefined) {
   }
 }
 
+// The web view's line: `crewd.py probe` owns the port, the host's address and the configured URL
+// (`zentrale.web_url`); without a URL the pane shows no link, only whether the server answers.
+async function readWeb($: $) {
+  try {
+    const run = await $.process.run(['python3', '-I', `${$.plugin.root}/scripts/command_center/crewd.py`, 'probe'], { timeoutMs: WEB_TIMEOUT_MS })
+    const got = JSON.parse(run.stdout || '{}') as { url?: unknown; alive?: unknown }
+    const web = { url: typeof got.url === 'string' ? got.url : null, alive: got.alive === true }
+    await update($, view, v => ({ ...(v ?? empty()), web }))
+  } catch {
+    await update($, view, v => ({ ...(v ?? empty()), web: { url: v?.web?.url ?? null, alive: false } }))
+  }
+}
+
+export const webLine = (web: { url: string | null; alive: boolean }) =>
+  `${web.url ? `Web: ${web.url}` : 'Web: no link (zentrale.web_url unset)'} · ${web.alive ? 'server answers' : 'server does not answer'}`
+
 // The fast read first, awaited, so the first draw has the board; the full read runs on unawaited.
 async function load($: $, board: string | undefined) {
-  await readDoc($, board, true)
+  await Promise.all([readDoc($, board, true), readWeb($)])
   void readDoc($, board, false)
 }
 
@@ -98,7 +115,7 @@ export async function startZentrale($: $) {
     void read($, isOpen).then(async open => {
       if (!open || zentrale.drawnAt < zentrale.loadedAt) return
       const v = await read($, view)
-      await readDoc($, v?.board, false)
+      await Promise.all([readDoc($, v?.board, false), readWeb($)])
       if (v?.face === 'lanes') await readLanes($, v.board)
     })
   })
@@ -138,6 +155,7 @@ export const registerZentrale = (on: On) => {
     )
     const head = [
       <Text key="title" bold>{clip(`Zentrale · ${doc?.project ?? '?'}`, width)}</Text>,
+      ...(v.web ? [<Text key="web" color={v.web.alive ? undefined : 'warning'}>{clip(webLine(v.web), width)}</Text>] : []),
       ...(v.error ? [<Text key="error" color="error">{clip(`⚠ ${v.error}`, width)}</Text>] : []),
       ...(doc?.gaps ?? []).map((g, i) => <Text key={`gap-${i}`} color="warning">{clip(`⚠ ${g}`, width)}</Text>),
     ]

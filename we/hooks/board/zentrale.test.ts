@@ -41,7 +41,9 @@ const NOW = Date.parse('2026-11-20T21:10:30Z')
 
 // The world of a session with the /board pane: a fake clock, store, files and processes. `full`
 // decides what the slow, full read answers; `null` keeps it pending.
-function world(on: Parameters<Parameters<typeof test>[1]>[1], full: () => Promise<unknown> | unknown) {
+const WEB = { url: 'https://crew.example.org/crew/', alive: true, bind: '10.0.0.5', port: 8787 }
+
+function world(on: Parameters<Parameters<typeof test>[1]>[1], full: () => Promise<unknown> | unknown, web: unknown = WEB) {
   const clock = mock.clock(on, { now: NOW })
   mock.store(on)
   on('env.get', () => ({ value: '/home/me' }))
@@ -60,6 +62,7 @@ function world(on: Parameters<Parameters<typeof test>[1]>[1], full: () => Promis
     ran.push([...e.argv])
     const script = String(e.argv[2] ?? '')
     if (script.endsWith('/zentrale.py')) return e.argv.includes('--fast') ? RUN(JSON.stringify(doc(true, {}, ['github: loading']))) : full()
+    if (script.endsWith('/crewd.py')) return RUN(JSON.stringify(web))
     if (script.endsWith('/flow_intervals.py')) return RUN(JSON.stringify({ intervals: INTERVALS }))
     if (e.argv[0] === 'python3') return RUN('{"sessions":[]}')
     return RUN('')
@@ -106,6 +109,7 @@ test('/board: Zentrale opens the sections in order, an empty one says nothing, a
   await ui.unmount()
   expect(lines.filter(Boolean)).toEqual([
     'Zentrale · acme',
+    'Web: https://crew.example.org/crew/ · server answers',
     'Project: acme',
     'With the owner',
     '  Q4 · owner · for ABC-12-fix (alpha-7) · 0h50 · title Q4',
@@ -124,6 +128,24 @@ test('/board: Zentrale opens the sections in order, an empty one says nothing, a
     '[ Refresh ]  [ Swimlanes ]  as of 21:10 UTC',
   ])
 })
+
+// AC9: the web line links the configured URL and says whether we-crewd answers; without a URL, no link
+for (const [name, web, line] of [
+  ['answers', WEB, 'Web: https://crew.example.org/crew/ · server answers'],
+  ['down', { ...WEB, alive: false }, 'Web: https://crew.example.org/crew/ · server does not answer'],
+  ['no url', { ...WEB, url: null }, 'Web: no link (zentrale.web_url unset) · server answers'],
+] as const) {
+  test(`Zentrale: the web line, ${name} (AC9)`, async ($, on) => {
+    const { clock, ran } = world(on, () => RUN(JSON.stringify(doc(false))), web)
+    await openFromBoard($, clock)
+    await clock.settle()
+    expect(ran.some(a => String(a[2] ?? '').endsWith('/command_center/crewd.py') && a[3] === 'probe')).toBe(true)
+    const { ui, lines } = await draw($)
+    await ui.unmount()
+    expect(lines[1]).toBe(line)
+    expect(lines.join('\n').includes('https://')).toBe(web.url !== null)
+  })
+}
 
 test('the first draw waits on no slow source; a second read of a kind does not start while one runs', async ($, on) => {
   let release: (v: unknown) => void = () => undefined

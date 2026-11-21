@@ -1066,12 +1066,43 @@ def test_merge_block_is_validated_where_the_crew_loads(tmp_path):
     for name, merge, says in (
         ("a", {"armer": "Workflow"}, "merge.armer must be one of session, workflow"),
         ("h", {"hold_labels": "review"}, "merge.hold_labels must be a list"),
-        ("n", {"hold_labels": [1]}, "merge.hold_labels must be a list of strings"),
+        ("n", {"hold_labels": [1]}, "merge.hold_labels must be a list of label strings"),
+        (
+            "e",
+            {"hold_labels": ["review", " "]},
+            "merge.hold_labels must be a list of label strings",
+        ),
     ):
         bad, _ = workspace(tmp_path / name, {**CREW, "merge": merge})
         out = run(bad, "validate")
         assert out.returncode == 1 and says in out.stderr, out.stderr
         assert run(bad, "merge", "armer").returncode == 1
+
+
+def test_zentrale_block_is_validated_where_the_crew_loads(tmp_path):
+    """`zentrale.web_url` an https URL, `link_hosts` hosts without a scheme, `peers` IP networks."""
+    assert crew.DEFAULTS["zentrale"] == {"web_url": None, "link_hosts": [], "peers": []}
+    good, _ = workspace(
+        tmp_path / "g",
+        {
+            **CREW,
+            "zentrale": {
+                "web_url": "https://crew.example.org/crew/",
+                "link_hosts": ["github.com/acme"],
+                "peers": ["10.0.0.0/16", "192.0.2.7"],
+            },
+        },
+    )
+    assert run(good, "validate", "--strict").returncode == 0
+    for name, block, says in (
+        ("u", {"web_url": "http://crew.example.org/crew/"}, "zentrale.web_url must be an https"),
+        ("j", {"web_url": "javascript:alert(1)"}, "zentrale.web_url must be an https"),
+        ("h", {"link_hosts": ["https://github.com/acme"]}, "zentrale.link_hosts must be"),
+        ("p", {"peers": ["traefik"]}, "zentrale.peers: 'traefik' is no IP network"),
+    ):
+        bad, _ = workspace(tmp_path / name, {**CREW, "zentrale": block})
+        out = run(bad, "validate")
+        assert out.returncode == 1 and says in out.stderr, out.stderr
 
 
 def test_merge_rev_reads_the_crew_the_commit_has_through_its_pointer(tmp_path):

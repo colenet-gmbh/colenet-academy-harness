@@ -202,7 +202,12 @@ command centre in six sections: **With the owner**, **Red**, **Waiting**, **Work
 **Accounts**. It renders `scripts/command_center/zentrale.py --json`; that script's docstring owns
 what each section holds, its sources, thresholds and `schema_version`, and `open_ends.py` owns the
 row contract. **Swimlanes** draws `scripts/flow_intervals.py --json` as one lane per session (keys
-`1` and `2`: 8 h and 24 h); **Sections** returns. Until `/board` runs in a session the pane polls
+`1` and `2`: 8 h and 24 h); **Sections** returns. Below the title the pane names the web view: the
+link from the crew's `zentrale.web_url` (none while it is unset) and whether `we-crewd` answers on
+this host (`scripts/command_center/crewd.py probe`). `we-crewd` serves the same document and the
+flow page read-only, for a browser or a phone behind the network's own gate; its docstring owns the
+bind rule, the field allowlist, the redaction and the headers, and a launcher of the host starts it
+with `crewd.py serve --bind "$(crewd.py pod-ip)"`. Until `/board` runs in a session the pane polls
 nothing; the deliverer (§ Answers) checks the board file every three seconds in every session, pane or not, and acts only in the orchestrator's. Once open, the pane checks the file's modification time every three seconds and re-reads it
 when it moved; every minute it re-reads the file and the live column whatever happened.
 
