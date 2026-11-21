@@ -740,7 +740,9 @@ def _crew_with(crewed, **top):
 
 
 class TestCrewGuard:
-    """two crews, AC11: a writing verb refuses a board of another crew, and a crewless default write.
+    """two crews, AC11: a writing verb refuses a board of another crew, and a crewless default write;
+    a crewless session that names a board with `--board` writes it, stamped or not (the explicit
+    file is the intent).
 
     Finding of 08.11.: a second crew's coordinator ran `board.py prune` without `--board` and
     removed the first crew's returned news. Red arm on origin/main: every refusal below wrote."""
