@@ -486,3 +486,39 @@ def test_the_page_reloads_every_30_s_and_names_its_state():
     assert 'name="viewport" content="width=device-width, initial-scale=1"' in page
     assert "generated_at 2026-11-20T21:10:05Z" in page
     assert "github acme/app fetched_at 2026-11-20T21:09:00Z" in page
+
+
+# --- review round: the refresh thread, the probe, pod-ip ------------------------------------
+
+
+def test_an_unforeseen_refresh_error_keeps_the_thread_and_shows(tmp_path):
+    st = state_with()
+
+    def broken(argv, timeout, cwd):
+        return {**doc(), "sources": ["not", "a", "dict"]}
+
+    crewd._guarded(
+        st, crewd.refresh_once, st, None, fast=True, cache=tmp_path / "c.json", runner=broken
+    )
+    page = st.page("/crew/").decode()
+    assert "Q4" in page and "last refresh failed: AttributeError" in page
+    # a cached snapshot that no longer renders is dropped: 503, not old data
+    bad = tmp_path / "bad.json"
+    crewd.write_cache(bad, {"fetched_at": "x", "snap": {"project": "p"}, "flow": None})
+    fresh = crewd.State([])
+    crewd._guarded(fresh, crewd._load_cache, fresh, bad)
+    assert fresh.page("/crew/") is None
+
+
+def test_probe_goes_direct_on_its_port_and_pod_ip_refuses_loopback(serve, monkeypatch, capsys):
+    port = serve(state_with())
+    monkeypatch.setattr(crewd, "pod_ip", lambda: "127.0.0.1")
+    monkeypatch.setattr(crewd, "check_bind", lambda ip: ip)
+    monkeypatch.setenv("http_proxy", "http://192.0.2.1:9")
+    monkeypatch.setenv("HTTP_PROXY", "http://192.0.2.1:9")
+    assert crewd.probe(port)["alive"] is True
+    assert crewd.probe(port + 1 if port < 65535 else port - 1)["alive"] is False
+    monkeypatch.undo()
+    monkeypatch.setattr(crewd, "pod_ip", lambda: "127.0.0.1")
+    assert crewd.main(["pod-ip"]) == 2
+    assert "refusing to bind 127.0.0.1" in capsys.readouterr().err

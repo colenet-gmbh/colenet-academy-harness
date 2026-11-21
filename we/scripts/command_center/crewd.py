@@ -507,6 +507,19 @@ class State:
                 else {}
             )
 
+    def fail(self, error: str) -> None:
+        """Name `error` on the pages; a snapshot that no longer renders is dropped (503)."""
+        with self.lock:
+            self.status["error"] = error
+            try:
+                self.pages = {
+                    "/crew/": render_crew(self.snap, self.status, self.link_hosts).encode("utf-8"),
+                    "/crew/flow": render_flow(self.flow, self.status).encode("utf-8"),
+                }
+            except Exception:  # a broken snapshot is dropped, not served
+                self.snap = self.flow = None
+                self.pages = {}
+
     def page(self, path: str) -> bytes | None:
         with self.lock:
             return self.pages.get(path)
@@ -570,13 +583,27 @@ def refresh_once(
         print(f"we-crewd: cache not written: {exc}", file=sys.stderr)
 
 
-def refresh_loop(state: State, cwd: str | None, cache: Path, stop: threading.Event) -> None:
+def _guarded(state: State, step, *args, **kwargs) -> None:
+    """One refresh step; an error no step foresaw keeps the thread alive and shows as the page's
+    "last refresh failed" line (a page it cannot render answers 503, never a 200 with old data)."""
+    try:
+        step(*args, **kwargs)
+    except Exception as exc:  # the refresh thread must not die silently
+        print(f"we-crewd: refresh: {type(exc).__name__}: {clean(exc)}", file=sys.stderr)
+        state.fail(f"{type(exc).__name__}: {clean(exc)}")
+
+
+def _load_cache(state: State, cache: Path) -> None:
     cached = read_cache(cache)
     if cached:
         state.set(snap=cached.get("snap"), flow=cached.get("flow"), at=cached.get("fetched_at"))
-    refresh_once(state, cwd, fast=True, cache=cache)
+
+
+def refresh_loop(state: State, cwd: str | None, cache: Path, stop: threading.Event) -> None:
+    _guarded(state, _load_cache, state, cache)
+    _guarded(state, refresh_once, state, cwd, fast=True, cache=cache)
     while not stop.is_set():
-        refresh_once(state, cwd, fast=False, cache=cache)
+        _guarded(state, refresh_once, state, cwd, fast=False, cache=cache)
         stop.wait(TTL_S)
 
 
@@ -713,18 +740,20 @@ def serve(bind: str, port: int) -> int:
     return 0
 
 
-def probe(timeout: float = 2.0) -> dict:
-    """What the Zentrale pane shows: the configured URL and whether the server answers here."""
+def probe(port: int = PORT, timeout: float = 2.0) -> dict:
+    """What the Zentrale pane shows: the configured URL and whether the server answers here. The
+    request goes direct, never through a proxy the session's environment names."""
     crew = _crew()
     url = (crew.get("zentrale") or {}).get("web_url")
     bind, alive = None, False
+    direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        bind = pod_ip()
-        with urllib.request.urlopen(f"http://{bind}:{PORT}/crew/healthz", timeout=timeout) as r:
+        bind = check_bind(pod_ip())
+        with direct.open(f"http://{bind}:{port}/crew/healthz", timeout=timeout) as r:
             alive = r.status == 200
     except (OSError, ValueError):
         alive = False
-    return {"url": url, "alive": alive, "bind": bind, "port": PORT}
+    return {"url": url, "alive": alive, "bind": bind, "port": port}
 
 
 def main(argv=None) -> int:
@@ -734,14 +763,19 @@ def main(argv=None) -> int:
     s.add_argument("--bind", required=True)
     s.add_argument("--port", type=int, default=PORT)
     sub.add_parser("pod-ip")
-    sub.add_parser("probe")
+    pr = sub.add_parser("probe")
+    pr.add_argument("--port", type=int, default=PORT)
     args = p.parse_args(argv)
     if args.cmd == "serve":
         return serve(args.bind, args.port)
     if args.cmd == "pod-ip":
-        print(check_bind(pod_ip()))
+        try:
+            print(check_bind(pod_ip()))
+        except (OSError, ValueError) as exc:
+            print(f"we-crewd: {exc}", file=sys.stderr)
+            return 2
         return 0
-    print(json.dumps(probe()))
+    print(json.dumps(probe(args.port)))
     return 0
 
 
