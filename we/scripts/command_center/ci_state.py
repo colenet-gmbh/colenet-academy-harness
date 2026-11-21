@@ -7,7 +7,8 @@ Usage:
 
 - **Main verdict** (`main_state`): the crew's `flow.main_state_command` runs (no shell, timeout
   `MAIN_TIMEOUT_S`); exit 0 is green (nothing red), any other exit is red with the command's first
-  line (`main: <line>`), a timeout or a start failure is `main state: unknown (<why>)`, never
+  line (`main: <line>`; a leading GitHub annotation `::error::`, `::warning::` or `::notice::` is cut),
+  a timeout or a start failure is `main state: unknown (<why>)`, never
   green. The answer is kept `MAIN_TTL_S` in `ci_source`'s cache directory. Without the key:
   `main state: not read (no source)`.
 - **Workers** (`worker_rows`): `worker_supervisor.status_records`; an exited worker, and one whose
@@ -28,6 +29,7 @@ import argparse
 import contextlib
 import hashlib
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -46,6 +48,7 @@ import worker_supervisor  # noqa: E402
 SCHEMA_VERSION = 1
 MAIN_TIMEOUT_S = 30
 MAIN_TTL_S = 300
+ANNOTATION = re.compile(r"^::(?:error|warning|notice)(?: [^:]*)?::")
 RED_ENDS = worker_supervisor.RESUMABLE  # usage-limit, auth
 
 
@@ -86,6 +89,7 @@ def main_state(
     except (OSError, ValueError) as exc:
         return {"state": "unknown", "line": f"main state: unknown ({exc})", "fetched_at": iso(now)}
     first = next((x.strip() for x in out.stdout.splitlines() if x.strip()), "")
+    first = ANNOTATION.sub("", first, count=1)  # a GitHub annotation's prefix is no verdict text
     if out.returncode == 0:
         doc = {"state": "green", "line": first, "fetched_at": iso(now)}
     else:
